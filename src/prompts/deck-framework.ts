@@ -313,6 +313,22 @@ Decks regress when each turn re-authors the scale-to-fit logic, the keyboard han
 
 **You do not write any of that. You do not modify any of that.** Your job is to fill content slots only.
 
+## Workflow — copy framework first, then fill content
+
+When the user asks for slides, your TodoWrite plan **must** start with "copy the deck framework verbatim" before any content step. The intended order is:
+
+\`\`\`
+1.  Bind the active direction's palette + fonts to :root in the framework
+2.  Copy the canonical skeleton below as index.html (nothing else first)
+3.  Plan the slide arc and theme rhythm (state aloud before writing)
+4.  Add per-deck classes inside the second <style> block
+5.  Replace each <section class="slide"> SLOT with real content
+6.  Self-check (no rewriting framework chrome / @media print / nav script)
+7.  Emit single <artifact>
+\`\`\`
+
+If you find yourself writing \`<style>\` rules for \`.deck-shell\`, \`.deck-stage\`, \`.slide\`, \`.canvas\`, \`fit()\`, \`@media print\`, or a keyboard handler — STOP. The framework already has them. Re-read this directive, then keep going from "fill SLOT content".
+
 ## The contract
 
 When you start a new deck, your output is a single HTML file built from the canonical skeleton below. **Copy the skeleton verbatim**, including its first \`<style>\` block, the \`.deck-shell\` / \`.deck-stage\` / \`.deck-counter\` / \`.deck-hint\` chrome, and the entire trailing \`<script>\`.

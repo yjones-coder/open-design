@@ -14,11 +14,17 @@
  *      (`assets/template.html`) and references (`references/layouts.md`,
  *      `references/checklist.md`), we inject a hard pre-flight rule above
  *      the skill body so the agent reads them BEFORE writing any code.
- *   4. For decks (skillMode === 'deck'), the deck framework directive
- *      (./deck-framework.ts) is pinned LAST so it overrides any softer
- *      slide-handling wording earlier in the stack — this is the
- *      load-bearing nav / counter / scroll JS / print stylesheet contract
- *      that PDF stitching depends on.
+ *   4. For decks (skillMode === 'deck' OR metadata.kind === 'deck'), the
+ *      deck framework directive (./deck-framework.ts) is pinned LAST so it
+ *      overrides any softer slide-handling wording earlier in the stack —
+ *      this is the load-bearing nav / counter / scroll JS / print
+ *      stylesheet contract that PDF stitching depends on. We also fire on
+ *      the metadata path so deck-kind projects without a bound skill
+ *      (skill_id null) still get a framework, instead of having the agent
+ *      re-author scaling / nav / print logic from scratch each turn. When
+ *      the active skill ships its own seed (skill body references
+ *      `assets/template.html`), we defer to that seed and skip the generic
+ *      skeleton — the skill's framework wins to avoid double-injection.
  *
  * The composed string is what the daemon sees as `systemPrompt` and what
  * the Anthropic path sends as `system`.
@@ -85,7 +91,23 @@ export function composeSystemPrompt({
   // Decks have a load-bearing framework (nav, counter, scroll JS, print
   // stylesheet for PDF stitching). Pin it last so it overrides any softer
   // wording earlier in the stack ("write a script that handles arrows…").
-  if (skillMode === 'deck') {
+  //
+  // We fire on either (a) the active skill is a deck skill OR (b) the
+  // project metadata declares kind=deck. Case (b) catches projects created
+  // without a skill (skill_id null) — without this, a deck-kind project
+  // with no bound skill gets neither a skill seed nor the framework
+  // skeleton, and the agent writes scaling / nav / print logic from scratch
+  // with the same buggy `place-items: center` + transform pattern we keep
+  // having to fix at runtime. Skill seeds (when present) win — they
+  // already define their own opinionated framework (simple-deck's
+  // scroll-snap, guizang-ppt's magazine layout) and re-pinning the generic
+  // skeleton would conflict. The skill-seed path takes over via
+  // `derivePreflight` above, so we only fire the generic skeleton when no
+  // skill seed is on offer.
+  const isDeckProject = skillMode === 'deck' || metadata?.kind === 'deck';
+  const hasSkillSeed =
+    !!skillBody && /assets\/template\.html/.test(skillBody);
+  if (isDeckProject && !hasSkillSeed) {
     parts.push(`\n\n---\n\n${DECK_FRAMEWORK_DIRECTIVE}`);
   }
 

@@ -211,7 +211,7 @@ DISCOVERY directives  (turn-1 form, turn-2 brand branch, TodoWrite, 5-dim critiq
   + active SKILL.md    (19 skills available)
   + project metadata   (kind, fidelity, speakerNotes, animations, inspiration ids)
   + skill side files   (auto-injected pre-flight: read assets/template.html + references/*.md)
-  + (deck mode only)   DECK_FRAMEWORK_DIRECTIVE   (nav / counter / scroll / print)
+  + (deck kind, no skill seed) DECK_FRAMEWORK_DIRECTIVE   (nav / counter / scroll / print)
 ```
 
 Every layer is composable. Every layer is a file you can edit. Read [`src/prompts/system.ts`](src/prompts/system.ts) and [`src/prompts/discovery.ts`](src/prompts/discovery.ts) to see the actual contract.
