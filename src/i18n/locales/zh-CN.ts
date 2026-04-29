@@ -450,7 +450,7 @@ export const zhCN: Dict = {
   'tool.error': '错误',
   'tool.done': '完成',
 
-  'assistant.role': 'Claude',
+  'assistant.role': '助手',
   'assistant.workingLabel': '执行中',
   'assistant.doneLabel': '已完成',
   'assistant.outTokens': '{n} 输出',

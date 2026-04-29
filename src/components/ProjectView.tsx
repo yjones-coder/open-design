@@ -11,6 +11,7 @@ import {
 } from '../providers/registry';
 import { composeSystemPrompt } from '../prompts/system';
 import { navigate } from '../router';
+import { agentDisplayName } from '../utils/agentLabels';
 import {
   createConversation,
   deleteConversation as deleteConversationApi,
@@ -217,6 +218,10 @@ export function ProjectView({
     () => new Set(projectFiles.map((f) => f.name)),
     [projectFiles],
   );
+  const agentsById = useMemo(
+    () => new Map(agents.map((agent) => [agent.id, agent])),
+    [agents],
+  );
 
   // Keep the @-picker's source of truth fresh: every refreshSignal bump
   // (artifact saved, sketch saved, image uploaded) refetches; on first
@@ -341,11 +346,23 @@ export function ProjectView({
         content: prompt,
         attachments: attachments.length > 0 ? attachments : undefined,
       };
+      const selectedAgent =
+        config.mode === 'daemon' && config.agentId
+          ? agentsById.get(config.agentId)
+          : null;
+      const assistantAgentId =
+        config.mode === 'daemon' ? config.agentId ?? undefined : 'anthropic-api';
+      const assistantAgentName =
+        config.mode === 'daemon'
+          ? assistantAgentDisplayName(config.agentId, selectedAgent?.name)
+          : 'Anthropic API';
       const assistantId = crypto.randomUUID();
       const assistantMsg: ChatMessage = {
         id: assistantId,
         role: 'assistant',
         content: '',
+        agentId: assistantAgentId,
+        agentName: assistantAgentName,
         events: [],
         startedAt,
       };
@@ -523,6 +540,7 @@ export function ProjectView({
       activeConversationId,
       messages,
       config,
+      agentsById,
       composedSystemPrompt,
       onTouchProject,
       project.id,
@@ -787,4 +805,11 @@ export function ProjectView({
       </div>
     </div>
   );
+}
+
+function assistantAgentDisplayName(
+  agentId: string | null,
+  fallbackName?: string,
+): string | undefined {
+  return agentDisplayName(agentId, fallbackName) ?? undefined;
 }

@@ -461,7 +461,7 @@ export const en: Dict = {
   'tool.error': 'error',
   'tool.done': 'done',
 
-  'assistant.role': 'Claude',
+  'assistant.role': 'Assistant',
   'assistant.workingLabel': 'Working',
   'assistant.doneLabel': 'Done',
   'assistant.outTokens': '{n} out',
