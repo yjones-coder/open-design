@@ -120,16 +120,30 @@ substitution. Do not silently fall back.
 5. **Don't emit \`<artifact>\` blocks for media.** They're for HTML/text
    artifacts. For media surfaces your "artifact" is the file written by
    the dispatcher. The artifact lint and PDF-stitching layers don't
-   apply.
+   apply. (This rule is the canonical statement — earlier project
+   metadata blocks defer to it instead of repeating it.)
 6. **Filenames are slugged.** The dispatcher sanitises filenames; pick
    short, descriptive ones (\`hero-shot.png\`, \`intro-jingle.mp3\`,
    \`teaser-15s.mp4\`) so the user's file list stays readable.
+7. **Surface the stub-provider state to the user.** The dispatcher's
+   JSON response carries a \`providerNote\` field. Read it. If it starts
+   with \`stub-\` (e.g. \`stub-png\`, \`stub-mp4\`, \`stub-wav\`,
+   \`stub-mp3\`, \`stub-svg\`), the real provider integration isn't wired
+   up yet and the file you got back is a labelled placeholder, not a
+   real render. Say so explicitly in your reply — for example: *"I
+   called the dispatcher in stub mode (\`stub-png · model=gpt-image-2 · …\`).
+   The file is a 1×1 placeholder; replace \`daemon/media.js\`'s renderer
+   with a real provider integration to get actual bytes."* Do NOT
+   narrate stub output as if it's a real generation — the FileViewer
+   will show a 1×1 PNG / silent WAV and the user will rightly think you
+   misled them.
 
 ### Stub-provider note
 
 The provider integrations behind specific models (gpt-image-2,
-seedance-2, suno-v5, …) may still be stubs in this build — the
-dispatcher will return success and a placeholder file. That's fine: the
-contract you follow is the same; the bytes get sharper as real
-provider integrations land. The user has been told to expect this.
+seedance-2, suno-v5, …) may still be stubs in this build. The
+invocation contract is the same; only the bytes change once real
+provider integrations land. Workflow rule #7 above tells you how to
+surface that state to the user so the demo experience doesn't read as
+"the integration is working" when it isn't.
 `;

@@ -65,6 +65,18 @@ const DESIGN_SYSTEMS_DIR = path.join(PROJECT_ROOT, 'design-systems');
 const OD_BIN_PATH = path.join(__dirname, 'cli.js');
 const ARTIFACTS_DIR = path.join(PROJECT_ROOT, '.od', 'artifacts');
 const PROJECTS_DIR = path.join(PROJECT_ROOT, '.od', 'projects');
+// Single source of truth for the loopback address. The server binds here
+// AND we inject this same value into spawned agents' OD_DAEMON_URL so the
+// CLI can talk back. Hardcoding 127.0.0.1 in two places used to mean a
+// future deployment that bound a different host would silently break the
+// `od media generate` callback path.
+const DAEMON_HOST = '127.0.0.1';
+// The /api/projects/:id/media/generate dispatcher writes arbitrary bytes
+// per agent request — it has the broadest write surface in the daemon.
+// Regex mirrors `isSafeId` in projects.js; we re-check at the route layer
+// so the failure message is "invalid project id" (400) instead of the
+// generic "invalid project id" thrown deep inside projectDir().
+const SAFE_PROJECT_ID = /^[A-Za-z0-9._-]{1,128}$/;
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 
 const UPLOAD_DIR = path.join(os.tmpdir(), 'od-uploads');
@@ -109,7 +121,27 @@ const projectUpload = multer({
 
 export async function startServer({ port = 7456 } = {}) {
   const app = express();
-  app.use(express.json({ limit: '4mb' }));
+  // Two JSON-body limits stacked into one middleware. The dispatcher
+  // route — POST /api/projects/:id/media/generate — has the broadest write
+  // surface in the daemon (writes arbitrary bytes into the project dir)
+  // and its meaningful payload sums to a couple of KB at most. We cap it
+  // at 64KB so a runaway loop or hostile caller can't OOM the JSON parser
+  // by sending a megabyte-long prompt or output filename. All other routes
+  // keep the prior 4MB limit (chat / templates / artifacts can carry full
+  // HTML payloads). body-parser early-exits once `req._body` is set, so
+  // we have to dispatch BEFORE either parser runs — picking one or the
+  // other up front rather than chaining them.
+  const jsonSmall = express.json({ limit: '64kb' });
+  const jsonLarge = express.json({ limit: '4mb' });
+  app.use((req, res, next) => {
+    if (
+      req.method === 'POST' &&
+      /^\/api\/projects\/[^/]+\/media\/generate$/.test(req.path)
+    ) {
+      return jsonSmall(req, res, next);
+    }
+    return jsonLarge(req, res, next);
+  });
   const db = openDatabase(PROJECT_ROOT);
 
   if (fs.existsSync(STATIC_DIR)) {
@@ -684,9 +716,42 @@ export async function startServer({ port = 7456 } = {}) {
     });
   });
 
+  // The 64kb body-size cap for this route is applied by the dispatching
+  // JSON middleware in startServer() above, before request parsing. We
+  // also cap individual string lengths inside generateMedia() as a second
+  // line of defence against a runaway prompt slipping under the JSON cap.
   app.post('/api/projects/:id/media/generate', async (req, res) => {
     try {
       const projectId = req.params.id;
+      // Round-trip the path-param through decodeURIComponent before
+      // matching against SAFE_PROJECT_ID. Express decodes once, so if a
+      // pathological caller posts e.g. `%252e%252e` the inner value would
+      // still be `%2e%2e` here — re-decoding then re-validating closes
+      // that hole even though projectDir() also enforces the same regex.
+      let decoded = projectId;
+      try {
+        decoded = decodeURIComponent(projectId);
+      } catch {
+        return res.status(400).json({ error: 'invalid project id' });
+      }
+      if (!SAFE_PROJECT_ID.test(projectId) || !SAFE_PROJECT_ID.test(decoded)) {
+        return res.status(400).json({ error: 'invalid project id' });
+      }
+      // Reject cross-origin POSTs. The daemon binds 127.0.0.1 only, so a
+      // remote attacker can't reach this route — but a malicious page in
+      // another tab can still issue `fetch('http://127.0.0.1:7456/...')`.
+      // Standard Express ships no CORS headers, which means browsers
+      // wouldn't expose the response to that page; but the side effect
+      // (writing bytes into the user's project) would still happen. We
+      // require the Origin header (when present) to match the daemon.
+      const origin = req.headers.origin;
+      if (origin) {
+        const expected = `http://${DAEMON_HOST}:${port}`;
+        const expectedLocal = `http://localhost:${port}`;
+        if (origin !== expected && origin !== expectedLocal) {
+          return res.status(403).json({ error: 'cross-origin denied' });
+        }
+      }
       // Ensure the project exists in DB before writing files; this gives
       // a friendly 404 when the agent calls with a bad id. The agent
       // normally inherits OD_PROJECT_ID from spawn env so this should
@@ -709,7 +774,11 @@ export async function startServer({ port = 7456 } = {}) {
       });
       res.json({ file: meta });
     } catch (err) {
-      res.status(400).json({ error: String(err && err.message ? err.message : err) });
+      // PayloadTooLargeError from express.json carries `.status === 413`
+      // — surface that distinctly so the agent's error narration is
+      // accurate rather than getting a generic 400 with the same message.
+      const status = err && err.status === 413 ? 413 : 400;
+      res.status(status).json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -865,10 +934,21 @@ export async function startServer({ port = 7456 } = {}) {
 
     // Inject the OD context. Skills + the media-contract prompt tell the
     // agent how to spend this — call `node "$OD_BIN" media generate
-    // --project "$OD_PROJECT_ID" …` and the daemon dispatches.
+    // --project "$OD_PROJECT_ID" …` and the daemon dispatches. Both
+    // OD_DAEMON_URL and the listen() bind below derive from DAEMON_HOST
+    // so a future deployment changing the bind host doesn't drift the
+    // two values out of sync (which would break the agent's callback
+    // path silently).
+    //
+    // NOTE: this is the SOLE agent-launch spawn site in the daemon. If
+    // you add another (skills install, design-system preview worker,
+    // background renderer, etc.) you MUST inject the same `odEnv` block
+    // — otherwise the MEDIA_GENERATION_CONTRACT prompt will tell the
+    // agent the env is set when it isn't, and the contract's "ask the
+    // user to relaunch from the OD app" escape hatch will fire spuriously.
     const odEnv = {
       OD_BIN: OD_BIN_PATH,
-      OD_DAEMON_URL: `http://127.0.0.1:${port}`,
+      OD_DAEMON_URL: `http://${DAEMON_HOST}:${port}`,
       OD_PROJECT_ID: typeof projectId === 'string' ? projectId : '',
       OD_PROJECT_DIR: cwd || '',
     };
@@ -927,7 +1007,7 @@ export async function startServer({ port = 7456 } = {}) {
   }
 
   return new Promise((resolve) => {
-    app.listen(port, '127.0.0.1', () => resolve(`http://localhost:${port}`));
+    app.listen(port, DAEMON_HOST, () => resolve(`http://localhost:${port}`));
   });
 }
 

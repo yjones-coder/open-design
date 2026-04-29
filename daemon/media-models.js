@@ -1,44 +1,25 @@
-// Daemon-side mirror of src/media/models.ts. We keep this in plain JS so
-// node imports are native and the daemon never needs a TS toolchain at
-// runtime. The two files are kept in sync by review — any model added to
-// src/media/models.ts must be added here too. Tests in verify ensure the
-// arrays are non-empty and IDs are unique.
+// Daemon-side wrapper around the shared media model registry. The
+// authoritative data lives in src/media/models.data.json so the
+// frontend (NewProjectPanel pickers, MEDIA_GENERATION_CONTRACT prompt)
+// and the daemon dispatcher read the exact same arrays — no hand-mirror,
+// no drift. We keep this file in plain JS so the daemon never needs a
+// TS toolchain at runtime; it just JSON.parses one file at module load.
 
-export const IMAGE_MODELS = [
-  { id: 'gpt-image-2', label: 'gpt-image-2', hint: 'OpenAI · default', caps: ['t2i', 'i2i', 'inpaint'] },
-  { id: 'flux-1.1-pro', label: 'flux-1.1-pro', hint: 'Black Forest Labs', caps: ['t2i', 'i2i'] },
-  { id: 'imagen-4', label: 'imagen-4', hint: 'Google', caps: ['t2i'] },
-  { id: 'midjourney-v7', label: 'midjourney-v7', hint: 'Midjourney', caps: ['t2i'] },
-];
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-export const VIDEO_MODELS = [
-  { id: 'seedance-2', label: 'seedance-2', hint: 'ByteDance · default', caps: ['t2v', 'i2v'] },
-  { id: 'kling-3', label: 'kling-3', hint: 'Kuaishou', caps: ['t2v', 'i2v'] },
-  { id: 'kling-4', label: 'kling-4', hint: 'Kuaishou · latest', caps: ['t2v', 'i2v'] },
-  { id: 'veo-3', label: 'veo-3', hint: 'Google', caps: ['t2v'] },
-  { id: 'sora-2', label: 'sora-2', hint: 'OpenAI', caps: ['t2v'] },
-];
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_PATH = path.join(__dirname, '..', 'src', 'media', 'models.data.json');
 
-export const AUDIO_MODELS_BY_KIND = {
-  music: [
-    { id: 'suno-v5', label: 'suno-v5', hint: 'Suno · default', caps: ['music'] },
-    { id: 'udio-v2', label: 'udio-v2', hint: 'Udio', caps: ['music'] },
-    { id: 'lyria-2', label: 'lyria-2', hint: 'Google', caps: ['music'] },
-  ],
-  speech: [
-    { id: 'minimax-tts', label: 'minimax-tts', hint: 'MiniMax · default', caps: ['tts'] },
-    { id: 'fish-speech-2', label: 'fish-speech-2', hint: 'FishAudio', caps: ['tts', 'voice-clone'] },
-    { id: 'elevenlabs-v3', label: 'elevenlabs-v3', hint: 'ElevenLabs', caps: ['tts', 'voice-clone'] },
-  ],
-  sfx: [
-    { id: 'elevenlabs-sfx', label: 'elevenlabs-sfx', hint: 'ElevenLabs SFX', caps: ['sfx'] },
-    { id: 'audiocraft', label: 'audiocraft', hint: 'Meta · open', caps: ['sfx', 'music'] },
-  ],
-};
+const data = JSON.parse(readFileSync(DATA_PATH, 'utf8'));
 
-export const MEDIA_ASPECTS = ['1:1', '16:9', '9:16', '4:3', '3:4'];
-export const VIDEO_LENGTHS_SEC = [3, 5, 8, 10, 15, 30];
-export const AUDIO_DURATIONS_SEC = [5, 10, 15, 30, 60, 120];
+export const IMAGE_MODELS = data.image;
+export const VIDEO_MODELS = data.video;
+export const AUDIO_MODELS_BY_KIND = data.audio;
+export const MEDIA_ASPECTS = data.aspects;
+export const VIDEO_LENGTHS_SEC = data.videoLengthsSec;
+export const AUDIO_DURATIONS_SEC = data.audioDurationsSec;
 
 export function findMediaModel(id) {
   const all = [
@@ -59,4 +40,14 @@ export function modelsForSurface(surface, audioKind) {
     return AUDIO_MODELS_BY_KIND[k] || AUDIO_MODELS_BY_KIND.music;
   }
   return [];
+}
+
+// Surface-aware lookup. Returns the model record only when it is registered
+// for the given (surface, audioKind) pair. The dispatcher uses this to
+// reject mismatches like `surface=image, model=suno-v5` BEFORE writing
+// bytes — without it, an audio model would silently produce an image-named
+// stub and routing to a real provider later would land in the wrong place.
+export function findMediaModelForSurface(id, surface, audioKind) {
+  const list = modelsForSurface(surface, audioKind);
+  return list.find((m) => m.id === id) || null;
 }

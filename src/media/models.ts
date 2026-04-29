@@ -1,18 +1,18 @@
 /**
- * Single source of truth for the media-generation model registry.
+ * TypeScript view onto the shared media-generation registry.
  *
- * Both the frontend (NewProjectPanel model pickers) and the daemon
- * (od media generate dispatcher) consume this list. When you add a new
- * model entry here, the picker shows it AND the daemon can route to it —
- * the unifying contract is "skills + metadata + prompt → code agent →
- * od media generate", and this file pins down what `--model` IDs the
- * agent is allowed to pass.
+ * Both the frontend (NewProjectPanel pickers, MEDIA_GENERATION_CONTRACT
+ * prompt) and the daemon (`od media generate` dispatcher) read the same
+ * arrays out of ./models.data.json so there is exactly one source of
+ * truth — no hand-mirroring between TS and the daemon's plain JS file,
+ * which used to be a drift hazard whenever a new model was added on
+ * only one side.
  *
- * The daemon imports the JSON view of this file via fs.readFile so we
- * don't fork the registry between frontend and Node code paths.
+ * Adding or removing a model is a one-line edit in models.data.json;
+ * both surfaces pick it up on next reload.
  */
-
 import type { AudioKind, MediaAspect } from '../types';
+import data from './models.data.json';
 
 export interface MediaModel {
   /** Stable ID used in metadata.imageModel / videoModel / audioModel. */
@@ -28,42 +28,13 @@ export interface MediaModel {
   caps?: string[];
 }
 
-export const IMAGE_MODELS: MediaModel[] = [
-  { id: 'gpt-image-2', label: 'gpt-image-2', hint: 'OpenAI · default', caps: ['t2i', 'i2i', 'inpaint'] },
-  { id: 'flux-1.1-pro', label: 'flux-1.1-pro', hint: 'Black Forest Labs', caps: ['t2i', 'i2i'] },
-  { id: 'imagen-4', label: 'imagen-4', hint: 'Google', caps: ['t2i'] },
-  { id: 'midjourney-v7', label: 'midjourney-v7', hint: 'Midjourney', caps: ['t2i'] },
-];
+export const IMAGE_MODELS: MediaModel[] = data.image;
+export const VIDEO_MODELS: MediaModel[] = data.video;
+export const AUDIO_MODELS_BY_KIND: Record<AudioKind, MediaModel[]> = data.audio;
 
-export const VIDEO_MODELS: MediaModel[] = [
-  { id: 'seedance-2', label: 'seedance-2', hint: 'ByteDance · default', caps: ['t2v', 'i2v'] },
-  { id: 'kling-3', label: 'kling-3', hint: 'Kuaishou', caps: ['t2v', 'i2v'] },
-  { id: 'kling-4', label: 'kling-4', hint: 'Kuaishou · latest', caps: ['t2v', 'i2v'] },
-  { id: 'veo-3', label: 'veo-3', hint: 'Google', caps: ['t2v'] },
-  { id: 'sora-2', label: 'sora-2', hint: 'OpenAI', caps: ['t2v'] },
-];
-
-export const AUDIO_MODELS_BY_KIND: Record<AudioKind, MediaModel[]> = {
-  music: [
-    { id: 'suno-v5', label: 'suno-v5', hint: 'Suno · default', caps: ['music'] },
-    { id: 'udio-v2', label: 'udio-v2', hint: 'Udio', caps: ['music'] },
-    { id: 'lyria-2', label: 'lyria-2', hint: 'Google', caps: ['music'] },
-  ],
-  speech: [
-    { id: 'minimax-tts', label: 'minimax-tts', hint: 'MiniMax · default', caps: ['tts'] },
-    { id: 'fish-speech-2', label: 'fish-speech-2', hint: 'FishAudio', caps: ['tts', 'voice-clone'] },
-    { id: 'elevenlabs-v3', label: 'elevenlabs-v3', hint: 'ElevenLabs', caps: ['tts', 'voice-clone'] },
-  ],
-  sfx: [
-    { id: 'elevenlabs-sfx', label: 'elevenlabs-sfx', hint: 'ElevenLabs SFX', caps: ['sfx'] },
-    { id: 'audiocraft', label: 'audiocraft', hint: 'Meta · open', caps: ['sfx', 'music'] },
-  ],
-};
-
-export const MEDIA_ASPECTS: MediaAspect[] = ['1:1', '16:9', '9:16', '4:3', '3:4'];
-
-export const VIDEO_LENGTHS_SEC: number[] = [3, 5, 8, 10, 15, 30];
-export const AUDIO_DURATIONS_SEC: number[] = [5, 10, 15, 30, 60, 120];
+export const MEDIA_ASPECTS: MediaAspect[] = data.aspects as MediaAspect[];
+export const VIDEO_LENGTHS_SEC: number[] = data.videoLengthsSec;
+export const AUDIO_DURATIONS_SEC: number[] = data.audioDurationsSec;
 
 export const DEFAULT_IMAGE_MODEL = IMAGE_MODELS[0]!.id;
 export const DEFAULT_VIDEO_MODEL = VIDEO_MODELS[0]!.id;

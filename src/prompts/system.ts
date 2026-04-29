@@ -184,7 +184,7 @@ function renderMetadataBlock(
     }
     lines.push('');
     lines.push(
-      'This is an **image** project. Plan the prompt carefully — describe subject, composition, lighting, palette, and references — then dispatch via the **media generation contract** (see the contract block at the end of this prompt) using `od media generate --surface image --model <imageModel>`. Reference the returned filename in your reply. Do NOT emit `<artifact>` HTML for media surfaces.',
+      'This is an **image** project. Plan the prompt carefully — describe subject, composition, lighting, palette, and references — then dispatch via the **media generation contract** (see the contract block at the end of this prompt) using `od media generate --surface image --model <imageModel>`. Reference the returned filename in your reply. (The contract block at the end of this prompt is the canonical source for behavioral rules including no-`<artifact>`-for-media; this block carries surface-specific defaults only.)',
     );
   }
   if (metadata.kind === 'video') {
@@ -199,7 +199,7 @@ function renderMetadataBlock(
     );
     lines.push('');
     lines.push(
-      'This is a **video** project. Plan the shotlist (1-3 shots for short clips), describe motion + camera, then dispatch via the **media generation contract** using `od media generate --surface video --model <videoModel> --length <seconds> --aspect <ratio>`. If the active workspace also ships a hyperframes-style interactive-video skill, prefer composing several shorter clips into a timeline rather than one monolithic generation. Do NOT emit `<artifact>` HTML.',
+      'This is a **video** project. Plan the shotlist (1-3 shots for short clips), describe motion + camera, then dispatch via the **media generation contract** using `od media generate --surface video --model <videoModel> --length <seconds> --aspect <ratio>`. If the active workspace also ships a hyperframes-style interactive-video skill, prefer composing several shorter clips into a timeline rather than one monolithic generation. (Behavioral rules — including no-`<artifact>`-for-media — live in the contract block at the end of this prompt; do not restate them here.)',
     );
   }
   if (metadata.kind === 'audio') {
@@ -219,7 +219,7 @@ function renderMetadataBlock(
     }
     lines.push('');
     lines.push(
-      'This is an **audio** project. Music: lock genre + tempo + instrumentation. Speech: confirm script + voice + pacing. SFX: be precise about texture (impact, ambience, foley layer). Then dispatch via the **media generation contract** using `od media generate --surface audio --audio-kind <kind> --model <audioModel> --duration <seconds>` (add `--voice <voice-id>` for speech). Do NOT emit `<artifact>` HTML.',
+      'This is an **audio** project. Music: lock genre + tempo + instrumentation. Speech: confirm script + voice + pacing. SFX: be precise about texture (impact, ambience, foley layer). Then dispatch via the **media generation contract** using `od media generate --surface audio --audio-kind <kind> --model <audioModel> --duration <seconds>` (add `--voice <voice-id>` for speech). (Behavioral rules — including no-`<artifact>`-for-media — live in the contract block at the end of this prompt; do not restate them here.)',
     );
   }
 

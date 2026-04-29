@@ -18,7 +18,11 @@
 
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { findMediaModel } from './media-models.js';
+import {
+  findMediaModel,
+  findMediaModelForSurface,
+  modelsForSurface,
+} from './media-models.js';
 import {
   ensureProject,
   kindFor,
@@ -33,6 +37,16 @@ const DEFAULT_OUTPUT_BY_SURFACE = {
 };
 
 const SURFACES = new Set(['image', 'video', 'audio']);
+const AUDIO_KINDS = new Set(['music', 'speech', 'sfx']);
+
+// Defensive caps on agent-supplied strings. The /api/projects/:id/media/generate
+// route also caps the JSON body via express.json's limit, but a runaway agent
+// can still emit a 4MB prompt or output filename and we'd happily fan it out
+// into the provider stub. Cap at module boundary so providers never see junk.
+const MAX_PROMPT_LEN = 8000;
+const MAX_OUTPUT_NAME_LEN = 200;
+const MAX_VOICE_LEN = 200;
+const MAX_FILENAME_COLLISION_TRIES = 100;
 
 /**
  * Generate a media artifact and write it into the project's files dir.
@@ -41,7 +55,7 @@ const SURFACES = new Set(['image', 'video', 'audio']);
  * @param {string} args.projectsRoot - Absolute path to <repo>/.od/projects.
  * @param {string} args.projectId
  * @param {'image'|'video'|'audio'} args.surface
- * @param {string} args.model - Must be a registered model id.
+ * @param {string} args.model - Must be a registered model id for the surface.
  * @param {string} [args.prompt]
  * @param {string} [args.output] - Optional filename; auto-named if missing.
  * @param {string} [args.aspect] - 1:1 / 16:9 / 9:16 / 4:3 / 3:4
@@ -76,17 +90,59 @@ export async function generateMedia(args) {
   if (typeof model !== 'string' || !model) {
     throw new Error('model required');
   }
-  const def = findMediaModel(model);
-  if (!def) {
+  if (surface === 'audio' && audioKind != null && !AUDIO_KINDS.has(audioKind)) {
     throw new Error(
-      `unknown model: ${model}. Pass --model from the registered list (see /api/media/models).`,
+      `unsupported audioKind: ${audioKind}. Use music | speech | sfx.`,
+    );
+  }
+
+  // Cap agent-supplied strings so a runaway loop can't OOM the providers
+  // (or the JSON parser at the route boundary) by sending megabyte-length
+  // prompts. We reject rather than truncate so the agent gets a clear
+  // error and re-plans.
+  if (typeof prompt === 'string' && prompt.length > MAX_PROMPT_LEN) {
+    throw new Error(`prompt too long: ${prompt.length} > ${MAX_PROMPT_LEN} chars`);
+  }
+  if (typeof output === 'string' && output.length > MAX_OUTPUT_NAME_LEN) {
+    throw new Error(
+      `output filename too long: ${output.length} > ${MAX_OUTPUT_NAME_LEN} chars`,
+    );
+  }
+  if (typeof voice === 'string' && voice.length > MAX_VOICE_LEN) {
+    throw new Error(`voice too long: ${voice.length} > ${MAX_VOICE_LEN} chars`);
+  }
+
+  // Surface-aware model validation. The previous implementation only
+  // checked that the id existed in the global registry, which let an
+  // agent pass `surface=image, model=suno-v5` and produce a stub PNG
+  // routed through the audio renderer once a real provider lands. Now
+  // we reject mismatches up-front with the list of valid model ids for
+  // this exact (surface, audioKind) so the agent re-plans instead.
+  const def = findMediaModelForSurface(model, surface, audioKind);
+  if (!def) {
+    if (!findMediaModel(model)) {
+      throw new Error(
+        `unknown model: ${model}. Pass --model from the registered list (see /api/media/models).`,
+      );
+    }
+    const valid = modelsForSurface(surface, audioKind).map((m) => m.id);
+    const where = surface === 'audio' ? `audio · ${audioKind || 'music'}` : surface;
+    throw new Error(
+      `model "${model}" is not valid for surface "${where}". Valid options: ${valid.join(', ')}.`,
     );
   }
 
   const dir = await ensureProject(projectsRoot, projectId);
-  const safeOut = sanitizeName(
+  const requestedName = sanitizeName(
     output || autoOutputName(surface, model, audioKind),
   );
+  // Collision-safe filename: if the agent re-runs `od media generate
+  // --output poster.png` twice, we don't silently overwrite the first
+  // generation. We auto-suffix `poster.png` → `poster-2.png` and surface
+  // the actual chosen name in the response so the agent narrates the
+  // right file. The contract still recommends explicit unique names —
+  // this is a safety net, not a license to be sloppy.
+  const safeOut = await uniqueFilename(dir, requestedName);
   const target = path.join(dir, safeOut);
   await mkdir(path.dirname(target), { recursive: true });
 
@@ -141,6 +197,35 @@ function defaultAspectFor(surface) {
   return undefined;
 }
 
+// Auto-suffix on collision so a second `od media generate --output X.png`
+// doesn't overwrite the first generation. Returns the original name when
+// nothing exists at that path; otherwise tries `name-2.ext`, `name-3.ext`,
+// … until an unused slot opens (or we hit the safety cap).
+async function uniqueFilename(dir, name) {
+  const target = path.join(dir, name);
+  if (!(await pathExists(target))) return name;
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  for (let i = 2; i <= MAX_FILENAME_COLLISION_TRIES; i++) {
+    const candidate = `${stem}-${i}${ext}`;
+    if (!(await pathExists(path.join(dir, candidate)))) return candidate;
+  }
+  // Extreme fallback: append a base36 timestamp. This effectively never
+  // collides; we only get here if 100 numbered variants already exist.
+  return `${stem}-${Date.now().toString(36)}${ext}`;
+}
+
+async function pathExists(p) {
+  try {
+    await stat(p);
+    return true;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Provider stubs.
 //
@@ -160,7 +245,7 @@ async function renderImage(ctx, fileName) {
   // a labelled SVG.
   const ext = path.extname(fileName).toLowerCase();
   if (ext === '.svg') {
-    return { bytes: Buffer.from(svgPlaceholder(ctx), 'utf8'), providerNote: 'svg-stub' };
+    return { bytes: Buffer.from(svgPlaceholder(ctx), 'utf8'), providerNote: 'stub-svg' };
   }
   // Minimal 1×1 transparent PNG. Real provider would emit a full image.
   const png = Buffer.from(

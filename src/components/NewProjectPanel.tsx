@@ -181,8 +181,15 @@ export function NewProjectPanel({
 
   function handleCreate() {
     if (!canCreate) return;
-    const primaryDs = selectedDsIds[0] ?? null;
-    const inspirations = selectedDsIds.slice(1);
+    // Design-system selection is web-only today: media surfaces hide the
+    // picker entirely. We must drop `selectedDsIds` here too — otherwise a
+    // user who picked a system on the web tab and then flipped to image /
+    // video / audio would silently inherit the stale pick (the picker is
+    // hidden, so they have no way to see or clear it). The dropped
+    // selection includes inspirations, since those are also DS-scoped.
+    const usePicker = surface === 'web';
+    const primaryDs = usePicker ? (selectedDsIds[0] ?? null) : null;
+    const inspirations = usePicker ? selectedDsIds.slice(1) : [];
     const metadata = buildMetadata({
       surface,
       tab,
