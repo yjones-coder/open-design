@@ -115,10 +115,12 @@ export const en: Dict = {
   'connectors.statusDisabled': 'Disabled',
 
   'newproj.tabPrototype': 'Prototype',
+  'newproj.tabLiveArtifact': 'New live artifact',
   'newproj.tabDeck': 'Slide deck',
   'newproj.tabTemplate': 'From template',
   'newproj.tabOther': 'Other',
   'newproj.titlePrototype': 'New prototype',
+  'newproj.titleLiveArtifact': 'New live artifact',
   'newproj.titleDeck': 'New slide deck',
   'newproj.titleTemplate': 'Start from a template',
   'newproj.titleOther': 'New project',
@@ -139,6 +141,7 @@ export const en: Dict = {
   'newproj.fileSingular': 'file',
   'newproj.filePlural': 'files',
   'newproj.create': 'Create',
+  'newproj.createLiveArtifact': 'Create live artifact',
   'newproj.createFromTemplate': 'Create from template',
   'newproj.createDisabledTitle':
     'Save a project as a template first (Share menu inside any project).',

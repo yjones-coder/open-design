@@ -129,10 +129,12 @@ export interface Dict {
 
   // New project panel
   'newproj.tabPrototype': string;
+  'newproj.tabLiveArtifact': string;
   'newproj.tabDeck': string;
   'newproj.tabTemplate': string;
   'newproj.tabOther': string;
   'newproj.titlePrototype': string;
+  'newproj.titleLiveArtifact': string;
   'newproj.titleDeck': string;
   'newproj.titleTemplate': string;
   'newproj.titleOther': string;
@@ -151,6 +153,7 @@ export interface Dict {
   'newproj.fileSingular': string;
   'newproj.filePlural': string;
   'newproj.create': string;
+  'newproj.createLiveArtifact': string;
   'newproj.createFromTemplate': string;
   'newproj.createDisabledTitle': string;
   'newproj.importClaudeZip': string;

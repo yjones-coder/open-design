@@ -115,10 +115,12 @@ export const ptBR: Dict = {
   'connectors.statusDisabled': 'Desativado',
 
   'newproj.tabPrototype': 'Protótipo',
+  'newproj.tabLiveArtifact': 'Novo artefato live',
   'newproj.tabDeck': 'Apresentação',
   'newproj.tabTemplate': 'A partir de template',
   'newproj.tabOther': 'Outro',
   'newproj.titlePrototype': 'Novo protótipo',
+  'newproj.titleLiveArtifact': 'Novo artefato live',
   'newproj.titleDeck': 'Nova apresentação',
   'newproj.titleTemplate': 'Começar de um template',
   'newproj.titleOther': 'Novo projeto',
@@ -139,6 +141,7 @@ export const ptBR: Dict = {
   'newproj.fileSingular': 'arquivo',
   'newproj.filePlural': 'arquivos',
   'newproj.create': 'Criar',
+  'newproj.createLiveArtifact': 'Criar artefato live',
   'newproj.createFromTemplate': 'Criar a partir do template',
   'newproj.createDisabledTitle':
     'Salve primeiro um projeto como template (menu Compartilhar dentro de qualquer projeto).',

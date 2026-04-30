@@ -4,6 +4,7 @@ export type ProjectKind = 'prototype' | 'deck' | 'template' | 'other';
 
 export interface ProjectMetadata {
   kind: ProjectKind;
+  intent?: 'live-artifact';
   fidelity?: 'wireframe' | 'high-fidelity';
   speakerNotes?: boolean;
   animations?: boolean;

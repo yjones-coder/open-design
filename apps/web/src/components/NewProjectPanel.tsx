@@ -13,7 +13,7 @@ import { Skeleton } from './Loading';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 
-export type CreateTab = 'prototype' | 'deck' | 'template' | 'other';
+export type CreateTab = 'prototype' | 'live-artifact' | 'deck' | 'template' | 'other';
 
 export interface CreateInput {
   name: string;
@@ -34,6 +34,7 @@ interface Props {
 
 const TAB_LABEL_KEYS: Record<CreateTab, keyof Dict> = {
   prototype: 'newproj.tabPrototype',
+  'live-artifact': 'newproj.tabLiveArtifact',
   deck: 'newproj.tabDeck',
   template: 'newproj.tabTemplate',
   other: 'newproj.tabOther',
@@ -92,6 +93,19 @@ export function NewProjectPanel({
       const list = skills.filter((s) => s.mode === 'prototype');
       return list.find((s) => s.defaultFor.includes('prototype'))?.id
         ?? list[0]?.id
+        ?? null;
+    }
+    if (tab === 'live-artifact') {
+      const exact = skills.find((s) => s.id === 'live-artifact' || s.name === 'live-artifact');
+      if (exact) return exact.id;
+      const hinted = skills.find((s) => {
+        const haystack = `${s.id} ${s.name} ${s.description} ${s.triggers.join(' ')}`.toLowerCase();
+        return haystack.includes('live artifact') || haystack.includes('live-artifact');
+      });
+      if (hinted) return hinted.id;
+      const prototypes = skills.filter((s) => s.mode === 'prototype');
+      return prototypes.find((s) => s.defaultFor.includes('prototype'))?.id
+        ?? prototypes[0]?.id
         ?? null;
     }
     if (tab === 'deck') {
@@ -176,7 +190,7 @@ export function NewProjectPanel({
           loading={loading}
         />
 
-        {tab === 'prototype' ? (
+        {tab === 'prototype' || tab === 'live-artifact' ? (
           <FidelityPicker value={fidelity} onChange={setFidelity} />
         ) : null}
 
@@ -220,6 +234,8 @@ export function NewProjectPanel({
           <span>
             {tab === 'template'
               ? t('newproj.createFromTemplate')
+              : tab === 'live-artifact'
+                ? t('newproj.createLiveArtifact')
               : t('newproj.create')}
           </span>
         </button>
@@ -818,12 +834,17 @@ function buildMetadata(input: {
   templates: ProjectTemplate[];
   inspirationIds: string[];
 }): ProjectMetadata {
-  const kind: ProjectKind = input.tab;
+  const kind: ProjectKind = input.tab === 'live-artifact' ? 'prototype' : input.tab;
   const inspirations = input.inspirationIds.length > 0
     ? { inspirationDesignSystemIds: input.inspirationIds }
     : {};
-  if (input.tab === 'prototype') {
-    return { kind, fidelity: input.fidelity, ...inspirations };
+  if (input.tab === 'prototype' || input.tab === 'live-artifact') {
+    return {
+      kind,
+      fidelity: input.fidelity,
+      ...(input.tab === 'live-artifact' ? { intent: 'live-artifact' as const } : {}),
+      ...inspirations,
+    };
   }
   if (input.tab === 'deck') {
     return { kind, speakerNotes: input.speakerNotes, ...inspirations };
@@ -850,6 +871,8 @@ function titleForTab(tab: CreateTab, t: TranslateFn): string {
   switch (tab) {
     case 'prototype':
       return t('newproj.titlePrototype');
+    case 'live-artifact':
+      return t('newproj.titleLiveArtifact');
     case 'deck':
       return t('newproj.titleDeck');
     case 'template':
