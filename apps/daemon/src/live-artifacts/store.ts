@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import type { Dirent } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { ensureProject, projectDir } from '../projects.js';
 import { renderHtmlTemplateV1 } from './render.js';
-import type { LiveArtifact, LiveArtifactCreateInput, LiveArtifactProvenance, LiveArtifactUpdateInput, LiveArtifactValidationIssue } from './schema.js';
-import { validateLiveArtifactCreateInput, validateLiveArtifactUpdateInput, validatePersistedLiveArtifact } from './schema.js';
+import type { BoundedJsonObject, LiveArtifact, LiveArtifactCreateInput, LiveArtifactProvenance, LiveArtifactUpdateInput, LiveArtifactValidationIssue } from './schema.js';
+import { validateBoundedJsonObject, validateLiveArtifactCreateInput, validateLiveArtifactUpdateInput, validatePersistedLiveArtifact } from './schema.js';
 
 export type LiveArtifactSummary = Omit<LiveArtifact, 'document' | 'tiles'> & {
   tileCount: number;
@@ -106,6 +106,16 @@ export interface UpdateLiveArtifactOptions {
   templateHtml?: string;
   provenanceJson?: LiveArtifactProvenance;
   now?: Date;
+}
+
+export interface RegenerateLiveArtifactPreviewOptions {
+  projectsRoot: string;
+  projectId: string;
+  artifactId: string;
+}
+
+export interface LiveArtifactPreviewRenderRecord extends LiveArtifactStoreRecord {
+  html: string;
 }
 
 export class LiveArtifactStoreValidationError extends Error {
@@ -272,6 +282,22 @@ async function readPersistedLiveArtifact(paths: LiveArtifactStorePaths): Promise
   return persisted.value;
 }
 
+async function readPersistedDataJson(paths: LiveArtifactStorePaths): Promise<BoundedJsonObject> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(paths.dataJsonPath, 'utf8'));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw validationError('data.json', 'live artifact data file contains invalid JSON');
+    }
+    throw error;
+  }
+
+  const result = validateBoundedJsonObject(parsed, 'data.json');
+  if (!result.ok) throw new LiveArtifactStoreValidationError(result.error, result.issues);
+  return result.value;
+}
+
 function assertArtifactMatchesStorage(artifact: LiveArtifact, projectId: string, artifactId: string): void {
   if (artifact.id !== artifactId) {
     throw validationError('id', 'live artifact id does not match storage directory');
@@ -281,23 +307,44 @@ function assertArtifactMatchesStorage(artifact: LiveArtifact, projectId: string,
   }
 }
 
-async function writeLiveArtifactFiles(paths: LiveArtifactStorePaths, artifact: LiveArtifact, templateHtml: string, provenanceJson: LiveArtifactProvenance): Promise<void> {
-  const dataJson = artifact.document?.dataJson ?? {};
-  const previewHtml = artifact.document?.format === 'html_template_v1'
+function artifactWithDataJson(artifact: LiveArtifact, dataJson: BoundedJsonObject): LiveArtifact {
+  if (artifact.document?.format !== 'html_template_v1') return artifact;
+  return { ...artifact, document: { ...artifact.document, dataJson } };
+}
+
+async function writeLiveArtifactFiles(
+  paths: LiveArtifactStorePaths,
+  artifact: LiveArtifact,
+  templateHtml: string,
+  provenanceJson: LiveArtifactProvenance,
+  dataJsonOverride?: BoundedJsonObject,
+): Promise<LiveArtifact> {
+  const dataJson = dataJsonOverride ?? artifact.document?.dataJson ?? {};
+  const artifactForWrite = artifactWithDataJson(artifact, dataJson);
+  const previewHtml = artifactForWrite.document?.format === 'html_template_v1'
     ? renderHtmlTemplateV1({ templateHtml, dataJson }).html
     : templateHtml;
 
   await mkdir(paths.tilesDir, { recursive: true });
   await mkdir(paths.snapshotsDir, { recursive: true });
   await Promise.all([
-    writeFile(paths.artifactJsonPath, stableJson(artifact), 'utf8'),
+    writeFile(paths.artifactJsonPath, stableJson(artifactForWrite), 'utf8'),
     writeFile(paths.templateHtmlPath, templateHtml, 'utf8'),
     writeFile(paths.generatedPreviewHtmlPath, previewHtml, 'utf8'),
     writeFile(paths.dataJsonPath, stableJson(dataJson), 'utf8'),
     writeFile(paths.provenanceJsonPath, stableJson(provenanceJson), 'utf8'),
     writeFile(paths.refreshesJsonlPath, '', { flag: 'a' }),
-    ...artifact.tiles.map((tile) => writeFile(liveArtifactTilePath(paths, tile.id), stableJson(tile), 'utf8')),
+    ...artifactForWrite.tiles.map((tile) => writeFile(liveArtifactTilePath(paths, tile.id), stableJson(tile), 'utf8')),
   ]);
+  return artifactForWrite;
+}
+
+async function renderLiveArtifactPreviewFromFiles(paths: LiveArtifactStorePaths, artifact: LiveArtifact): Promise<string> {
+  const templateHtml = await readFile(paths.templateHtmlPath, 'utf8');
+  if (artifact.document?.format !== 'html_template_v1') return templateHtml;
+
+  const dataJson = await readPersistedDataJson(paths);
+  return renderHtmlTemplateV1({ templateHtml, dataJson }).html;
 }
 
 async function readTextFileOrDefault(filePath: string, fallback: string): Promise<string> {
@@ -362,14 +409,13 @@ export async function createLiveArtifact(options: CreateLiveArtifactOptions): Pr
   await mkdir(tempPaths.artifactDir, { recursive: false });
 
   try {
-    await writeLiveArtifactFiles(tempPaths, persisted.value, templateHtml, provenanceJson);
+    const writtenArtifact = await writeLiveArtifactFiles(tempPaths, persisted.value, templateHtml, provenanceJson);
     await rename(tempPaths.artifactDir, finalPaths.artifactDir);
+    return { artifact: writtenArtifact, paths: finalPaths };
   } catch (error) {
     await rm(tempPaths.artifactDir, { recursive: true, force: true });
     throw error;
   }
-
-  return { artifact: persisted.value, paths: finalPaths };
 }
 
 export async function listLiveArtifacts(options: ListLiveArtifactsOptions): Promise<LiveArtifactSummary[]> {
@@ -410,6 +456,44 @@ export async function getLiveArtifact(options: GetLiveArtifactOptions): Promise<
   return { artifact, paths };
 }
 
+export async function regenerateLiveArtifactPreview(options: RegenerateLiveArtifactPreviewOptions): Promise<LiveArtifactPreviewRenderRecord> {
+  const artifactId = validateLiveArtifactStorageId(options.artifactId);
+  const paths = liveArtifactStorePaths(options.projectsRoot, options.projectId, artifactId);
+  const artifact = await readPersistedLiveArtifact(paths);
+  assertArtifactMatchesStorage(artifact, options.projectId, artifactId);
+
+  const html = await renderLiveArtifactPreviewFromFiles(paths, artifact);
+  await writeFile(paths.generatedPreviewHtmlPath, html, 'utf8');
+
+  return { artifact, paths, html };
+}
+
+export async function ensureLiveArtifactPreview(options: RegenerateLiveArtifactPreviewOptions): Promise<LiveArtifactPreviewRenderRecord> {
+  const artifactId = validateLiveArtifactStorageId(options.artifactId);
+  const paths = liveArtifactStorePaths(options.projectsRoot, options.projectId, artifactId);
+  const artifact = await readPersistedLiveArtifact(paths);
+  assertArtifactMatchesStorage(artifact, options.projectId, artifactId);
+
+  try {
+    const dependencyStats = await Promise.all([
+      stat(paths.artifactJsonPath),
+      stat(paths.templateHtmlPath),
+      ...(artifact.document?.format === 'html_template_v1' ? [stat(paths.dataJsonPath)] : []),
+    ]);
+    const previewStat = await stat(paths.generatedPreviewHtmlPath);
+    const newestDependencyMtime = Math.max(...dependencyStats.map((dependencyStat) => dependencyStat.mtimeMs));
+    if (previewStat.mtimeMs >= newestDependencyMtime) {
+      return { artifact, paths, html: await readFile(paths.generatedPreviewHtmlPath, 'utf8') };
+    }
+  } catch (error) {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+
+  const html = await renderLiveArtifactPreviewFromFiles(paths, artifact);
+  await writeFile(paths.generatedPreviewHtmlPath, html, 'utf8');
+  return { artifact, paths, html };
+}
+
 export async function updateLiveArtifact(options: UpdateLiveArtifactOptions): Promise<LiveArtifactStoreRecord> {
   const artifactId = validateLiveArtifactStorageId(options.artifactId);
   const result = validateLiveArtifactUpdateInput(options.input);
@@ -438,11 +522,14 @@ export async function updateLiveArtifact(options: UpdateLiveArtifactOptions): Pr
 
   const templateHtml = options.templateHtml ?? await readTextFileOrDefault(paths.templateHtmlPath, defaultTemplateHtml(persisted.value.title));
   const provenanceJson = options.provenanceJson ?? await readProvenanceOrDefault(paths, nowIso);
+  const dataJson = input.document === undefined && persisted.value.document?.format === 'html_template_v1'
+    ? await readPersistedDataJson(paths)
+    : persisted.value.document?.dataJson;
 
   await rm(paths.tilesDir, { recursive: true, force: true });
-  await writeLiveArtifactFiles(paths, persisted.value, templateHtml, provenanceJson);
+  const writtenArtifact = await writeLiveArtifactFiles(paths, persisted.value, templateHtml, provenanceJson, dataJson);
 
-  return { artifact: persisted.value, paths };
+  return { artifact: writtenArtifact, paths };
 }
 
 export function summarizeLiveArtifactRecord(record: LiveArtifactStoreRecord): LiveArtifactStoreSummary {

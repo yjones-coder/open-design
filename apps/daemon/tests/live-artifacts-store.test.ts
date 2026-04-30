@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,9 +11,11 @@ import {
   generateLiveArtifactId,
   generateLiveArtifactSlug,
   getLiveArtifact,
+  ensureLiveArtifactPreview,
   liveArtifactStorePaths,
   liveArtifactTilePath,
   listLiveArtifacts,
+  regenerateLiveArtifactPreview,
   updateLiveArtifact,
   validateLiveArtifactStorageId,
 } from '../src/live-artifacts/store.js';
@@ -329,6 +331,47 @@ describe('live artifact store layout', () => {
       generatedPreviewPath: 'index.html',
       dataPath: 'data.json',
     });
+  });
+
+  it('regenerates preview HTML from template.html and data.json as the source of truth', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    const created = await createLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      input: validCreateInput(),
+      templateHtml: '<h1>{{data.title}}</h1><p>{{data.owner}}</p>',
+    });
+
+    await writeFile(created.paths.dataJsonPath, `${JSON.stringify({ title: 'Disk <Title>', owner: 'Disk & Owner' }, null, 2)}\n`, 'utf8');
+
+    const rendered = await regenerateLiveArtifactPreview({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+    });
+
+    expect(rendered.html).toBe('<h1>Disk &lt;Title&gt;</h1><p>Disk &amp; Owner</p>');
+    expect(await readFile(created.paths.generatedPreviewHtmlPath, 'utf8')).toBe(rendered.html);
+  });
+
+  it('regenerates missing derived preview output when needed', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    const created = await createLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      input: validCreateInput(),
+      templateHtml: '<h1>{{data.title}}</h1>',
+    });
+    await rm(created.paths.generatedPreviewHtmlPath, { force: true });
+
+    const preview = await ensureLiveArtifactPreview({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+    });
+
+    expect(preview.html).toBe('<h1>Launch &lt;Metrics&gt;</h1>');
+    expect(await readFile(created.paths.generatedPreviewHtmlPath, 'utf8')).toBe(preview.html);
   });
 
   it('updates mutable live artifact presentation fields without changing daemon-owned fields', async () => {
