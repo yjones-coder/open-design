@@ -20,6 +20,8 @@ import {
   listLiveArtifactRefreshLogEntries,
   listLiveArtifacts,
   LiveArtifactRefreshLockError,
+  LiveArtifactStaleRefreshError,
+  markLiveArtifactRefreshCommitted,
   regenerateLiveArtifactPreview,
   releaseLiveArtifactRefreshLock,
   updateLiveArtifact,
@@ -495,6 +497,71 @@ describe('live artifact store layout', () => {
 
     expect(secondLock.metadata.token).not.toBe(firstLock.metadata.token);
     await releaseLiveArtifactRefreshLock(secondLock);
+  });
+
+  it('assigns monotonic refresh ids and rejects stale refresh commits', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    const created = await createLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      input: validCreateInput(),
+    });
+
+    const firstLock = await acquireLiveArtifactRefreshLock({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+      now: new Date('2026-04-30T10:00:00.000Z'),
+    });
+    expect(firstLock.metadata).toMatchObject({
+      refreshId: 'refresh-000001',
+      refreshOrdinal: 1,
+    });
+
+    await releaseLiveArtifactRefreshLock(firstLock);
+
+    const secondLock = await acquireLiveArtifactRefreshLock({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+      now: new Date('2026-04-30T10:00:01.000Z'),
+    });
+    expect(secondLock.metadata).toMatchObject({
+      refreshId: 'refresh-000002',
+      refreshOrdinal: 2,
+    });
+
+    await expect(
+      markLiveArtifactRefreshCommitted({
+        projectsRoot,
+        projectId: 'project-1',
+        artifactId: created.artifact.id,
+        refreshId: secondLock.metadata.refreshId,
+      }),
+    ).resolves.toMatchObject({
+      nextRefreshOrdinal: 3,
+      lastCommittedRefreshId: 'refresh-000002',
+      lastCommittedRefreshOrdinal: 2,
+    });
+
+    await expect(
+      markLiveArtifactRefreshCommitted({
+        projectsRoot,
+        projectId: 'project-1',
+        artifactId: created.artifact.id,
+        refreshId: firstLock.metadata.refreshId,
+      }),
+    ).rejects.toBeInstanceOf(LiveArtifactStaleRefreshError);
+
+    await releaseLiveArtifactRefreshLock(secondLock);
+    const thirdLock = await acquireLiveArtifactRefreshLock({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+      now: new Date('2026-04-30T10:00:02.000Z'),
+    });
+    expect(thirdLock.metadata.refreshId).toBe('refresh-000003');
+    await releaseLiveArtifactRefreshLock(thirdLock);
   });
 
   it('rejects unsafe refresh log metadata and compacts arbitrary errors', async () => {

@@ -21,6 +21,7 @@ export const LIVE_ARTIFACT_DATA_FILE = 'data.json' as const;
 export const LIVE_ARTIFACT_PROVENANCE_FILE = 'provenance.json' as const;
 export const LIVE_ARTIFACT_REFRESHES_FILE = 'refreshes.jsonl' as const;
 export const LIVE_ARTIFACT_REFRESH_LOCK_FILE = 'refresh.lock.json' as const;
+export const LIVE_ARTIFACT_REFRESH_STATE_FILE = 'refresh-state.json' as const;
 export const LIVE_ARTIFACT_TILES_DIR = 'tiles' as const;
 export const LIVE_ARTIFACT_SNAPSHOTS_DIR = 'snapshots' as const;
 
@@ -60,6 +61,7 @@ export interface LiveArtifactStorePaths {
   tilesDir: string;
   refreshesJsonlPath: string;
   refreshLockPath: string;
+  refreshStatePath: string;
   snapshotsDir: string;
 }
 
@@ -146,6 +148,13 @@ export interface ListLiveArtifactRefreshLogEntriesOptions {
   artifactId: string;
 }
 
+export interface MarkLiveArtifactRefreshCommittedOptions {
+  projectsRoot: string;
+  projectId: string;
+  artifactId: string;
+  refreshId: string;
+}
+
 export interface LiveArtifactPreviewRenderRecord extends LiveArtifactStoreRecord {
   html: string;
 }
@@ -154,8 +163,19 @@ export interface LiveArtifactRefreshLockMetadata {
   schemaVersion: 1;
   projectId: string;
   artifactId: string;
+  refreshId: string;
+  refreshOrdinal: number;
   acquiredAt: string;
   token: string;
+}
+
+export interface LiveArtifactRefreshState {
+  schemaVersion: 1;
+  projectId: string;
+  artifactId: string;
+  nextRefreshOrdinal: number;
+  lastCommittedRefreshId?: string;
+  lastCommittedRefreshOrdinal?: number;
 }
 
 export interface LiveArtifactRefreshLock {
@@ -185,6 +205,22 @@ export class LiveArtifactRefreshLockError extends Error {
     this.projectId = options.projectId;
     this.artifactId = options.artifactId;
     this.lockPath = options.lockPath;
+  }
+}
+
+export class LiveArtifactStaleRefreshError extends Error {
+  readonly projectId: string;
+  readonly artifactId: string;
+  readonly refreshId: string;
+  readonly lastCommittedRefreshId?: string;
+
+  constructor(message: string, options: { projectId: string; artifactId: string; refreshId: string; lastCommittedRefreshId?: string }) {
+    super(message);
+    this.name = 'LiveArtifactStaleRefreshError';
+    this.projectId = options.projectId;
+    this.artifactId = options.artifactId;
+    this.refreshId = options.refreshId;
+    if (options.lastCommittedRefreshId !== undefined) this.lastCommittedRefreshId = options.lastCommittedRefreshId;
   }
 }
 
@@ -256,6 +292,7 @@ export function liveArtifactStorePaths(
     tilesDir: resolveInside(artifactDir, LIVE_ARTIFACT_TILES_DIR, 'live artifact path escapes artifact dir'),
     refreshesJsonlPath: resolveInside(artifactDir, LIVE_ARTIFACT_REFRESHES_FILE, 'live artifact path escapes artifact dir'),
     refreshLockPath: resolveInside(artifactDir, LIVE_ARTIFACT_REFRESH_LOCK_FILE, 'live artifact path escapes artifact dir'),
+    refreshStatePath: resolveInside(artifactDir, LIVE_ARTIFACT_REFRESH_STATE_FILE, 'live artifact path escapes artifact dir'),
     snapshotsDir: resolveInside(artifactDir, LIVE_ARTIFACT_SNAPSHOTS_DIR, 'live artifact path escapes artifact dir'),
   };
 }
@@ -372,6 +409,73 @@ function normalizeRefreshLogEntry(options: AppendLiveArtifactRefreshLogEntryOpti
   if (options.error !== undefined) entry.error = compactLiveArtifactRefreshError(options.error);
   if (options.metadata !== undefined) entry.metadata = options.metadata;
   return entry;
+}
+
+function formatRefreshId(refreshOrdinal: number): string {
+  if (!Number.isSafeInteger(refreshOrdinal) || refreshOrdinal < 1) {
+    throw new Error('invalid live artifact refresh ordinal');
+  }
+  return `refresh-${refreshOrdinal.toString().padStart(6, '0')}`;
+}
+
+function parseRefreshOrdinal(refreshId: string): number {
+  const match = /^refresh-(\d+)$/.exec(refreshId);
+  if (match === null) throw new Error('invalid live artifact refresh id');
+  const refreshOrdinal = Number(match[1]);
+  if (!Number.isSafeInteger(refreshOrdinal) || refreshOrdinal < 1) {
+    throw new Error('invalid live artifact refresh id');
+  }
+  return refreshOrdinal;
+}
+
+function defaultRefreshState(projectId: string, artifactId: string): LiveArtifactRefreshState {
+  return { schemaVersion: 1, projectId, artifactId, nextRefreshOrdinal: 1 };
+}
+
+function normalizeRefreshState(value: unknown, projectId: string, artifactId: string): LiveArtifactRefreshState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw validationError('refresh-state.json', 'live artifact refresh state must be an object');
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.schemaVersion !== 1) throw validationError('refresh-state.json.schemaVersion', 'live artifact refresh state schemaVersion must be 1');
+  if (raw.projectId !== projectId) throw validationError('refresh-state.json.projectId', 'live artifact refresh state projectId does not match requested project');
+  if (raw.artifactId !== artifactId) throw validationError('refresh-state.json.artifactId', 'live artifact refresh state artifactId does not match storage directory');
+  if (!Number.isSafeInteger(raw.nextRefreshOrdinal) || (raw.nextRefreshOrdinal as number) < 1) {
+    throw validationError('refresh-state.json.nextRefreshOrdinal', 'live artifact refresh state nextRefreshOrdinal must be a positive safe integer');
+  }
+
+  const state: LiveArtifactRefreshState = {
+    schemaVersion: 1,
+    projectId,
+    artifactId,
+    nextRefreshOrdinal: raw.nextRefreshOrdinal as number,
+  };
+  if (raw.lastCommittedRefreshId !== undefined) {
+    if (typeof raw.lastCommittedRefreshId !== 'string') throw validationError('refresh-state.json.lastCommittedRefreshId', 'live artifact refresh state lastCommittedRefreshId must be a string');
+    state.lastCommittedRefreshId = raw.lastCommittedRefreshId;
+  }
+  if (raw.lastCommittedRefreshOrdinal !== undefined) {
+    if (!Number.isSafeInteger(raw.lastCommittedRefreshOrdinal) || (raw.lastCommittedRefreshOrdinal as number) < 1) {
+      throw validationError('refresh-state.json.lastCommittedRefreshOrdinal', 'live artifact refresh state lastCommittedRefreshOrdinal must be a positive safe integer');
+    }
+    state.lastCommittedRefreshOrdinal = raw.lastCommittedRefreshOrdinal as number;
+  }
+  return state;
+}
+
+async function readLiveArtifactRefreshState(paths: LiveArtifactStorePaths, projectId: string, artifactId: string): Promise<LiveArtifactRefreshState> {
+  const text = await readTextFileOrDefault(paths.refreshStatePath, '');
+  if (text.trim().length === 0) return defaultRefreshState(projectId, artifactId);
+  try {
+    return normalizeRefreshState(JSON.parse(text), projectId, artifactId);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw validationError('refresh-state.json', 'live artifact refresh state contains invalid JSON');
+    throw error;
+  }
+}
+
+async function writeLiveArtifactRefreshState(paths: LiveArtifactStorePaths, state: LiveArtifactRefreshState): Promise<void> {
+  await writeFile(paths.refreshStatePath, stableJson(state), 'utf8');
 }
 
 async function readPersistedLiveArtifact(paths: LiveArtifactStorePaths): Promise<LiveArtifact> {
@@ -614,10 +718,15 @@ export async function acquireLiveArtifactRefreshLock(
 ): Promise<LiveArtifactRefreshLock> {
   const artifactId = validateLiveArtifactStorageId(options.artifactId);
   const paths = await assertLiveArtifactRefreshLockScope(options.projectsRoot, options.projectId, artifactId);
+  const state = await readLiveArtifactRefreshState(paths, options.projectId, artifactId);
+  const refreshOrdinal = state.nextRefreshOrdinal;
+  const refreshId = formatRefreshId(refreshOrdinal);
   const metadata: LiveArtifactRefreshLockMetadata = {
     schemaVersion: 1,
     projectId: options.projectId,
     artifactId,
+    refreshId,
+    refreshOrdinal,
     acquiredAt: (options.now ?? new Date()).toISOString(),
     token: randomBytes(12).toString('hex'),
   };
@@ -635,7 +744,47 @@ export async function acquireLiveArtifactRefreshLock(
     throw error;
   }
 
+  try {
+    await writeLiveArtifactRefreshState(paths, {
+      ...state,
+      nextRefreshOrdinal: refreshOrdinal + 1,
+    });
+  } catch (error) {
+    await rm(paths.refreshLockPath, { force: true });
+    throw error;
+  }
+
   return { artifactId, lockPath: paths.refreshLockPath, metadata };
+}
+
+export async function markLiveArtifactRefreshCommitted(
+  options: MarkLiveArtifactRefreshCommittedOptions,
+): Promise<LiveArtifactRefreshState> {
+  const artifactId = validateLiveArtifactStorageId(options.artifactId);
+  const paths = await assertLiveArtifactRefreshLockScope(options.projectsRoot, options.projectId, artifactId);
+  const refreshOrdinal = parseRefreshOrdinal(options.refreshId);
+  const state = await readLiveArtifactRefreshState(paths, options.projectId, artifactId);
+  if (refreshOrdinal >= state.nextRefreshOrdinal) {
+    throw validationError('refreshId', 'live artifact refresh id has not been allocated');
+  }
+  if ((state.lastCommittedRefreshOrdinal ?? 0) >= refreshOrdinal) {
+    const staleOptions: { projectId: string; artifactId: string; refreshId: string; lastCommittedRefreshId?: string } = {
+      projectId: options.projectId,
+      artifactId,
+      refreshId: options.refreshId,
+    };
+    if (state.lastCommittedRefreshId !== undefined) staleOptions.lastCommittedRefreshId = state.lastCommittedRefreshId;
+    throw new LiveArtifactStaleRefreshError('live artifact refresh is older than the latest committed refresh', staleOptions);
+  }
+
+  const nextState: LiveArtifactRefreshState = {
+    ...state,
+    nextRefreshOrdinal: Math.max(state.nextRefreshOrdinal, refreshOrdinal + 1),
+    lastCommittedRefreshId: options.refreshId,
+    lastCommittedRefreshOrdinal: refreshOrdinal,
+  };
+  await writeLiveArtifactRefreshState(paths, nextState);
+  return nextState;
 }
 
 export async function releaseLiveArtifactRefreshLock(lock: LiveArtifactRefreshLock): Promise<void> {
