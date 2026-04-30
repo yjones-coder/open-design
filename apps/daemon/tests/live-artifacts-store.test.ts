@@ -24,6 +24,7 @@ import {
   markLiveArtifactRefreshCommitted,
   regenerateLiveArtifactPreview,
   releaseLiveArtifactRefreshLock,
+  recoverStaleLiveArtifactRefreshes,
   updateLiveArtifact,
   validateLiveArtifactStorageId,
 } from '../src/live-artifacts/store.js';
@@ -505,6 +506,105 @@ describe('live artifact store layout', () => {
 
     expect(secondLock.metadata.token).not.toBe(firstLock.metadata.token);
     await releaseLiveArtifactRefreshLock(secondLock);
+  });
+
+  it('recovers timed-out running refresh locks on startup without rewriting the last valid preview', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    const created = await createLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      input: validCreateInput(),
+      templateHtml: '<h1>{{data.title}}</h1>',
+    });
+    const previewBefore = await readFile(created.paths.generatedPreviewHtmlPath, 'utf8');
+
+    await writeFile(created.paths.artifactJsonPath, `${JSON.stringify({
+      ...created.artifact,
+      refreshStatus: 'running',
+      updatedAt: '2026-04-30T10:00:00.000Z',
+    }, null, 2)}\n`, 'utf8');
+    const lock = await acquireLiveArtifactRefreshLock({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+      now: new Date('2026-04-30T10:00:00.000Z'),
+    });
+    await appendLiveArtifactRefreshLogEntry({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+      refreshId: lock.metadata.refreshId,
+      sequence: 0,
+      step: 'refresh:start',
+      status: 'running',
+      startedAt: '2026-04-30T10:00:00.000Z',
+      now: new Date('2026-04-30T10:00:00.010Z'),
+    });
+
+    await expect(recoverStaleLiveArtifactRefreshes({
+      projectsRoot,
+      staleAfterMs: 120_000,
+      now: new Date('2026-04-30T10:03:00.000Z'),
+    })).resolves.toEqual([
+      { projectId: 'project-1', artifactId: created.artifact.id, refreshId: lock.metadata.refreshId, status: 'recovered' },
+    ]);
+
+    await expect(stat(lock.lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(created.paths.generatedPreviewHtmlPath, 'utf8')).resolves.toBe(previewBefore);
+    await expect(getLiveArtifact({ projectsRoot, projectId: 'project-1', artifactId: created.artifact.id })).resolves.toMatchObject({
+      artifact: { refreshStatus: 'failed', updatedAt: '2026-04-30T10:03:00.000Z' },
+    });
+    await expect(listLiveArtifactRefreshLogEntries({ projectsRoot, projectId: 'project-1', artifactId: created.artifact.id })).resolves.toMatchObject([
+      { refreshId: lock.metadata.refreshId, sequence: 0, status: 'running' },
+      {
+        refreshId: lock.metadata.refreshId,
+        sequence: 1,
+        step: 'refresh:crash_recovery',
+        status: 'failed',
+        durationMs: 180_000,
+        error: { code: 'REFRESH_CRASH_RECOVERY_TIMEOUT' },
+      },
+    ]);
+
+    const nextLock = await acquireLiveArtifactRefreshLock({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+    });
+    expect(nextLock.metadata.refreshId).toBe('refresh-000002');
+    await releaseLiveArtifactRefreshLock(nextLock);
+  });
+
+  it('leaves non-timed-out refresh locks in place during startup recovery', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    const created = await createLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      input: validCreateInput(),
+    });
+    const lock = await acquireLiveArtifactRefreshLock({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+      now: new Date('2026-04-30T10:00:00.000Z'),
+    });
+
+    await expect(recoverStaleLiveArtifactRefreshes({
+      projectsRoot,
+      staleAfterMs: 120_000,
+      now: new Date('2026-04-30T10:01:00.000Z'),
+    })).resolves.toEqual([
+      {
+        projectId: 'project-1',
+        artifactId: created.artifact.id,
+        refreshId: lock.metadata.refreshId,
+        status: 'skipped',
+        reason: 'lock has not timed out',
+      },
+    ]);
+
+    await expect(stat(lock.lockPath)).resolves.toMatchObject({});
+    await releaseLiveArtifactRefreshLock(lock);
   });
 
   it('assigns monotonic refresh ids and rejects stale refresh commits', async () => {

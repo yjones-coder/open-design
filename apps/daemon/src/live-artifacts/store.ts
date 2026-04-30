@@ -4,6 +4,7 @@ import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } fro
 import path from 'node:path';
 
 import { ensureProject, projectDir } from '../projects.js';
+import { DEFAULT_LIVE_ARTIFACT_TOTAL_TIMEOUT_MS } from './refresh.js';
 import { renderHtmlTemplateV1 } from './render.js';
 import type { BoundedJsonObject, LiveArtifact, LiveArtifactCreateInput, LiveArtifactProvenance, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshLogEntry, LiveArtifactRefreshSourceMetadata, LiveArtifactRefreshStepStatus, LiveArtifactUpdateInput, LiveArtifactValidationIssue } from './schema.js';
 import { validateBoundedJsonObject, validateLiveArtifactCreateInput, validateLiveArtifactRefreshLogEntry, validateLiveArtifactUpdateInput, validatePersistedLiveArtifact } from './schema.js';
@@ -153,6 +154,20 @@ export interface MarkLiveArtifactRefreshCommittedOptions {
   projectId: string;
   artifactId: string;
   refreshId: string;
+}
+
+export interface RecoverStaleLiveArtifactRefreshesOptions {
+  projectsRoot: string;
+  now?: Date;
+  staleAfterMs?: number;
+}
+
+export interface LiveArtifactRefreshRecoveryResult {
+  projectId: string;
+  artifactId: string;
+  refreshId: string;
+  status: 'recovered' | 'skipped';
+  reason?: string;
 }
 
 export interface LiveArtifactPreviewRenderRecord extends LiveArtifactStoreRecord {
@@ -478,6 +493,38 @@ async function writeLiveArtifactRefreshState(paths: LiveArtifactStorePaths, stat
   await writeFile(paths.refreshStatePath, stableJson(state), 'utf8');
 }
 
+function normalizeRefreshLockMetadata(value: unknown, lockPath: string): LiveArtifactRefreshLockMetadata {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw validationError(lockPath, 'live artifact refresh lock must be an object');
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.schemaVersion !== 1) throw validationError(`${lockPath}.schemaVersion`, 'live artifact refresh lock schemaVersion must be 1');
+  if (typeof raw.projectId !== 'string' || raw.projectId.length === 0) throw validationError(`${lockPath}.projectId`, 'live artifact refresh lock projectId must be a string');
+  if (typeof raw.artifactId !== 'string' || raw.artifactId.length === 0) throw validationError(`${lockPath}.artifactId`, 'live artifact refresh lock artifactId must be a string');
+  if (typeof raw.refreshId !== 'string' || raw.refreshId.length === 0) throw validationError(`${lockPath}.refreshId`, 'live artifact refresh lock refreshId must be a string');
+  if (!Number.isSafeInteger(raw.refreshOrdinal) || (raw.refreshOrdinal as number) < 1) throw validationError(`${lockPath}.refreshOrdinal`, 'live artifact refresh lock refreshOrdinal must be a positive safe integer');
+  if (typeof raw.acquiredAt !== 'string' || Number.isNaN(Date.parse(raw.acquiredAt))) throw validationError(`${lockPath}.acquiredAt`, 'live artifact refresh lock acquiredAt must be an ISO date string');
+  if (typeof raw.token !== 'string' || raw.token.length === 0) throw validationError(`${lockPath}.token`, 'live artifact refresh lock token must be a string');
+  return {
+    schemaVersion: 1,
+    projectId: raw.projectId,
+    artifactId: raw.artifactId,
+    refreshId: raw.refreshId,
+    refreshOrdinal: raw.refreshOrdinal as number,
+    acquiredAt: raw.acquiredAt,
+    token: raw.token,
+  };
+}
+
+async function readLiveArtifactRefreshLockMetadata(paths: LiveArtifactStorePaths): Promise<LiveArtifactRefreshLockMetadata> {
+  try {
+    return normalizeRefreshLockMetadata(JSON.parse(await readFile(paths.refreshLockPath, 'utf8')), LIVE_ARTIFACT_REFRESH_LOCK_FILE);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw validationError(LIVE_ARTIFACT_REFRESH_LOCK_FILE, 'live artifact refresh lock contains invalid JSON');
+    throw error;
+  }
+}
+
 async function readPersistedLiveArtifact(paths: LiveArtifactStorePaths): Promise<LiveArtifact> {
   let parsed: unknown;
   try {
@@ -491,6 +538,13 @@ async function readPersistedLiveArtifact(paths: LiveArtifactStorePaths): Promise
 
   const persisted = validatePersistedLiveArtifact(parsed);
   if (!persisted.ok) throw new LiveArtifactStoreValidationError(persisted.error, persisted.issues);
+  return persisted.value;
+}
+
+async function writePersistedLiveArtifact(paths: LiveArtifactStorePaths, artifact: LiveArtifact): Promise<LiveArtifact> {
+  const persisted = validatePersistedLiveArtifact(artifact);
+  if (!persisted.ok) throw new LiveArtifactStoreValidationError(persisted.error, persisted.issues);
+  await writeFile(paths.artifactJsonPath, stableJson(persisted.value), 'utf8');
   return persisted.value;
 }
 
@@ -852,6 +906,130 @@ export async function listLiveArtifactRefreshLogEntries(
     entries.push(result.value);
   }
   return entries;
+}
+
+function nextRefreshRecoverySequence(entries: LiveArtifactRefreshLogEntry[], refreshId: string): number {
+  let maxSequence = -1;
+  for (const entry of entries) {
+    if (entry.refreshId === refreshId) maxSequence = Math.max(maxSequence, entry.sequence);
+  }
+  return maxSequence + 1;
+}
+
+async function recoverLiveArtifactRefreshLock(
+  projectsRoot: string,
+  projectId: string,
+  artifactId: string,
+  now: Date,
+  staleAfterMs: number,
+): Promise<LiveArtifactRefreshRecoveryResult> {
+  const paths = liveArtifactStorePaths(projectsRoot, projectId, artifactId);
+  const lockMetadata = await readLiveArtifactRefreshLockMetadata(paths);
+
+  if (lockMetadata.projectId !== projectId || lockMetadata.artifactId !== artifactId) {
+    return { projectId, artifactId, refreshId: lockMetadata.refreshId, status: 'skipped', reason: 'lock scope mismatch' };
+  }
+
+  const acquiredAtMs = Date.parse(lockMetadata.acquiredAt);
+  const ageMs = now.getTime() - acquiredAtMs;
+  if (ageMs < staleAfterMs) {
+    return { projectId, artifactId, refreshId: lockMetadata.refreshId, status: 'skipped', reason: 'lock has not timed out' };
+  }
+
+  const artifact = await readPersistedLiveArtifact(paths);
+  assertArtifactMatchesStorage(artifact, projectId, artifactId);
+  const entries = await listLiveArtifactRefreshLogEntries({ projectsRoot, projectId, artifactId });
+  const finishedAt = now.toISOString();
+  await appendLiveArtifactRefreshLogEntry({
+    projectsRoot,
+    projectId,
+    artifactId,
+    refreshId: lockMetadata.refreshId,
+    sequence: nextRefreshRecoverySequence(entries, lockMetadata.refreshId),
+    step: 'refresh:crash_recovery',
+    status: 'failed',
+    startedAt: lockMetadata.acquiredAt,
+    finishedAt,
+    durationMs: Math.max(0, now.getTime() - acquiredAtMs),
+    error: {
+      code: 'REFRESH_CRASH_RECOVERY_TIMEOUT',
+      message: 'Refresh was still running when the daemon started and exceeded the total refresh timeout.',
+    },
+    metadata: { staleAfterMs },
+    now,
+  });
+
+  await writePersistedLiveArtifact(paths, {
+    ...artifact,
+    refreshStatus: 'failed',
+    updatedAt: finishedAt,
+  });
+  await rm(paths.refreshLockPath, { force: true });
+
+  return { projectId, artifactId, refreshId: lockMetadata.refreshId, status: 'recovered' };
+}
+
+export async function recoverStaleLiveArtifactRefreshes(
+  options: RecoverStaleLiveArtifactRefreshesOptions,
+): Promise<LiveArtifactRefreshRecoveryResult[]> {
+  const now = options.now ?? new Date();
+  const staleAfterMs = options.staleAfterMs ?? DEFAULT_LIVE_ARTIFACT_TOTAL_TIMEOUT_MS;
+  if (!Number.isSafeInteger(staleAfterMs) || staleAfterMs < 1) {
+    throw new RangeError('staleAfterMs must be a positive safe integer');
+  }
+
+  let projectEntries: Dirent[];
+  try {
+    projectEntries = await readdir(options.projectsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const results: LiveArtifactRefreshRecoveryResult[] = [];
+  for (const projectEntry of projectEntries) {
+    if (!projectEntry.isDirectory()) continue;
+    const projectId = projectEntry.name;
+    let artifactEntries: Dirent[];
+    try {
+      artifactEntries = await readdir(liveArtifactsRootDir(options.projectsRoot, projectId), { withFileTypes: true });
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') continue;
+      results.push({ projectId, artifactId: '', refreshId: '', status: 'skipped', reason: error instanceof Error ? error.message : String(error) });
+      continue;
+    }
+
+    for (const artifactEntry of artifactEntries) {
+      if (!artifactEntry.isDirectory() || artifactEntry.name.startsWith('tmp-')) continue;
+      let artifactId: string;
+      try {
+        artifactId = validateLiveArtifactStorageId(artifactEntry.name);
+      } catch {
+        continue;
+      }
+      const paths = liveArtifactStorePaths(options.projectsRoot, projectId, artifactId);
+      try {
+        await stat(paths.refreshLockPath);
+      } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') continue;
+        throw error;
+      }
+
+      try {
+        results.push(await recoverLiveArtifactRefreshLock(options.projectsRoot, projectId, artifactId, now, staleAfterMs));
+      } catch (error) {
+        results.push({
+          projectId,
+          artifactId,
+          refreshId: '',
+          status: 'skipped',
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  return results;
 }
 
 export async function regenerateLiveArtifactPreview(options: RegenerateLiveArtifactPreviewOptions): Promise<LiveArtifactPreviewRenderRecord> {

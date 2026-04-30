@@ -64,6 +64,7 @@ import {
   getLiveArtifact,
   LiveArtifactStoreValidationError,
   listLiveArtifacts,
+  recoverStaleLiveArtifactRefreshes,
   updateLiveArtifact,
 } from './live-artifacts/store.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from './tool-tokens.js';
@@ -491,6 +492,10 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   // build advertises --include-partial-messages) so the first /api/chat
   // hits a populated cache even if /api/agents hasn't been called yet.
   void detectAgents().catch(() => {});
+
+  await recoverStaleLiveArtifactRefreshes({ projectsRoot: PROJECTS_DIR }).catch((error) => {
+    console.warn('[od] Failed to recover stale live artifact refreshes:', error);
+  });
 
   if (fs.existsSync(STATIC_DIR)) {
     app.use(express.static(STATIC_DIR));
