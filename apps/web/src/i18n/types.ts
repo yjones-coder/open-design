@@ -427,7 +427,6 @@ export interface Dict {
   'fileViewer.deployingToVercel': string;
   'fileViewer.preparingPublicLink': string;
   'fileViewer.copyDeployLink': string;
-  'fileViewer.copyLinkAnyway': string;
   'fileViewer.deployModalTitle': string;
   'fileViewer.deployModalSubtitle': string;
   'fileViewer.vercelToken': string;

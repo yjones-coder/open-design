@@ -579,9 +579,7 @@ function HtmlViewer({
   const activeDeploymentNeedsRetry = activeDeploymentDelayed || activeDeploymentProtected;
   const copyDeployLabel = copiedDeployLink
     ? t('fileViewer.copied')
-    : activeDeploymentNeedsRetry
-      ? t('fileViewer.copyLinkAnyway')
-      : t('fileViewer.copyDeployLink');
+    : t('fileViewer.copyDeployLink');
 
   return (
     <div className="viewer html-viewer">

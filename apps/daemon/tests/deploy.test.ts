@@ -11,7 +11,9 @@ import {
   deploymentUrlCandidates,
   extractCssReferences,
   extractHtmlReferences,
+  injectDeployHookScript,
   isVercelProtectedResponse,
+  normalizeDeployHookScriptUrl,
   resolveReferencedPath,
   rewriteEntryHtmlReferences,
   waitForReachableDeploymentUrl,
@@ -33,6 +35,20 @@ describe('deploy file set', () => {
     const files = await buildDeployFileSet(projectsRoot, projectId, 'page.html');
 
     expect(files.map((f) => f.file)).toEqual(['index.html']);
+  });
+
+  it('injects a closeable deploy hook script from cdn when configured', async () => {
+    const { projectsRoot, projectId, dir } = await setupProject();
+    await writeFile(path.join(dir, 'page.html'), '<!doctype html><body><h1>Hello</h1></body>');
+
+    const files = await buildDeployFileSet(projectsRoot, projectId, 'page.html', {
+      hookScriptUrl: 'https://cdn.example.com/open-design-hook.js',
+    });
+    const html = files.find((f) => f.file === 'index.html')?.data.toString('utf8') ?? '';
+
+    expect(html).toContain(
+      '<script src="https://cdn.example.com/open-design-hook.js" defer data-open-design-deploy-hook="true" data-closeable="true"></script></body>',
+    );
   });
 
   it('includes referenced html and css assets', async () => {
@@ -145,6 +161,13 @@ describe('deploy file set', () => {
         'sub',
       ),
     ).toContain('src="sub/asset.png"');
+  });
+
+  it('ignores invalid deploy hook script urls', () => {
+    expect(injectDeployHookScript('<body></body>', 'javascript:alert(1)')).toBe('<body></body>');
+    expect(normalizeDeployHookScriptUrl('https://cdn.example.com/hook.js')).toBe(
+      'https://cdn.example.com/hook.js',
+    );
   });
 });
 

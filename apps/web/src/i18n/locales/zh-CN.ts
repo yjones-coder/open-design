@@ -409,7 +409,6 @@ export const zhCN: Dict = {
   'fileViewer.deployingToVercel': '正在部署到 Vercel…',
   'fileViewer.preparingPublicLink': '正在准备公开链接…',
   'fileViewer.copyDeployLink': '复制链接',
-  'fileViewer.copyLinkAnyway': '仍然复制链接',
   'fileViewer.deployModalTitle': '部署到 Vercel',
   'fileViewer.deployModalSubtitle': '使用你自己的 Vercel 账号部署此 HTML 作品预览。',
   'fileViewer.vercelToken': 'Vercel token',

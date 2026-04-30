@@ -420,7 +420,6 @@ export const ptBR: Dict = {
   'fileViewer.deployingToVercel': 'Deploying to Vercel…',
   'fileViewer.preparingPublicLink': 'Preparing public link…',
   'fileViewer.copyDeployLink': 'Copy link',
-  'fileViewer.copyLinkAnyway': 'Copy link anyway',
   'fileViewer.deployModalTitle': 'Deploy to Vercel',
   'fileViewer.deployModalSubtitle':
     'Deploy this HTML artifact as a Vercel Preview using your own account.',

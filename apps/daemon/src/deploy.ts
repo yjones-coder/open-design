@@ -76,7 +76,7 @@ export function publicDeployConfig(config) {
   };
 }
 
-export async function buildDeployFileSet(projectsRoot, projectId, entryName) {
+export async function buildDeployFileSet(projectsRoot, projectId, entryName, options = {}) {
   const entryPath = validateProjectPath(entryName);
   if (!/\.html?$/i.test(entryPath)) {
     throw new DeployError('Only HTML files can be deployed.', 400);
@@ -85,7 +85,10 @@ export async function buildDeployFileSet(projectsRoot, projectId, entryName) {
   const entry = await readProjectFile(projectsRoot, projectId, entryPath);
   const html = entry.buffer.toString('utf8');
   const entryBase = path.posix.dirname(entryPath);
-  const deployHtml = rewriteEntryHtmlReferences(html, entryBase);
+  const deployHtml = injectDeployHookScript(
+    rewriteEntryHtmlReferences(html, entryBase),
+    options.hookScriptUrl ?? process.env.OD_DEPLOY_HOOK_SCRIPT_URL,
+  );
   const files = new Map();
   files.set('index.html', {
     file: 'index.html',
@@ -254,6 +257,40 @@ export function rewriteEntryHtmlReferences(html, baseDir) {
     .replace(/\bsrcset\s*=\s*(['"])(.*?)\1/gi, (_match, quote, raw) => {
       return `srcset=${quote}${rewriteSrcset(raw, baseDir)}${quote}`;
     });
+}
+
+export function injectDeployHookScript(html, scriptUrl) {
+  const normalized = normalizeDeployHookScriptUrl(scriptUrl);
+  if (!normalized) return html;
+
+  const tag =
+    `<script src="${escapeHtmlAttribute(normalized)}" defer ` +
+    'data-open-design-deploy-hook="true" data-closeable="true"></script>';
+  if (/<\/body\s*>/i.test(html)) {
+    return html.replace(/<\/body\s*>/i, `${tag}</body>`);
+  }
+  return `${html}${tag}`;
+}
+
+export function normalizeDeployHookScriptUrl(raw) {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function rewriteSrcset(raw, baseDir) {
