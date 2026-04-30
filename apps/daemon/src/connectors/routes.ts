@@ -14,6 +14,7 @@ type ConnectorApiErrorCode =
   | 'CONNECTOR_DISABLED'
   | 'CONNECTOR_TOOL_NOT_FOUND'
   | 'CONNECTOR_SAFETY_DENIED'
+  | 'CONNECTOR_INPUT_SCHEMA_MISMATCH'
   | 'CONNECTOR_EXECUTION_FAILED';
 
 export type ConnectorApiErrorSender = (

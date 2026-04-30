@@ -13,6 +13,7 @@ import {
   withLiveArtifactRefreshRun,
   withLiveArtifactRefreshSourceTimeout,
 } from './refresh.js';
+import { connectorService } from '../connectors/service.js';
 import type { BoundedJsonObject, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshSourceMetadata, LiveArtifactTile, LiveArtifactTileSource } from './schema.js';
 
 export interface RefreshLiveArtifactOptions {
@@ -117,13 +118,35 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
             const tileStartedAt = nowDate();
             await appendLog({ step, status: 'running', startedAt: tileStartedAt, source: sourceMetadata });
             try {
-              if (source.type !== 'daemon_tool') {
-                throw new Error(`refresh source ${source.type} is not supported yet`);
-              }
               const output = await withLiveArtifactRefreshSourceTimeout(
                 run,
                 { step, source: sourceMetadata, sourceTimeoutMs: timeouts.sourceTimeoutMs },
-                (signal) => executeLocalDaemonRefreshSource({ projectsRoot: options.projectsRoot, projectId: options.projectId, source, signal }),
+                async (signal) => {
+                  if (source.type === 'connector_tool') {
+                    const connector = source.connector;
+                    if (connector === undefined) throw new Error('connector refresh source requires connector metadata');
+                    if (connector.toolName !== source.toolName) throw new Error('connector refresh source tool metadata drifted');
+                    if (connector.approvalPolicy !== 'manual_refresh_granted_for_read_only') throw new Error('connector refresh source is no longer refresh-eligible');
+                    const result = await connectorService.execute(
+                      {
+                        connectorId: connector.connectorId,
+                        toolName: connector.toolName,
+                        input: source.input,
+                        ...(connector.accountLabel === undefined ? {} : { expectedAccountLabel: connector.accountLabel }),
+                        expectedApprovalPolicy: 'auto',
+                      },
+                      { projectsRoot: options.projectsRoot, projectId: options.projectId, purpose: 'artifact_refresh', signal },
+                    );
+                    if (result.output === null || typeof result.output !== 'object' || Array.isArray(result.output)) {
+                      throw new Error('connector refresh output must be a JSON object');
+                    }
+                    return result.output;
+                  }
+                  if (source.type !== 'daemon_tool') {
+                    throw new Error(`refresh source ${source.type} is not supported yet`);
+                  }
+                  return executeLocalDaemonRefreshSource({ projectsRoot: options.projectsRoot, projectId: options.projectId, source, signal });
+                },
               );
               const tileFinishedAt = nowDate();
               await appendLog({ step, status: 'succeeded', startedAt: tileStartedAt, finishedAt: tileFinishedAt, source: sourceMetadata });

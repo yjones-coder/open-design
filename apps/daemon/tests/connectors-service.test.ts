@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ConnectorService,
+  ConnectorServiceError,
   ConnectorStatusService,
 } from '../src/connectors/service.js';
 import {
@@ -20,6 +21,23 @@ function externalConnector(overrides: Partial<ConnectorCatalogDefinition> = {}):
     allowedToolNames: [],
     ...overrides,
   };
+}
+
+class TestConnectorService extends ConnectorService {
+  constructor(
+    private readonly definition: ConnectorCatalogDefinition,
+    statusService: ConnectorStatusService,
+  ) {
+    super(statusService);
+  }
+
+  override listDefinitions(): ConnectorCatalogDefinition[] {
+    return [this.definition];
+  }
+
+  override getDefinition(connectorId: string): ConnectorCatalogDefinition | undefined {
+    return connectorId === this.definition.id ? this.definition : undefined;
+  }
 }
 
 describe('connector status service', () => {
@@ -95,5 +113,86 @@ describe('connector read-only safety classification', () => {
 
     expect(safety).toMatchObject({ sideEffect: 'write', approval: 'confirm' });
     expect(isRefreshEligibleConnectorToolSafety(safety)).toBe(false);
+  });
+});
+
+describe('connector execution policy', () => {
+  it('rejects connector inputs that no longer match the current tool schema', async () => {
+    const service = new ConnectorService();
+
+    await expect(service.execute(
+      { connectorId: 'project_files', toolName: 'project_files.search', input: { unexpected: true } },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'agent_preview' },
+    )).rejects.toMatchObject({ code: 'CONNECTOR_INPUT_SCHEMA_MISMATCH' });
+  });
+
+  it('fails closed when runtime scope classification is no longer read-only', async () => {
+    const definition = externalConnector({
+      tools: [{
+        name: 'docs.search',
+        title: 'Search docs',
+        requiredScopes: ['docs:write'],
+        safety: { sideEffect: 'read', approval: 'auto', reason: 'stale catalog classification' },
+        refreshEligible: true,
+      }],
+      allowedToolNames: ['docs.search'],
+      minimumApproval: 'auto',
+    });
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'docs@example.com');
+    const service = new TestConnectorService(definition, statusService);
+
+    await expect(service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.search', input: {}, expectedApprovalPolicy: 'auto' },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
+    )).rejects.toMatchObject({ code: 'CONNECTOR_SAFETY_DENIED' });
+  });
+
+  it('rejects connector-backed refresh when the connected account label drifted', async () => {
+    const definition = externalConnector({
+      tools: [{
+        name: 'docs.search',
+        title: 'Search docs',
+        requiredScopes: ['docs:read'],
+        safety: { sideEffect: 'read', approval: 'auto', reason: 'read-only docs search' },
+        refreshEligible: true,
+      }],
+      allowedToolNames: ['docs.search'],
+      minimumApproval: 'auto',
+    });
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'new-account@example.com');
+    const service = new TestConnectorService(definition, statusService);
+
+    await expect(service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.search', input: {}, expectedAccountLabel: 'old-account@example.com', expectedApprovalPolicy: 'auto' },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
+    )).rejects.toMatchObject({ code: 'CONNECTOR_NOT_CONNECTED' });
+  });
+
+  it('never allows write, destructive, or unknown tools to run as artifact refreshes', async () => {
+    const definition = externalConnector({
+      tools: [{
+        name: 'docs.update_page',
+        title: 'Update page',
+        requiredScopes: ['docs:write'],
+        safety: { sideEffect: 'write', approval: 'confirm', reason: 'write-capable docs update' },
+        refreshEligible: false,
+      }],
+      allowedToolNames: ['docs.update_page'],
+      minimumApproval: 'confirm',
+    });
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'docs@example.com');
+    const service = new TestConnectorService(definition, statusService);
+
+    await expect(service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.update_page', input: {} },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
+    )).rejects.toBeInstanceOf(ConnectorServiceError);
+    await expect(service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.update_page', input: {} },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
+    )).rejects.toMatchObject({ code: 'CONNECTOR_SAFETY_DENIED' });
   });
 });
