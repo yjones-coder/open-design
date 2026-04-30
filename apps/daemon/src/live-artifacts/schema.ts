@@ -1,30 +1,30 @@
 // Runtime validation lives in the daemon. These mirror the shared DTOs in
 // packages/contracts/src/api/live-artifacts.ts without importing daemon internals
 // into contracts or forcing the daemon to compile contract source files.
-type BoundedJsonValue = null | boolean | number | string | BoundedJsonValue[] | { [key: string]: BoundedJsonValue };
+export type BoundedJsonValue = null | boolean | number | string | BoundedJsonValue[] | { [key: string]: BoundedJsonValue };
 
-interface BoundedJsonObject {
+export interface BoundedJsonObject {
   [key: string]: BoundedJsonValue;
 }
 
-type LiveArtifactStatus = 'active' | 'archived' | 'error';
-type LiveArtifactRefreshStatus = 'never' | 'idle' | 'running' | 'succeeded' | 'failed';
-type LiveArtifactPreviewType = 'html' | 'jsx' | 'markdown';
-type LiveArtifactTileKind = 'metric' | 'table' | 'chart' | 'markdown' | 'link_card' | 'json' | 'html_document';
-type LiveArtifactTileRefreshStatus = 'not_refreshable' | 'idle' | 'running' | 'succeeded' | 'failed';
-type LiveArtifactSourceType = 'local_file' | 'daemon_tool' | 'connector_tool';
-type LiveArtifactConnectorApprovalPolicy = 'read_only_auto' | 'manual_refresh_granted_for_read_only';
-type LiveArtifactRefreshPermission = 'none' | 'manual_refresh_granted_for_read_only';
-type LiveArtifactOutputTransform = 'identity' | 'compact_table' | 'metric_summary';
-type LiveArtifactProvenanceGenerator = 'agent' | 'refresh_runner';
-type LiveArtifactProvenanceSourceType = 'connector' | 'local_file' | 'user_input' | 'derived';
+export type LiveArtifactStatus = 'active' | 'archived' | 'error';
+export type LiveArtifactRefreshStatus = 'never' | 'idle' | 'running' | 'succeeded' | 'failed';
+export type LiveArtifactPreviewType = 'html' | 'jsx' | 'markdown';
+export type LiveArtifactTileKind = 'metric' | 'table' | 'chart' | 'markdown' | 'link_card' | 'json' | 'html_document';
+export type LiveArtifactTileRefreshStatus = 'not_refreshable' | 'idle' | 'running' | 'succeeded' | 'failed';
+export type LiveArtifactSourceType = 'local_file' | 'daemon_tool' | 'connector_tool';
+export type LiveArtifactConnectorApprovalPolicy = 'read_only_auto' | 'manual_refresh_granted_for_read_only';
+export type LiveArtifactRefreshPermission = 'none' | 'manual_refresh_granted_for_read_only';
+export type LiveArtifactOutputTransform = 'identity' | 'compact_table' | 'metric_summary';
+export type LiveArtifactProvenanceGenerator = 'agent' | 'refresh_runner';
+export type LiveArtifactProvenanceSourceType = 'connector' | 'local_file' | 'user_input' | 'derived';
 
-interface LiveArtifactPreview {
+export interface LiveArtifactPreview {
   type: LiveArtifactPreviewType;
   entry: string;
 }
 
-interface LiveArtifactDocument {
+export interface LiveArtifactDocument {
   format: 'html_template_v1';
   templatePath: 'template.html';
   generatedPreviewPath: 'index.html';
@@ -34,7 +34,7 @@ interface LiveArtifactDocument {
   sourceJson?: LiveArtifactTileSource;
 }
 
-interface LiveArtifactTile {
+export interface LiveArtifactTile {
   id: string;
   kind: LiveArtifactTileKind;
   title: string;
@@ -45,7 +45,7 @@ interface LiveArtifactTile {
   lastError?: string;
 }
 
-type LiveArtifactRenderJson =
+export type LiveArtifactRenderJson =
   | { type: 'metric'; label: string; value: string | number; unit?: string; delta?: string; tone?: 'neutral' | 'good' | 'warning' | 'bad' }
   | { type: 'table'; columns: Array<{ key: string; label: string }>; rows: BoundedJsonObject[]; maxRows?: number }
   | { type: 'chart'; chartType: 'bar' | 'line' | 'area' | 'pie'; xKey: string; yKeys: string[]; rows: BoundedJsonObject[] }
@@ -54,7 +54,7 @@ type LiveArtifactRenderJson =
   | { type: 'json'; value: BoundedJsonValue }
   | { type: 'html_document'; documentPath: 'template.html' | 'index.html'; dataPath: 'data.json' };
 
-interface LiveArtifactTileSource {
+export interface LiveArtifactTileSource {
   type: LiveArtifactSourceType;
   toolName?: string;
   input: BoundedJsonObject;
@@ -71,20 +71,20 @@ interface LiveArtifactTileSource {
   refreshPermission: LiveArtifactRefreshPermission;
 }
 
-interface LiveArtifactProvenanceSource {
+export interface LiveArtifactProvenanceSource {
   label: string;
   type: LiveArtifactProvenanceSourceType;
   ref?: string;
 }
 
-interface LiveArtifactProvenance {
+export interface LiveArtifactProvenance {
   generatedAt: string;
   generatedBy: LiveArtifactProvenanceGenerator;
   notes?: string;
   sources: LiveArtifactProvenanceSource[];
 }
 
-interface LiveArtifact {
+export interface LiveArtifact {
   schemaVersion: 1;
   id: string;
   projectId: string;
