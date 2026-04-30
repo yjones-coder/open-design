@@ -16,6 +16,9 @@ import type { ProjectFile } from '../types';
 import { Icon } from './Icon';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
+type SlideState = { active: number; count: number };
+
+const htmlPreviewSlideState = new Map<string, SlideState>();
 
 interface Props {
   projectId: string;
@@ -213,10 +216,13 @@ function HtmlViewer({
   const [templateNote, setTemplateNote] = useState<string | null>(null);
   const [inTabPresent, setInTabPresent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const previewStateKey = `${projectId}:${file.name}`;
   // Slide deck nav state: the iframe posts the active index + total count
   // back to the host every time a slide settles. Host renders prev/next
   // controls in the toolbar and reflects the count beside them.
-  const [slideState, setSlideState] = useState<{ active: number; count: number } | null>(null);
+  const [slideState, setSlideState] = useState<SlideState | null>(
+    () => htmlPreviewSlideState.get(previewStateKey) ?? null,
+  );
   const previewBodyRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const shareRef = useRef<HTMLDivElement | null>(null);
@@ -250,8 +256,9 @@ function HtmlViewer({
     () => (source ? buildSrcdoc(source, {
       deck: effectiveDeck,
       baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
+      initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
     }) : ''),
-    [source, effectiveDeck, projectId, file.name],
+    [source, effectiveDeck, projectId, file.name, previewStateKey],
   );
 
   useEffect(() => {
@@ -259,17 +266,21 @@ function HtmlViewer({
       setSlideState(null);
       return;
     }
+    setSlideState(htmlPreviewSlideState.get(previewStateKey) ?? null);
     function onMessage(ev: MessageEvent) {
+      if (ev.source !== iframeRef.current?.contentWindow) return;
       const data = ev?.data as
         | { type?: string; active?: number; count?: number }
         | null;
       if (!data || data.type !== 'od:slide-state') return;
       if (typeof data.active !== 'number' || typeof data.count !== 'number') return;
-      setSlideState({ active: data.active, count: data.count });
+      const next = { active: data.active, count: data.count };
+      htmlPreviewSlideState.set(previewStateKey, next);
+      setSlideState(next);
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [effectiveDeck]);
+  }, [effectiveDeck, previewStateKey]);
 
   function postSlide(action: 'next' | 'prev' | 'first' | 'last') {
     const win = iframeRef.current?.contentWindow;

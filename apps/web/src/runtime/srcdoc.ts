@@ -16,7 +16,7 @@
  */
 export function buildSrcdoc(
   html: string,
-  options: { deck?: boolean; baseHref?: string } = {}
+  options: { deck?: boolean; baseHref?: string; initialSlideIndex?: number } = {}
 ): string {
   const head = html.trimStart().slice(0, 64).toLowerCase();
   const isFullDoc = head.startsWith("<!doctype") || head.startsWith("<html");
@@ -33,7 +33,7 @@ export function buildSrcdoc(
   const withBase = options.baseHref ? injectBaseHref(wrapped, options.baseHref) : wrapped;
   const withShim = injectSandboxShim(withBase);
   if (!options.deck) return withShim;
-  return injectDeckBridge(withShim);
+  return injectDeckBridge(withShim, options.initialSlideIndex);
 }
 
 function injectBaseHref(doc: string, baseHref: string): string {
@@ -119,7 +119,10 @@ function injectSandboxShim(doc: string): string {
 // the scaled canvas ends up offset toward the bottom-right of any
 // preview that's smaller than 1920x1080 — exactly what users see in the
 // sandbox iframe. `place-content: center` centers the track itself.
-function injectDeckBridge(doc: string): string {
+function injectDeckBridge(doc: string, initialSlideIndex = 0): string {
+  const safeInitialSlideIndex = Number.isFinite(initialSlideIndex)
+    ? Math.max(0, Math.floor(initialSlideIndex))
+    : 0;
   const styleFix = `<style data-od-deck-fix>
 .stage, .deck-stage, .deck-shell { place-content: center !important; }
 </style>`;
@@ -130,6 +133,8 @@ function injectDeckBridge(doc: string): string {
     : styleFix + doc;
   doc = docWithStyle;
   const script = `<script>(function(){
+  var initialSlideIndex = ${safeInitialSlideIndex};
+  var didRestoreInitialSlide = initialSlideIndex <= 0;
   function slides(){ return document.querySelectorAll('.slide'); }
   function scroller(){
     if (document.body && document.body.scrollWidth > document.body.clientWidth + 1) return document.body;
@@ -223,6 +228,13 @@ function injectDeckBridge(doc: string): string {
       }, '*');
     } catch (e) {}
   }
+  function restoreInitialSlide(){
+    if (didRestoreInitialSlide) { report(); return; }
+    var list = slides();
+    if (!list.length) return;
+    didRestoreInitialSlide = true;
+    gotoIndex(initialSlideIndex);
+  }
   window.addEventListener('message', function(ev){
     var data = ev && ev.data;
     if (!data || data.type !== 'od:slide') return;
@@ -230,7 +242,7 @@ function injectDeckBridge(doc: string): string {
     else go(data.action);
   });
   // Report once on load and on every scroll-end so the host stays in sync.
-  window.addEventListener('load', function(){ setTimeout(report, 200); });
+  window.addEventListener('load', function(){ setTimeout(restoreInitialSlide, 200); });
   document.addEventListener('scroll', function(){
     clearTimeout(window.__odReportT);
     window.__odReportT = setTimeout(report, 120);
@@ -284,7 +296,7 @@ function injectDeckBridge(doc: string): string {
         mo.observe(list[i], { attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'] });
       }
     } catch (e) {}
-    setTimeout(report, 100);
+    setTimeout(restoreInitialSlide, 100);
   }
   observeSlides();
 })();</script>`;
