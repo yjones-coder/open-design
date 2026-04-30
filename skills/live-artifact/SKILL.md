@@ -5,8 +5,10 @@ description: |
   Trigger when the user asks for live dashboards, refreshable reports, synced views, or reusable data-backed artifacts.
 triggers:
   - "live artifact"
+  - "live dashboard"
   - "refreshable dashboard"
   - "live report"
+  - "refreshable report"
   - "synced view"
   - "可刷新"
   - "实时看板"
