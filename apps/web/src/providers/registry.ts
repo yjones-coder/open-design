@@ -3,6 +3,8 @@ import type {
   ChatAttachment,
   DesignSystemDetail,
   DesignSystemSummary,
+  LiveArtifact,
+  LiveArtifactSummary,
   ProjectFile,
   SkillDetail,
   SkillSummary,
@@ -92,6 +94,45 @@ export async function fetchProjectFiles(projectId: string): Promise<ProjectFile[
   } catch {
     return [];
   }
+}
+
+export async function fetchLiveArtifacts(projectId: string): Promise<LiveArtifactSummary[]> {
+  try {
+    const resp = await fetch(`/api/live-artifacts?projectId=${encodeURIComponent(projectId)}`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as {
+      artifacts?: LiveArtifactSummary[];
+      liveArtifacts?: LiveArtifactSummary[];
+    };
+    return json.liveArtifacts ?? json.artifacts ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchLiveArtifact(
+  projectId: string,
+  artifactId: string,
+): Promise<LiveArtifact | null> {
+  try {
+    const resp = await fetch(liveArtifactDetailUrl(projectId, artifactId));
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as {
+      artifact?: LiveArtifact;
+      liveArtifact?: LiveArtifact;
+    };
+    return json.liveArtifact ?? json.artifact ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function liveArtifactDetailUrl(projectId: string, artifactId: string): string {
+  return `/api/live-artifacts/${encodeURIComponent(artifactId)}?projectId=${encodeURIComponent(projectId)}`;
+}
+
+export function liveArtifactPreviewUrl(projectId: string, artifactId: string): string {
+  return `/api/live-artifacts/${encodeURIComponent(artifactId)}/preview?projectId=${encodeURIComponent(projectId)}`;
 }
 
 export function projectFileUrl(projectId: string, name: string): string {
