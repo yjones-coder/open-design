@@ -3,7 +3,7 @@ import type { ConnectorDetail } from './api/connectors';
 import type { ProjectFile } from './api/files';
 import type { LiveArtifact, LiveArtifactCreateInput, LiveArtifactUpdateInput } from './api/live-artifacts';
 import type { HealthResponse } from './api/registry';
-import type { ApiErrorResponse } from './errors';
+import type { ApiErrorResponse, ApiValidationErrorDetails } from './errors';
 import type { ChatSseEvent } from './sse/chat';
 import type { ProxySseEvent } from './sse/proxy';
 
@@ -44,6 +44,26 @@ export const exampleApiErrorResponse: ApiErrorResponse = {
   error: {
     code: 'BAD_REQUEST',
     message: 'Missing message',
+    retryable: false,
+  },
+};
+
+const exampleLiveArtifactValidationDetails: ApiValidationErrorDetails = {
+  kind: 'validation',
+  issues: [
+    {
+      path: 'document.templatePath',
+      message: 'Live artifact templates must be stored at template.html.',
+      code: 'INVALID_TEMPLATE_PATH',
+    },
+  ],
+};
+
+export const exampleLiveArtifactValidationErrorResponse: ApiErrorResponse = {
+  error: {
+    code: 'LIVE_ARTIFACT_INVALID',
+    message: 'Live artifact validation failed',
+    details: exampleLiveArtifactValidationDetails,
     retryable: false,
   },
 };
