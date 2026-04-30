@@ -485,13 +485,29 @@ type LiveArtifactProvenance = {
 
 Port Monet's strict validation posture:
 
-- Limit object depth, array length, string length, and total serialized size.
+- Apply the shared bounded JSON constraints in `packages/contracts` to every persisted or agent-supplied `BoundedJsonValue` / `BoundedJsonObject`.
 - Allow only `http:` and `https:` URLs in render metadata.
 - Reject keys such as `raw`, `rawResponse`, `payload`, `body`, `headers`, `cookie`, `authorization`, `token`, `secret`, `credential`, `password`.
 - Redact suspicious source inputs before persistence.
 - Reject source inputs that still contain credential-like values after redaction.
 - Disallow executable script in persisted render JSON.
 - HTML preview files must be generated from the document contract; refresh updates `data.json` / render JSON, not arbitrary script.
+
+#### 7.3.1 Shared bounded JSON constraints
+
+The shared live-artifact JSON envelope is intentionally small enough to validate synchronously, store in project files, display in the UI, and include in agent-facing error details without leaking raw provider payloads.
+
+Define and export these constants from `packages/contracts` as `LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS`:
+
+| Constraint | Value | Applies to |
+| --- | ---: | --- |
+| Maximum object/array depth | `8` | Any `BoundedJsonValue`; count the root object or array as depth `1`. |
+| Maximum object keys | `100` | Any single object. |
+| Maximum array length | `500` | Any single array. |
+| Maximum string length | `16 KiB` | Any single string value, measured in UTF-16 code units before persistence. |
+| Maximum serialized payload size | `256 KiB` | Any complete bounded JSON document, measured as UTF-8 bytes of canonical `JSON.stringify` output. |
+
+Validation must fail closed when a value exceeds any limit. Persisted files and create/update inputs must use the same limits so valid agent input remains valid after storage round-trips. Future connector-specific limits may be stricter, but must not exceed this shared envelope for values persisted into live artifact files.
 
 ### 7.4 HTML document model
 
