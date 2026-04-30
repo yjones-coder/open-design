@@ -14,7 +14,7 @@
 |---|---|---|---|
 | 让 OD 渲染一种新的 artifact（一份发票、一个 iOS 设置页、一张 one-pager……） | 一个 **Skill** | [`skills/<your-skill>/`](skills/) | 一个文件夹，约 2 个文件 |
 | 让 OD 说一种新品牌的视觉语言 | 一套 **Design System** | [`design-systems/<brand>/DESIGN.md`](design-systems/) | 一个 Markdown 文件 |
-| 接入一个新的 coding-agent CLI | 一个 **Agent adapter** | [`apps/daemon/agents.js`](apps/daemon/agents.js) | 一个数组里 ~10 行 |
+| 接入一个新的 coding-agent CLI | 一个 **Agent adapter** | [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts) | 一个数组里 ~10 行 |
 | 加功能、修 bug、从 [`open-codesign`][ocod] 移植一个 UX 模式 | 代码 | `apps/web/src/`、`apps/daemon/` | 普通 PR |
 | 改文档、补中文翻译、修错别字 | 文档 | `README.md`、`README.zh-CN.md`、`docs/`、`QUICKSTART.md` | 一个 PR |
 
@@ -169,7 +169,7 @@ design-systems/your-brand/
 
 ## 接入一个新的 coding-agent CLI
 
-接入一个新 agent（比如某个新 shop 的 `foo-coder` CLI）就是在 [`apps/daemon/agents.js`](apps/daemon/agents.js) 里加一项：
+接入一个新 agent（比如某个新 shop 的 `foo-coder` CLI）就是在 [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts) 里加一项：
 
 ```javascript
 {
@@ -182,7 +182,7 @@ design-systems/your-brand/
 }
 ```
 
-完事 —— daemon 会在 `PATH` 上检测到它、picker 显示出来、对话路径就通了。如果这个 CLI 吐 **类型化事件**（像 Claude Code 的 `--output-format stream-json`），在 [`apps/daemon/claude-stream.js`](apps/daemon/claude-stream.js) 里写一个 parser，并把 `streamFormat` 设成 `'claude-stream-json'`。
+完事 —— daemon 会在 `PATH` 上检测到它、picker 显示出来、对话路径就通了。如果这个 CLI 吐 **类型化事件**（像 Claude Code 的 `--output-format stream-json`），在 [`apps/daemon/src/claude-stream.ts`](apps/daemon/src/claude-stream.ts) 里写一个 parser，并把 `streamFormat` 设成 `'claude-stream-json'`。
 
 合并硬线：
 

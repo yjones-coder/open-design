@@ -14,7 +14,7 @@ This guide tells you exactly where to look for each type of contribution and wha
 |---|---|---|---|
 | Make OD render a new kind of artifact (an invoice, an iOS Settings screen, a one-pager…) | a **Skill** | [`skills/<your-skill>/`](skills/) | one folder, ~2 files |
 | Make OD speak a new brand's visual language | a **Design System** | [`design-systems/<brand>/DESIGN.md`](design-systems/) | one Markdown file |
-| Hook up a new coding-agent CLI | an **Agent adapter** | [`apps/daemon/agents.js`](apps/daemon/agents.js) | ~10 lines in one array |
+| Hook up a new coding-agent CLI | an **Agent adapter** | [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts) | ~10 lines in one array |
 | Add a feature, fix a bug, lift a UX pattern from [`open-codesign`][ocod] | code | `apps/web/src/`, `apps/daemon/` | normal PR |
 | Improve docs, port a section to 中文, fix typos | docs | `README.md`, `README.zh-CN.md`, `docs/`, `QUICKSTART.md` | one PR |
 
@@ -170,7 +170,7 @@ The 69 product systems we ship are imported from [`VoltAgent/awesome-design-md`]
 
 ## Adding a new coding-agent CLI
 
-Hooking up a new agent (e.g. some new shop's `foo-coder` CLI) is one entry in [`apps/daemon/agents.js`](apps/daemon/agents.js):
+Hooking up a new agent (e.g. some new shop's `foo-coder` CLI) is one entry in [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts):
 
 ```javascript
 {
@@ -183,7 +183,7 @@ Hooking up a new agent (e.g. some new shop's `foo-coder` CLI) is one entry in [`
 }
 ```
 
-That's it — daemon will detect it on `PATH`, the picker shows it, the chat path works. If the CLI emits **typed events** (like Claude Code's `--output-format stream-json`), wire a parser in [`apps/daemon/claude-stream.js`](apps/daemon/claude-stream.js) and set `streamFormat: 'claude-stream-json'`.
+That's it — daemon will detect it on `PATH`, the picker shows it, the chat path works. If the CLI emits **typed events** (like Claude Code's `--output-format stream-json`), wire a parser in [`apps/daemon/src/claude-stream.ts`](apps/daemon/src/claude-stream.ts) and set `streamFormat: 'claude-stream-json'`.
 
 Bar for merging:
 

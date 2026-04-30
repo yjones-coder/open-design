@@ -495,7 +495,7 @@ Auto-detected from `PATH` on daemon boot. No config required.
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | `copilot` | `--output-format json` (typed events) | `copilot -p <prompt> --allow-all-tools --output-format json` |
 | Anthropic API · BYOK | n/a | SSE direct | Browser fallback when no CLI is on PATH |
 
-Adding a new CLI is one entry in [`apps/daemon/agents.js`](apps/daemon/agents.js). Streaming format is one of `claude-stream-json` (typed events) or `plain` (raw text).
+Adding a new CLI is one entry in [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts). Streaming format is one of `claude-stream-json` (typed events) or `plain` (raw text).
 
 ## References & lineage
 
@@ -546,7 +546,7 @@ Issues, PRs, new skills, and new design systems are all welcome. The highest-lev
 
 - **Add a skill** — drop a folder into [`skills/`](skills/) following the [`SKILL.md`][skill] convention.
 - **Add a design system** — drop a `DESIGN.md` into [`design-systems/<brand>/`](design-systems/) using the 9-section schema.
-- **Wire up a new coding-agent CLI** — one entry in [`apps/daemon/agents.js`](apps/daemon/agents.js).
+- **Wire up a new coding-agent CLI** — one entry in [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts).
 
 Full walkthrough, bar-for-merging, code style, and what we don't accept → [`CONTRIBUTING.md`](CONTRIBUTING.md) ([简体中文](CONTRIBUTING.zh-CN.md)).
 

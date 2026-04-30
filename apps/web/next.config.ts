@@ -2,7 +2,7 @@ import type { NextConfig } from 'next';
 import { dirname, isAbsolute, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Daemon port the local Express server binds to (see apps/daemon/cli.js). The
+// Daemon port the local Express server binds to (see apps/daemon/src/cli.ts). The
 // dev-all launcher overrides OD_PORT after probing for a free port; we read
 // the same env so /api, /artifacts, and /frames always reach the right
 // daemon instance during `next dev`.

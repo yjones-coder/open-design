@@ -496,7 +496,7 @@ daemon 부팅 시 `PATH`에서 자동 감지됩니다. 설정 필요 없음.
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | `copilot` | `--output-format json` (타입 이벤트) | `copilot -p <prompt> --allow-all-tools --output-format json` |
 | Anthropic API · BYOK | n/a | SSE 직접 | PATH에 CLI가 없을 때 브라우저 폴백 |
 
-새 CLI 추가는 [`apps/daemon/agents.js`](apps/daemon/agents.js)에 항목 하나 추가하는 것입니다. 스트리밍 형식은 `claude-stream-json`(타입 이벤트) 또는 `plain`(원시 텍스트) 중 하나입니다.
+새 CLI 추가는 [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts)에 항목 하나 추가하는 것입니다. 스트리밍 형식은 `claude-stream-json`(타입 이벤트) 또는 `plain`(원시 텍스트) 중 하나입니다.
 
 ## 참조 및 계보
 
@@ -547,7 +547,7 @@ daemon 부팅 시 `PATH`에서 자동 감지됩니다. 설정 필요 없음.
 
 - **skill 추가** — [`SKILL.md`][skill] 규약을 따르는 폴더를 [`skills/`](skills/)에 드롭하세요.
 - **디자인 시스템 추가** — 9섹션 스키마를 사용하여 [`design-systems/<brand>/`](design-systems/)에 `DESIGN.md`를 드롭하세요.
-- **새 코딩 에이전트 CLI 연결** — [`apps/daemon/agents.js`](apps/daemon/agents.js)에 항목 하나 추가.
+- **새 코딩 에이전트 CLI 연결** — [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts)에 항목 하나 추가.
 
 전체 설명, 병합 기준, 코드 스타일, 받지 않는 것 → [`CONTRIBUTING.md`](CONTRIBUTING.md) ([简体中文](CONTRIBUTING.zh-CN.md)).
 

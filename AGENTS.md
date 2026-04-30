@@ -78,9 +78,9 @@ Internally, `tools-dev` exports `OD_PORT` for the daemon/web proxy target and `O
 
 ## Agent, skill, and design-system wiring
 
-- The daemon scans `PATH` for local CLIs in `apps/daemon/agents.ts` and spawns them with `cwd` pinned to `.od/projects/<id>/`.
-- Agent stdout parsing is per transport: Claude stream JSON, Copilot stream JSON, ACP JSON-RPC, or plain text. Changes to CLI args belong in `apps/daemon/agents.ts` and matching parser tests.
-- Skills are folder bundles under `skills/` with `SKILL.md`; extended `od:` frontmatter is parsed by `apps/daemon/skills.ts`. Restart the daemon after adding or changing skill folders.
+- The daemon scans `PATH` for local CLIs in `apps/daemon/src/agents.ts` and spawns them with `cwd` pinned to `.od/projects/<id>/`.
+- Agent stdout parsing is per transport: Claude stream JSON, Copilot stream JSON, ACP JSON-RPC, or plain text. Changes to CLI args belong in `apps/daemon/src/agents.ts` and matching parser tests.
+- Skills are folder bundles under `skills/` with `SKILL.md`; extended `od:` frontmatter is parsed by `apps/daemon/src/skills.ts`. Restart the daemon after adding or changing skill folders.
 - Design systems are `design-systems/*/DESIGN.md`; `scripts/sync-design-systems.ts` re-imports upstream systems.
 - Prompt composition lives in `apps/web/src/prompts/system.ts`, `discovery.ts`, and `directions.ts`; artifacts are parsed/rendered through `apps/web/src/artifacts/` and `apps/web/src/runtime/`.
 

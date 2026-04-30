@@ -492,7 +492,7 @@ Daemon 启动时从 `PATH` 自动检测，无需配置。
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | `copilot` | `--output-format json`（类型化事件） | `copilot -p <prompt> --allow-all-tools --output-format json` |
 | Anthropic API · BYOK | n/a | SSE 直连 | 没装任何 CLI 时的浏览器兜底 |
 
-加一个新 CLI = 在 [`apps/daemon/agents.js`](apps/daemon/agents.js) 里加一项。流式格式从 `claude-stream-json`（类型化事件）和 `plain`（原始文本）两种里选一个。
+加一个新 CLI = 在 [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts) 里加一项。流式格式从 `claude-stream-json`（类型化事件）和 `plain`（原始文本）两种里选一个。
 
 ## 引用与师承
 
@@ -543,7 +543,7 @@ Daemon 启动时从 `PATH` 自动检测，无需配置。
 
 - **加一个 skill** —— 往 [`skills/`](skills/) 丢一个文件夹，遵循 [`SKILL.md`][skill] 规范。
 - **加一套 design system** —— 往 [`design-systems/<brand>/`](design-systems/) 丢一份 `DESIGN.md`，用 9 段式 schema。
-- **接入一个新的 coding-agent CLI** —— 在 [`apps/daemon/agents.js`](apps/daemon/agents.js) 里加一项。
+- **接入一个新的 coding-agent CLI** —— 在 [`apps/daemon/src/agents.ts`](apps/daemon/src/agents.ts) 里加一项。
 
 完整流程、合并硬线、代码风格、我们不接收的 PR 类型 → [`CONTRIBUTING.zh-CN.md`](CONTRIBUTING.zh-CN.md)（[English](CONTRIBUTING.md)）。
 
