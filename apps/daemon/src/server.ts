@@ -62,11 +62,13 @@ import {
   createLiveArtifact,
   ensureLiveArtifactPreview,
   getLiveArtifact,
+  LiveArtifactRefreshLockError,
   LiveArtifactStoreValidationError,
   listLiveArtifacts,
   recoverStaleLiveArtifactRefreshes,
   updateLiveArtifact,
 } from './live-artifacts/store.js';
+import { refreshLiveArtifact } from './live-artifacts/refresh-service.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from './tool-tokens.js';
 
 /** @typedef {import('@open-design/contracts').ApiErrorCode} ApiErrorCode */
@@ -183,6 +185,11 @@ function sendLiveArtifactRouteError(res, err) {
   if (err instanceof LiveArtifactStoreValidationError) {
     return sendApiError(res, 400, 'LIVE_ARTIFACT_INVALID', err.message, {
       details: { kind: 'validation', issues: err.issues },
+    });
+  }
+  if (err instanceof LiveArtifactRefreshLockError) {
+    return sendApiError(res, 409, 'REFRESH_LOCKED', err.message, {
+      details: { artifactId: err.artifactId },
     });
   }
   if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
@@ -1167,6 +1174,31 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     }
   });
 
+  app.post('/api/tools/live-artifacts/refresh', async (req, res) => {
+    try {
+      const toolGrant = authorizeToolRequest(req, res, 'live-artifacts:refresh');
+      if (!toolGrant) return;
+      const { projectId, artifactId } = req.body || {};
+      if (requestProjectOverride(projectId, toolGrant.projectId)) {
+        return sendApiError(res, 403, 'FORBIDDEN', 'projectId is derived from the tool token', {
+          details: { suppliedProjectId: projectId },
+        });
+      }
+      if (typeof artifactId !== 'string' || artifactId.length === 0) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'artifactId is required');
+      }
+
+      const result = await refreshLiveArtifact({
+        projectsRoot: PROJECTS_DIR,
+        projectId: toolGrant.projectId,
+        artifactId,
+      });
+      res.json(result);
+    } catch (err) {
+      sendLiveArtifactRouteError(res, err);
+    }
+  });
+
   app.patch('/api/live-artifacts/:artifactId', async (req, res) => {
     try {
       const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
@@ -1181,6 +1213,24 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
         input: req.body ?? {},
       });
       res.json({ artifact: record.artifact });
+    } catch (err) {
+      sendLiveArtifactRouteError(res, err);
+    }
+  });
+
+  app.post('/api/live-artifacts/:artifactId/refresh', async (req, res) => {
+    try {
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+      if (!projectId) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
+      }
+
+      const result = await refreshLiveArtifact({
+        projectsRoot: PROJECTS_DIR,
+        projectId,
+        artifactId: req.params.artifactId,
+      });
+      res.json(result);
     } catch (err) {
       sendLiveArtifactRouteError(res, err);
     }

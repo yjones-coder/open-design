@@ -100,6 +100,51 @@ describe('live artifact tool CLI environment', () => {
     expect(stderrOutput.join('')).toBe('');
   });
 
+  it('calls the refresh tool endpoint with the artifact id', async () => {
+    process.env.OD_DAEMON_URL = 'http://127.0.0.1:7456/base/';
+    process.env.OD_TOOL_TOKEN = 'agent-run-token';
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          artifact: {
+            id: 'live_1',
+            title: 'Launch Metrics',
+            status: 'active',
+            refreshStatus: 'succeeded',
+            preview: { type: 'html', entry: 'index.html' },
+            updatedAt: '2026-04-30T12:00:00.000Z',
+          },
+          refresh: { id: 'refresh-000001', status: 'succeeded', refreshedTileCount: 1 },
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 200 },
+      ),
+    );
+
+    const result = await runLiveArtifactsToolCli(['refresh', '--artifact-id', 'live_1']);
+
+    expect(result.exitCode).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:7456/base/api/tools/live-artifacts/refresh',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ artifactId: 'live_1' }),
+        headers: expect.objectContaining({ Authorization: 'Bearer agent-run-token' }),
+      }),
+    );
+    expect(JSON.parse(stdoutOutput.join(''))).toEqual({
+      ok: true,
+      artifact: {
+        id: 'live_1',
+        title: 'Launch Metrics',
+        status: 'active',
+        refreshStatus: 'succeeded',
+        preview: { type: 'html', entry: 'index.html' },
+        updatedAt: '2026-04-30T12:00:00.000Z',
+      },
+      refresh: { id: 'refresh-000001', status: 'succeeded', refreshedTileCount: 1 },
+    });
+  });
+
   it('prints compact validation errors and exits non-zero on API failure', async () => {
     process.env.OD_DAEMON_URL = 'http://127.0.0.1:7456';
     process.env.OD_TOOL_TOKEN = 'agent-run-token';

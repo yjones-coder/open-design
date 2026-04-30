@@ -26,6 +26,7 @@ interface ParsedOptions {
 const LIVE_ARTIFACTS_USAGE = `Usage:
   od tools live-artifacts create --input artifact.json
   od tools live-artifacts list [--format compact]
+  od tools live-artifacts refresh --artifact-id <id>
   od tools live-artifacts update --artifact-id <id> --input artifact.json
 
 Environment:
@@ -272,6 +273,20 @@ export async function runLiveArtifactsToolCli(args: string[]): Promise<ToolCliRe
           body: JSON.stringify({ artifactId: options.artifactId, ...input }),
         }),
         (body) => ({ artifact: compactArtifact((body as JsonObject).artifact) }),
+      );
+    }
+
+    if (options.command === 'refresh') {
+      if (!options.artifactId) return fail('refresh requires --artifact-id <id>');
+      return await printApiResult(
+        await requestJson(baseUrl, token, '/api/tools/live-artifacts/refresh', {
+          method: 'POST',
+          body: JSON.stringify({ artifactId: options.artifactId }),
+        }),
+        (body) => ({
+          artifact: compactArtifact((body as JsonObject).artifact),
+          refresh: (body as JsonObject).refresh,
+        }),
       );
     }
 

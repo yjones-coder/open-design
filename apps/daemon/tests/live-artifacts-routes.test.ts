@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,6 +100,26 @@ async function rawHttpJsonFetch(url, { headers = {} } = {}) {
   });
 }
 
+async function writeProjectJson(projectId, name, value) {
+  const candidates = [
+    path.join(projectRoot, '.od', 'projects', projectId),
+    path.join(serverRuntimeDataRoot, 'projects', projectId),
+  ];
+  let lastError;
+  let wrote = false;
+  for (const dir of candidates) {
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, name), `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+      wrote = true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (wrote) return;
+  throw lastError;
+}
+
 function mintToolToken(projectId, runId, overrides = {}) {
   return toolTokenRegistry.mint({
     projectId,
@@ -152,6 +172,68 @@ describe('live artifact tool routes', () => {
     });
     expect(list.body.artifacts[0].document).toBeUndefined();
     expect(list.body.artifacts[0].tiles).toBeUndefined();
+  });
+
+  it('refreshes live artifacts through tool and UI routes', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-refresh');
+    await writeProjectJson(projectId, 'metrics.json', { label: 'Open bugs', value: 7 });
+
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: {
+          ...validCreateInput('Refresh Route Artifact'),
+          tiles: [
+            {
+              id: 'bugs',
+              kind: 'metric',
+              title: 'Open bugs',
+              renderJson: { type: 'metric', label: 'Open bugs', value: 0 },
+              sourceJson: {
+                type: 'daemon_tool',
+                toolName: 'project_files.read_json',
+                input: { path: 'metrics.json' },
+                outputMapping: {
+                  dataPaths: [
+                    { from: '$.json.label', to: 'label' },
+                    { from: '$.json.value', to: 'value' },
+                  ],
+                  transform: 'identity',
+                },
+                refreshPermission: 'manual_refresh_granted_for_read_only',
+              },
+              provenanceJson: {
+                generatedAt: '2026-04-30T00:00:00.000Z',
+                generatedBy: 'agent',
+                sources: [{ label: 'metrics.json', type: 'local_file', ref: 'metrics.json' }],
+              },
+              refreshStatus: 'idle',
+            },
+          ],
+        },
+      }),
+    });
+    expect(create.status).toBe(200);
+
+    const toolRefresh = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ artifactId: create.body.artifact.id }),
+    });
+    expect(toolRefresh.status).toBe(200);
+    expect(toolRefresh.body.refresh).toMatchObject({ id: 'refresh-000001', status: 'succeeded', refreshedTileCount: 1 });
+    expect(toolRefresh.body.artifact).toMatchObject({ refreshStatus: 'succeeded', lastRefreshedAt: expect.any(String) });
+    expect(toolRefresh.body.artifact.tiles[0].renderJson).toMatchObject({ type: 'metric', label: 'Open bugs', value: 7 });
+
+    await writeProjectJson(projectId, 'metrics.json', { label: 'Open bugs', value: 8 });
+    const uiRefresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(uiRefresh.status).toBe(200);
+    expect(uiRefresh.body.refresh).toMatchObject({ id: 'refresh-000002', status: 'succeeded', refreshedTileCount: 1 });
+    expect(uiRefresh.body.artifact.tiles[0].renderJson).toMatchObject({ type: 'metric', label: 'Open bugs', value: 8 });
   });
 
   it('serves live artifact previews with restrictive iframe headers', async () => {
