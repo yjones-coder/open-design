@@ -1,0 +1,850 @@
+// Runtime validation lives in the daemon. These mirror the shared DTOs in
+// packages/contracts/src/api/live-artifacts.ts without importing daemon internals
+// into contracts or forcing the daemon to compile contract source files.
+type BoundedJsonValue = null | boolean | number | string | BoundedJsonValue[] | { [key: string]: BoundedJsonValue };
+
+interface BoundedJsonObject {
+  [key: string]: BoundedJsonValue;
+}
+
+type LiveArtifactStatus = 'active' | 'archived' | 'error';
+type LiveArtifactRefreshStatus = 'never' | 'idle' | 'running' | 'succeeded' | 'failed';
+type LiveArtifactPreviewType = 'html' | 'jsx' | 'markdown';
+type LiveArtifactTileKind = 'metric' | 'table' | 'chart' | 'markdown' | 'link_card' | 'json' | 'html_document';
+type LiveArtifactTileRefreshStatus = 'not_refreshable' | 'idle' | 'running' | 'succeeded' | 'failed';
+type LiveArtifactSourceType = 'local_file' | 'daemon_tool' | 'connector_tool';
+type LiveArtifactConnectorApprovalPolicy = 'read_only_auto' | 'manual_refresh_granted_for_read_only';
+type LiveArtifactRefreshPermission = 'none' | 'manual_refresh_granted_for_read_only';
+type LiveArtifactOutputTransform = 'identity' | 'compact_table' | 'metric_summary';
+type LiveArtifactProvenanceGenerator = 'agent' | 'refresh_runner';
+type LiveArtifactProvenanceSourceType = 'connector' | 'local_file' | 'user_input' | 'derived';
+
+interface LiveArtifactPreview {
+  type: LiveArtifactPreviewType;
+  entry: string;
+}
+
+interface LiveArtifactDocument {
+  format: 'html_template_v1';
+  templatePath: 'template.html';
+  generatedPreviewPath: 'index.html';
+  dataPath: 'data.json';
+  dataJson: BoundedJsonObject;
+  dataSchemaJson?: BoundedJsonObject;
+  sourceJson?: LiveArtifactTileSource;
+}
+
+interface LiveArtifactTile {
+  id: string;
+  kind: LiveArtifactTileKind;
+  title: string;
+  renderJson: LiveArtifactRenderJson;
+  sourceJson?: LiveArtifactTileSource;
+  provenanceJson: LiveArtifactProvenance;
+  refreshStatus: LiveArtifactTileRefreshStatus;
+  lastError?: string;
+}
+
+type LiveArtifactRenderJson =
+  | { type: 'metric'; label: string; value: string | number; unit?: string; delta?: string; tone?: 'neutral' | 'good' | 'warning' | 'bad' }
+  | { type: 'table'; columns: Array<{ key: string; label: string }>; rows: BoundedJsonObject[]; maxRows?: number }
+  | { type: 'chart'; chartType: 'bar' | 'line' | 'area' | 'pie'; xKey: string; yKeys: string[]; rows: BoundedJsonObject[] }
+  | { type: 'markdown'; markdown: string }
+  | { type: 'link_card'; title: string; url: string; description?: string }
+  | { type: 'json'; value: BoundedJsonValue }
+  | { type: 'html_document'; documentPath: 'template.html' | 'index.html'; dataPath: 'data.json' };
+
+interface LiveArtifactTileSource {
+  type: LiveArtifactSourceType;
+  toolName?: string;
+  input: BoundedJsonObject;
+  connector?: {
+    connectorId: string;
+    accountLabel?: string;
+    toolName: string;
+    approvalPolicy: LiveArtifactConnectorApprovalPolicy;
+  };
+  outputMapping?: {
+    dataPaths?: Array<{ from: string; to: string }>;
+    transform?: LiveArtifactOutputTransform;
+  };
+  refreshPermission: LiveArtifactRefreshPermission;
+}
+
+interface LiveArtifactProvenanceSource {
+  label: string;
+  type: LiveArtifactProvenanceSourceType;
+  ref?: string;
+}
+
+interface LiveArtifactProvenance {
+  generatedAt: string;
+  generatedBy: LiveArtifactProvenanceGenerator;
+  notes?: string;
+  sources: LiveArtifactProvenanceSource[];
+}
+
+interface LiveArtifact {
+  schemaVersion: 1;
+  id: string;
+  projectId: string;
+  sessionId?: string;
+  createdByRunId?: string;
+  title: string;
+  slug: string;
+  status: LiveArtifactStatus;
+  pinned: boolean;
+  preview: LiveArtifactPreview;
+  refreshStatus: LiveArtifactRefreshStatus;
+  createdAt: string;
+  updatedAt: string;
+  lastRefreshedAt?: string;
+  tiles: LiveArtifactTile[];
+  document?: LiveArtifactDocument;
+}
+
+export interface LiveArtifactValidationIssue {
+  path: string;
+  message: string;
+}
+
+export type LiveArtifactValidationResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: string; issues: LiveArtifactValidationIssue[] };
+
+export interface LiveArtifactCreateInput {
+  title: string;
+  slug?: string;
+  sessionId?: string;
+  pinned?: boolean;
+  status?: LiveArtifact['status'];
+  preview: LiveArtifactPreview;
+  tiles?: LiveArtifactTile[];
+  document?: LiveArtifactDocument;
+}
+
+export interface LiveArtifactUpdateInput {
+  title?: string;
+  slug?: string;
+  pinned?: boolean;
+  status?: LiveArtifact['status'];
+  preview?: LiveArtifactPreview;
+  tiles?: LiveArtifactTile[];
+  document?: LiveArtifactDocument;
+}
+
+const MAX_ID_LENGTH = 128;
+const MAX_TITLE_LENGTH = 200;
+const MAX_SLUG_LENGTH = 128;
+const MAX_PATH_LENGTH = 260;
+const MAX_SHORT_TEXT_LENGTH = 1_024;
+const MAX_LONG_TEXT_LENGTH = 16 * 1024;
+const MAX_TILES = 100;
+const MAX_PROVENANCE_SOURCES = 50;
+const MAX_MAPPING_PATHS = 100;
+
+const LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS = {
+  maxDepth: 8,
+  maxObjectKeys: 100,
+  maxArrayLength: 500,
+  maxStringLength: 16 * 1024,
+  maxSerializedBytes: 256 * 1024,
+} as const;
+
+const DAEMON_OWNED_INPUT_FIELDS = new Set([
+  'id',
+  'projectId',
+  'createdAt',
+  'updatedAt',
+  'createdByRunId',
+  'schemaVersion',
+  'refreshStatus',
+  'lastRefreshedAt',
+]);
+
+const FORBIDDEN_JSON_KEYS = new Set([
+  'raw',
+  'rawresponse',
+  'payload',
+  'body',
+  'headers',
+  'cookie',
+  'authorization',
+  'token',
+  'secret',
+  'credential',
+  'password',
+]);
+
+const LIVE_ARTIFACT_STATUSES = new Set<LiveArtifact['status']>(['active', 'archived', 'error']);
+const LIVE_ARTIFACT_REFRESH_STATUSES = new Set<LiveArtifact['refreshStatus']>([
+  'never',
+  'idle',
+  'running',
+  'succeeded',
+  'failed',
+]);
+const PREVIEW_TYPES = new Set<LiveArtifactPreview['type']>(['html', 'jsx', 'markdown']);
+const TILE_KINDS = new Set<LiveArtifactTile['kind']>([
+  'metric',
+  'table',
+  'chart',
+  'markdown',
+  'link_card',
+  'json',
+  'html_document',
+]);
+const TILE_REFRESH_STATUSES = new Set<LiveArtifactTile['refreshStatus']>([
+  'not_refreshable',
+  'idle',
+  'running',
+  'succeeded',
+  'failed',
+]);
+const SOURCE_TYPES = new Set<LiveArtifactTileSource['type']>([
+  'local_file',
+  'daemon_tool',
+  'connector_tool',
+]);
+const CONNECTOR_APPROVAL_POLICIES = new Set<LiveArtifactConnectorApprovalPolicy>([
+  'read_only_auto',
+  'manual_refresh_granted_for_read_only',
+]);
+const REFRESH_PERMISSIONS = new Set<LiveArtifactTileSource['refreshPermission']>([
+  'none',
+  'manual_refresh_granted_for_read_only',
+]);
+const OUTPUT_TRANSFORMS = new Set<LiveArtifactOutputTransform>(['identity', 'compact_table', 'metric_summary']);
+const METRIC_TONES = new Set<NonNullable<Extract<LiveArtifactRenderJson, { type: 'metric' }>['tone']>>([
+  'neutral',
+  'good',
+  'warning',
+  'bad',
+]);
+const CHART_TYPES = new Set<Extract<LiveArtifactRenderJson, { type: 'chart' }>['chartType']>([
+  'bar',
+  'line',
+  'area',
+  'pie',
+]);
+const PROVENANCE_GENERATORS = new Set<LiveArtifactProvenance['generatedBy']>([
+  'agent',
+  'refresh_runner',
+]);
+const PROVENANCE_SOURCE_TYPES = new Set<LiveArtifactProvenanceSource['type']>([
+  'connector',
+  'local_file',
+  'user_input',
+  'derived',
+]);
+
+function fail<T>(issues: LiveArtifactValidationIssue[]): LiveArtifactValidationResult<T> {
+  return {
+    ok: false,
+    error: issues[0]?.message ?? 'Live artifact validation failed',
+    issues,
+  };
+}
+
+function ok<T>(value: T): LiveArtifactValidationResult<T> {
+  return { ok: true, value };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function asString(value: unknown, path: string, issues: LiveArtifactValidationIssue[], max = MAX_SHORT_TEXT_LENGTH): string | undefined {
+  if (typeof value !== 'string') {
+    issues.push({ path, message: `${path} must be a string` });
+    return undefined;
+  }
+  if (value.length === 0) {
+    issues.push({ path, message: `${path} is required` });
+  }
+  if (value.length > max) {
+    issues.push({ path, message: `${path} exceeds max length (${max})` });
+  }
+  return value;
+}
+
+function asOptionalString(value: unknown, path: string, issues: LiveArtifactValidationIssue[], max = MAX_SHORT_TEXT_LENGTH): string | undefined {
+  if (value === undefined) return undefined;
+  return asString(value, path, issues, max);
+}
+
+function asBoolean(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): boolean | undefined {
+  if (typeof value !== 'boolean') {
+    issues.push({ path, message: `${path} must be a boolean` });
+    return undefined;
+  }
+  return value;
+}
+
+function asOptionalBoolean(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): boolean | undefined {
+  if (value === undefined) return undefined;
+  return asBoolean(value, path, issues);
+}
+
+function validateEnum<T extends string>(value: unknown, allowed: ReadonlySet<T>, path: string, issues: LiveArtifactValidationIssue[]): T | undefined {
+  if (typeof value !== 'string' || !allowed.has(value as T)) {
+    issues.push({ path, message: `${path} is not allowed` });
+    return undefined;
+  }
+  return value as T;
+}
+
+function isIsoDateString(value: string): boolean {
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value;
+}
+
+function validateIsoDate(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): string | undefined {
+  const text = asString(value, path, issues, MAX_SHORT_TEXT_LENGTH);
+  if (text !== undefined && !isIsoDateString(text)) {
+    issues.push({ path, message: `${path} must be an ISO-8601 timestamp` });
+  }
+  return text;
+}
+
+function validateRelativePath(value: string, path: string, issues: LiveArtifactValidationIssue[]): void {
+  if (value.length > MAX_PATH_LENGTH) {
+    issues.push({ path, message: `${path} exceeds max length (${MAX_PATH_LENGTH})` });
+  }
+  if (value.includes('\0')) {
+    issues.push({ path, message: `${path} cannot contain null bytes` });
+  }
+  const normalized = value.replace(/\\/g, '/');
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
+    issues.push({ path, message: `${path} cannot be an absolute path` });
+  }
+  if (normalized.split('/').some((part) => part === '..')) {
+    issues.push({ path, message: `${path} cannot contain path traversal` });
+  }
+}
+
+function validateAllowedUrl(value: string, path: string, issues: LiveArtifactValidationIssue[]): void {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      issues.push({ path, message: `${path} must use http: or https:` });
+    }
+  } catch {
+    issues.push({ path, message: `${path} must be a valid URL` });
+  }
+}
+
+function validateNoDaemonOwnedFields(raw: Record<string, unknown>, issues: LiveArtifactValidationIssue[]): void {
+  for (const key of Object.keys(raw)) {
+    if (DAEMON_OWNED_INPUT_FIELDS.has(key)) {
+      issues.push({ path: key, message: `${key} is daemon-owned and cannot be supplied` });
+    }
+  }
+}
+
+function validateBoundedJsonInternal(value: unknown, path: string, issues: LiveArtifactValidationIssue[], depth: number): value is BoundedJsonValue {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      issues.push({ path, message: `${path} must be a finite number` });
+      return false;
+    }
+    return true;
+  }
+
+  if (typeof value === 'string') {
+    if (value.length > LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxStringLength) {
+      issues.push({
+        path,
+        message: `${path} exceeds max string length (${LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxStringLength})`,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    if (depth > LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxDepth) {
+      issues.push({ path, message: `${path} exceeds max JSON depth (${LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxDepth})` });
+      return false;
+    }
+    if (value.length > LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxArrayLength) {
+      issues.push({
+        path,
+        message: `${path} exceeds max array length (${LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxArrayLength})`,
+      });
+      return false;
+    }
+    return value.every((item, index) => validateBoundedJsonInternal(item, `${path}.${index}`, issues, depth + 1));
+  }
+
+  if (isPlainObject(value)) {
+    if (depth > LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxDepth) {
+      issues.push({ path, message: `${path} exceeds max JSON depth (${LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxDepth})` });
+      return false;
+    }
+    const entries = Object.entries(value);
+    if (entries.length > LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxObjectKeys) {
+      issues.push({
+        path,
+        message: `${path} exceeds max object keys (${LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxObjectKeys})`,
+      });
+      return false;
+    }
+    let valid = true;
+    for (const [key, child] of entries) {
+      if (FORBIDDEN_JSON_KEYS.has(key.toLowerCase())) {
+        issues.push({ path: `${path}.${key}`, message: `${path}.${key} uses a forbidden key` });
+        valid = false;
+      }
+      valid = validateBoundedJsonInternal(child, `${path}.${key}`, issues, depth + 1) && valid;
+    }
+    return valid;
+  }
+
+  issues.push({ path, message: `${path} must be JSON-serializable` });
+  return false;
+}
+
+export function validateBoundedJsonValue(value: unknown, path = 'value'): LiveArtifactValidationResult<BoundedJsonValue> {
+  const issues: LiveArtifactValidationIssue[] = [];
+  if (validateBoundedJsonInternal(value, path, issues, 1)) {
+    const serialized = JSON.stringify(value);
+    if (Buffer.byteLength(serialized, 'utf8') <= LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxSerializedBytes) {
+      return ok(value);
+    }
+    issues.push({
+      path,
+      message: `${path} exceeds max serialized size (${LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxSerializedBytes} bytes)`,
+    });
+  }
+  return fail(issues);
+}
+
+export function validateBoundedJsonObject(value: unknown, path = 'value'): LiveArtifactValidationResult<BoundedJsonObject> {
+  const result = validateBoundedJsonValue(value, path);
+  if (!result.ok) return result;
+  if (!isPlainObject(result.value)) {
+    return fail([{ path, message: `${path} must be a JSON object` }]);
+  }
+  return ok(result.value);
+}
+
+function validateSourceInputPaths(value: BoundedJsonValue, path: string, issues: LiveArtifactValidationIssue[]): void {
+  if (typeof value === 'string') {
+    validateRelativePath(value, path, issues);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateSourceInputPaths(item, `${path}.${index}`, issues));
+    return;
+  }
+  if (isPlainObject(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      if (/path|file|glob|ref/i.test(key)) validateSourceInputPaths(child, `${path}.${key}`, issues);
+    }
+  }
+}
+
+function validatePreview(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): LiveArtifactPreview | undefined {
+  if (!isPlainObject(value)) {
+    issues.push({ path, message: `${path} must be an object` });
+    return undefined;
+  }
+  const type = validateEnum(value.type, PREVIEW_TYPES, `${path}.type`, issues);
+  const entry = asString(value.entry, `${path}.entry`, issues, MAX_PATH_LENGTH);
+  if (entry !== undefined) validateRelativePath(entry, `${path}.entry`, issues);
+  if (type === undefined || entry === undefined) return undefined;
+  return { type, entry };
+}
+
+function validateSource(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): LiveArtifactTileSource | undefined {
+  if (!isPlainObject(value)) {
+    issues.push({ path, message: `${path} must be an object` });
+    return undefined;
+  }
+  const type = validateEnum(value.type, SOURCE_TYPES, `${path}.type`, issues);
+  const toolName = asOptionalString(value.toolName, `${path}.toolName`, issues, MAX_ID_LENGTH);
+  const inputResult = validateBoundedJsonObject(value.input, `${path}.input`);
+  if (!inputResult.ok) issues.push(...inputResult.issues);
+  else validateSourceInputPaths(inputResult.value, `${path}.input`, issues);
+
+  let connector: LiveArtifactTileSource['connector'];
+  if (value.connector !== undefined) {
+    if (!isPlainObject(value.connector)) {
+      issues.push({ path: `${path}.connector`, message: `${path}.connector must be an object` });
+    } else {
+      const connectorId = asString(value.connector.connectorId, `${path}.connector.connectorId`, issues, MAX_ID_LENGTH);
+      const accountLabel = asOptionalString(value.connector.accountLabel, `${path}.connector.accountLabel`, issues, MAX_SHORT_TEXT_LENGTH);
+      const connectorToolName = asString(value.connector.toolName, `${path}.connector.toolName`, issues, MAX_ID_LENGTH);
+      const approvalPolicy = validateEnum(value.connector.approvalPolicy, CONNECTOR_APPROVAL_POLICIES, `${path}.connector.approvalPolicy`, issues);
+      if (connectorId !== undefined && connectorToolName !== undefined && approvalPolicy !== undefined) {
+        const nextConnector: NonNullable<LiveArtifactTileSource['connector']> = { connectorId, toolName: connectorToolName, approvalPolicy };
+        if (accountLabel !== undefined) nextConnector.accountLabel = accountLabel;
+        connector = nextConnector;
+      }
+    }
+  }
+
+  let outputMapping: LiveArtifactTileSource['outputMapping'];
+  if (value.outputMapping !== undefined) {
+    if (!isPlainObject(value.outputMapping)) {
+      issues.push({ path: `${path}.outputMapping`, message: `${path}.outputMapping must be an object` });
+    } else {
+      const mapping: NonNullable<LiveArtifactTileSource['outputMapping']> = {};
+      if (value.outputMapping.dataPaths !== undefined) {
+        if (!Array.isArray(value.outputMapping.dataPaths) || value.outputMapping.dataPaths.length > MAX_MAPPING_PATHS) {
+          issues.push({ path: `${path}.outputMapping.dataPaths`, message: `${path}.outputMapping.dataPaths must be a bounded array` });
+        } else {
+          mapping.dataPaths = [];
+          value.outputMapping.dataPaths.forEach((item, index) => {
+            const itemPath = `${path}.outputMapping.dataPaths.${index}`;
+            if (!isPlainObject(item)) {
+              issues.push({ path: itemPath, message: `${itemPath} must be an object` });
+              return;
+            }
+            const from = asString(item.from, `${itemPath}.from`, issues, MAX_PATH_LENGTH);
+            const to = asString(item.to, `${itemPath}.to`, issues, MAX_PATH_LENGTH);
+            if (from !== undefined && to !== undefined) mapping.dataPaths?.push({ from, to });
+          });
+        }
+      }
+      if (value.outputMapping.transform !== undefined) {
+        const transform = validateEnum(value.outputMapping.transform, OUTPUT_TRANSFORMS, `${path}.outputMapping.transform`, issues);
+        if (transform !== undefined) mapping.transform = transform;
+      }
+      outputMapping = mapping;
+    }
+  }
+
+  const refreshPermission = validateEnum(value.refreshPermission, REFRESH_PERMISSIONS, `${path}.refreshPermission`, issues);
+  if (type === undefined || !inputResult.ok || refreshPermission === undefined) return undefined;
+  const source: LiveArtifactTileSource = { type, input: inputResult.value, refreshPermission };
+  if (toolName !== undefined) source.toolName = toolName;
+  if (connector !== undefined) source.connector = connector;
+  if (outputMapping !== undefined) source.outputMapping = outputMapping;
+  return source;
+}
+
+function validateProvenance(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): LiveArtifactProvenance | undefined {
+  if (!isPlainObject(value)) {
+    issues.push({ path, message: `${path} must be an object` });
+    return undefined;
+  }
+  const generatedAt = validateIsoDate(value.generatedAt, `${path}.generatedAt`, issues);
+  const generatedBy = validateEnum(value.generatedBy, PROVENANCE_GENERATORS, `${path}.generatedBy`, issues);
+  const notes = asOptionalString(value.notes, `${path}.notes`, issues, MAX_LONG_TEXT_LENGTH);
+  let sources: LiveArtifactProvenanceSource[] | undefined;
+  if (!Array.isArray(value.sources) || value.sources.length > MAX_PROVENANCE_SOURCES) {
+    issues.push({ path: `${path}.sources`, message: `${path}.sources must be a bounded array` });
+  } else {
+    sources = [];
+    value.sources.forEach((source, index) => {
+      const sourcePath = `${path}.sources.${index}`;
+      if (!isPlainObject(source)) {
+        issues.push({ path: sourcePath, message: `${sourcePath} must be an object` });
+        return;
+      }
+      const label = asString(source.label, `${sourcePath}.label`, issues, MAX_SHORT_TEXT_LENGTH);
+      const type = validateEnum(source.type, PROVENANCE_SOURCE_TYPES, `${sourcePath}.type`, issues);
+      const ref = asOptionalString(source.ref, `${sourcePath}.ref`, issues, MAX_PATH_LENGTH);
+      if (ref !== undefined) validateRelativePath(ref, `${sourcePath}.ref`, issues);
+      if (label !== undefined && type !== undefined) {
+        const provenanceSource: LiveArtifactProvenanceSource = { label, type };
+        if (ref !== undefined) provenanceSource.ref = ref;
+        sources?.push(provenanceSource);
+      }
+    });
+  }
+  if (generatedAt === undefined || generatedBy === undefined || sources === undefined) return undefined;
+  const provenance: LiveArtifactProvenance = { generatedAt, generatedBy, sources };
+  if (notes !== undefined) provenance.notes = notes;
+  return provenance;
+}
+
+function validateRows(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): BoundedJsonObject[] | undefined {
+  if (!Array.isArray(value) || value.length > LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxArrayLength) {
+    issues.push({ path, message: `${path} must be a bounded array` });
+    return undefined;
+  }
+  const rows: BoundedJsonObject[] = [];
+  value.forEach((row, index) => {
+    const result = validateBoundedJsonObject(row, `${path}.${index}`);
+    if (result.ok) rows.push(result.value);
+    else issues.push(...result.issues);
+  });
+  return rows;
+}
+
+function validateRenderJson(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): LiveArtifactRenderJson | undefined {
+  if (!isPlainObject(value)) {
+    issues.push({ path, message: `${path} must be an object` });
+    return undefined;
+  }
+  switch (value.type) {
+    case 'metric': {
+      const label = asString(value.label, `${path}.label`, issues);
+      const metricValue = typeof value.value === 'string' || typeof value.value === 'number' ? value.value : undefined;
+      if (metricValue === undefined || (typeof metricValue === 'number' && !Number.isFinite(metricValue))) {
+        issues.push({ path: `${path}.value`, message: `${path}.value must be a string or finite number` });
+      }
+      const unit = asOptionalString(value.unit, `${path}.unit`, issues);
+      const delta = asOptionalString(value.delta, `${path}.delta`, issues);
+      const tone = value.tone === undefined ? undefined : validateEnum(value.tone, METRIC_TONES, `${path}.tone`, issues);
+      if (label === undefined || metricValue === undefined) return undefined;
+      return { type: 'metric', label, value: metricValue, ...(unit !== undefined ? { unit } : {}), ...(delta !== undefined ? { delta } : {}), ...(tone !== undefined ? { tone } : {}) };
+    }
+    case 'table': {
+      const columns = validateTableColumns(value.columns, `${path}.columns`, issues);
+      const rows = validateRows(value.rows, `${path}.rows`, issues);
+      const maxRows = validateOptionalInteger(value.maxRows, `${path}.maxRows`, issues, 1, LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS.maxArrayLength);
+      if (columns === undefined || rows === undefined) return undefined;
+      return { type: 'table', columns, rows, ...(maxRows !== undefined ? { maxRows } : {}) };
+    }
+    case 'chart': {
+      const chartType = validateEnum(value.chartType, CHART_TYPES, `${path}.chartType`, issues);
+      const xKey = asString(value.xKey, `${path}.xKey`, issues, MAX_ID_LENGTH);
+      const yKeys = validateStringArray(value.yKeys, `${path}.yKeys`, issues, MAX_MAPPING_PATHS, MAX_ID_LENGTH);
+      const rows = validateRows(value.rows, `${path}.rows`, issues);
+      if (chartType === undefined || xKey === undefined || yKeys === undefined || rows === undefined) return undefined;
+      return { type: 'chart', chartType, xKey, yKeys, rows };
+    }
+    case 'markdown': {
+      const markdown = asString(value.markdown, `${path}.markdown`, issues, MAX_LONG_TEXT_LENGTH);
+      return markdown === undefined ? undefined : { type: 'markdown', markdown };
+    }
+    case 'link_card': {
+      const title = asString(value.title, `${path}.title`, issues, MAX_TITLE_LENGTH);
+      const url = asString(value.url, `${path}.url`, issues, MAX_LONG_TEXT_LENGTH);
+      if (url !== undefined) validateAllowedUrl(url, `${path}.url`, issues);
+      const description = asOptionalString(value.description, `${path}.description`, issues, MAX_LONG_TEXT_LENGTH);
+      if (title === undefined || url === undefined) return undefined;
+      return { type: 'link_card', title, url, ...(description !== undefined ? { description } : {}) };
+    }
+    case 'json': {
+      const result = validateBoundedJsonValue(value.value, `${path}.value`);
+      if (!result.ok) {
+        issues.push(...result.issues);
+        return undefined;
+      }
+      return { type: 'json', value: result.value };
+    }
+    case 'html_document': {
+      if (value.documentPath !== 'template.html' && value.documentPath !== 'index.html') {
+        issues.push({ path: `${path}.documentPath`, message: `${path}.documentPath is not allowed` });
+      }
+      if (value.dataPath !== 'data.json') {
+        issues.push({ path: `${path}.dataPath`, message: `${path}.dataPath must be data.json` });
+      }
+      if ((value.documentPath === 'template.html' || value.documentPath === 'index.html') && value.dataPath === 'data.json') {
+        return { type: 'html_document', documentPath: value.documentPath, dataPath: 'data.json' };
+      }
+      return undefined;
+    }
+    default:
+      issues.push({ path: `${path}.type`, message: `${path}.type is not allowed` });
+      return undefined;
+  }
+}
+
+function validateOptionalInteger(value: unknown, path: string, issues: LiveArtifactValidationIssue[], min: number, max: number): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    issues.push({ path, message: `${path} must be an integer between ${min} and ${max}` });
+    return undefined;
+  }
+  return value;
+}
+
+function validateStringArray(value: unknown, path: string, issues: LiveArtifactValidationIssue[], maxItems: number, maxLength: number): string[] | undefined {
+  if (!Array.isArray(value) || value.length > maxItems) {
+    issues.push({ path, message: `${path} must be a bounded array` });
+    return undefined;
+  }
+  const items: string[] = [];
+  value.forEach((item, index) => {
+    const text = asString(item, `${path}.${index}`, issues, maxLength);
+    if (text !== undefined) items.push(text);
+  });
+  return items;
+}
+
+function validateTableColumns(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): Array<{ key: string; label: string }> | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_MAPPING_PATHS) {
+    issues.push({ path, message: `${path} must be a non-empty bounded array` });
+    return undefined;
+  }
+  const columns: Array<{ key: string; label: string }> = [];
+  value.forEach((column, index) => {
+    const columnPath = `${path}.${index}`;
+    if (!isPlainObject(column)) {
+      issues.push({ path: columnPath, message: `${columnPath} must be an object` });
+      return;
+    }
+    const key = asString(column.key, `${columnPath}.key`, issues, MAX_ID_LENGTH);
+    const label = asString(column.label, `${columnPath}.label`, issues, MAX_SHORT_TEXT_LENGTH);
+    if (key !== undefined && label !== undefined) columns.push({ key, label });
+  });
+  return columns;
+}
+
+function validateTile(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): LiveArtifactTile | undefined {
+  if (!isPlainObject(value)) {
+    issues.push({ path, message: `${path} must be an object` });
+    return undefined;
+  }
+  const id = asString(value.id, `${path}.id`, issues, MAX_ID_LENGTH);
+  const kind = validateEnum(value.kind, TILE_KINDS, `${path}.kind`, issues);
+  const title = asString(value.title, `${path}.title`, issues, MAX_TITLE_LENGTH);
+  const renderJson = validateRenderJson(value.renderJson, `${path}.renderJson`, issues);
+  const sourceJson = value.sourceJson === undefined ? undefined : validateSource(value.sourceJson, `${path}.sourceJson`, issues);
+  const provenanceJson = validateProvenance(value.provenanceJson, `${path}.provenanceJson`, issues);
+  const refreshStatus = validateEnum(value.refreshStatus, TILE_REFRESH_STATUSES, `${path}.refreshStatus`, issues);
+  const lastError = asOptionalString(value.lastError, `${path}.lastError`, issues, MAX_LONG_TEXT_LENGTH);
+  if (id === undefined || kind === undefined || title === undefined || renderJson === undefined || provenanceJson === undefined || refreshStatus === undefined) {
+    return undefined;
+  }
+  const tile: LiveArtifactTile = { id, kind, title, renderJson, provenanceJson, refreshStatus };
+  if (sourceJson !== undefined) tile.sourceJson = sourceJson;
+  if (lastError !== undefined) tile.lastError = lastError;
+  return tile;
+}
+
+function validateTiles(value: unknown, path: string, issues: LiveArtifactValidationIssue[], required: boolean): LiveArtifactTile[] | undefined {
+  if (value === undefined && !required) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_TILES) {
+    issues.push({ path, message: `${path} must be a bounded array` });
+    return undefined;
+  }
+  const tiles: LiveArtifactTile[] = [];
+  value.forEach((tile, index) => {
+    const validated = validateTile(tile, `${path}.${index}`, issues);
+    if (validated !== undefined) tiles.push(validated);
+  });
+  return tiles;
+}
+
+function validateDocument(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): LiveArtifactDocument | undefined {
+  if (!isPlainObject(value)) {
+    issues.push({ path, message: `${path} must be an object` });
+    return undefined;
+  }
+  if (value.format !== 'html_template_v1') issues.push({ path: `${path}.format`, message: `${path}.format must be html_template_v1` });
+  if (value.templatePath !== 'template.html') issues.push({ path: `${path}.templatePath`, message: `${path}.templatePath must be template.html` });
+  if (value.generatedPreviewPath !== 'index.html') issues.push({ path: `${path}.generatedPreviewPath`, message: `${path}.generatedPreviewPath must be index.html` });
+  if (value.dataPath !== 'data.json') issues.push({ path: `${path}.dataPath`, message: `${path}.dataPath must be data.json` });
+  const dataJsonResult = validateBoundedJsonObject(value.dataJson, `${path}.dataJson`);
+  if (!dataJsonResult.ok) issues.push(...dataJsonResult.issues);
+  let dataSchemaJson: BoundedJsonObject | undefined;
+  if (value.dataSchemaJson !== undefined) {
+    const schemaResult = validateBoundedJsonObject(value.dataSchemaJson, `${path}.dataSchemaJson`);
+    if (schemaResult.ok) dataSchemaJson = schemaResult.value;
+    else issues.push(...schemaResult.issues);
+  }
+  const sourceJson = value.sourceJson === undefined ? undefined : validateSource(value.sourceJson, `${path}.sourceJson`, issues);
+  if (value.format !== 'html_template_v1' || value.templatePath !== 'template.html' || value.generatedPreviewPath !== 'index.html' || value.dataPath !== 'data.json' || !dataJsonResult.ok) {
+    return undefined;
+  }
+  const document: LiveArtifactDocument = {
+    format: 'html_template_v1',
+    templatePath: 'template.html',
+    generatedPreviewPath: 'index.html',
+    dataPath: 'data.json',
+    dataJson: dataJsonResult.value,
+  };
+  if (dataSchemaJson !== undefined) document.dataSchemaJson = dataSchemaJson;
+  if (sourceJson !== undefined) document.sourceJson = sourceJson;
+  return document;
+}
+
+export function validatePersistedLiveArtifact(value: unknown, path = 'liveArtifact'): LiveArtifactValidationResult<LiveArtifact> {
+  const issues: LiveArtifactValidationIssue[] = [];
+  if (!isPlainObject(value)) return fail([{ path, message: `${path} must be an object` }]);
+
+  if (value.schemaVersion !== 1) issues.push({ path: `${path}.schemaVersion`, message: `${path}.schemaVersion must be 1` });
+  const id = asString(value.id, `${path}.id`, issues, MAX_ID_LENGTH);
+  const projectId = asString(value.projectId, `${path}.projectId`, issues, MAX_ID_LENGTH);
+  const sessionId = asOptionalString(value.sessionId, `${path}.sessionId`, issues, MAX_ID_LENGTH);
+  const createdByRunId = asOptionalString(value.createdByRunId, `${path}.createdByRunId`, issues, MAX_ID_LENGTH);
+  const title = asString(value.title, `${path}.title`, issues, MAX_TITLE_LENGTH);
+  const slug = asString(value.slug, `${path}.slug`, issues, MAX_SLUG_LENGTH);
+  const status = validateEnum(value.status, LIVE_ARTIFACT_STATUSES, `${path}.status`, issues);
+  const pinned = asBoolean(value.pinned, `${path}.pinned`, issues);
+  const preview = validatePreview(value.preview, `${path}.preview`, issues);
+  const refreshStatus = validateEnum(value.refreshStatus, LIVE_ARTIFACT_REFRESH_STATUSES, `${path}.refreshStatus`, issues);
+  const createdAt = validateIsoDate(value.createdAt, `${path}.createdAt`, issues);
+  const updatedAt = validateIsoDate(value.updatedAt, `${path}.updatedAt`, issues);
+  const lastRefreshedAt = value.lastRefreshedAt === undefined ? undefined : validateIsoDate(value.lastRefreshedAt, `${path}.lastRefreshedAt`, issues);
+  const tiles = validateTiles(value.tiles, `${path}.tiles`, issues, true);
+  const document = value.document === undefined ? undefined : validateDocument(value.document, `${path}.document`, issues);
+
+  if (issues.length > 0 || id === undefined || projectId === undefined || title === undefined || slug === undefined || status === undefined || pinned === undefined || preview === undefined || refreshStatus === undefined || createdAt === undefined || updatedAt === undefined || tiles === undefined) {
+    return fail(issues);
+  }
+  const liveArtifact: LiveArtifact = {
+    schemaVersion: 1,
+    id,
+    projectId,
+    title,
+    slug,
+    status,
+    pinned,
+    preview,
+    refreshStatus,
+    createdAt,
+    updatedAt,
+    tiles,
+  };
+  if (sessionId !== undefined) liveArtifact.sessionId = sessionId;
+  if (createdByRunId !== undefined) liveArtifact.createdByRunId = createdByRunId;
+  if (lastRefreshedAt !== undefined) liveArtifact.lastRefreshedAt = lastRefreshedAt;
+  if (document !== undefined) liveArtifact.document = document;
+  return ok(liveArtifact);
+}
+
+export function validateLiveArtifactCreateInput(value: unknown, path = 'input'): LiveArtifactValidationResult<LiveArtifactCreateInput> {
+  const issues: LiveArtifactValidationIssue[] = [];
+  if (!isPlainObject(value)) return fail([{ path, message: `${path} must be an object` }]);
+  validateNoDaemonOwnedFields(value, issues);
+  const title = asString(value.title, `${path}.title`, issues, MAX_TITLE_LENGTH);
+  const slug = asOptionalString(value.slug, `${path}.slug`, issues, MAX_SLUG_LENGTH);
+  const sessionId = asOptionalString(value.sessionId, `${path}.sessionId`, issues, MAX_ID_LENGTH);
+  const pinned = asOptionalBoolean(value.pinned, `${path}.pinned`, issues);
+  const status = value.status === undefined ? undefined : validateEnum(value.status, LIVE_ARTIFACT_STATUSES, `${path}.status`, issues);
+  const preview = validatePreview(value.preview, `${path}.preview`, issues);
+  const tiles = validateTiles(value.tiles, `${path}.tiles`, issues, false);
+  const document = value.document === undefined ? undefined : validateDocument(value.document, `${path}.document`, issues);
+  if (issues.length > 0 || title === undefined || preview === undefined) return fail(issues);
+  const input: LiveArtifactCreateInput = { title, preview };
+  if (slug !== undefined) input.slug = slug;
+  if (sessionId !== undefined) input.sessionId = sessionId;
+  if (pinned !== undefined) input.pinned = pinned;
+  if (status !== undefined) input.status = status;
+  if (tiles !== undefined) input.tiles = tiles;
+  if (document !== undefined) input.document = document;
+  return ok(input);
+}
+
+export function validateLiveArtifactUpdateInput(value: unknown, path = 'input'): LiveArtifactValidationResult<LiveArtifactUpdateInput> {
+  const issues: LiveArtifactValidationIssue[] = [];
+  if (!isPlainObject(value)) return fail([{ path, message: `${path} must be an object` }]);
+  validateNoDaemonOwnedFields(value, issues);
+  const title = asOptionalString(value.title, `${path}.title`, issues, MAX_TITLE_LENGTH);
+  const slug = asOptionalString(value.slug, `${path}.slug`, issues, MAX_SLUG_LENGTH);
+  const pinned = asOptionalBoolean(value.pinned, `${path}.pinned`, issues);
+  const status = value.status === undefined ? undefined : validateEnum(value.status, LIVE_ARTIFACT_STATUSES, `${path}.status`, issues);
+  const preview = value.preview === undefined ? undefined : validatePreview(value.preview, `${path}.preview`, issues);
+  const tiles = validateTiles(value.tiles, `${path}.tiles`, issues, false);
+  const document = value.document === undefined ? undefined : validateDocument(value.document, `${path}.document`, issues);
+  if (issues.length > 0) return fail(issues);
+  const input: LiveArtifactUpdateInput = {};
+  if (title !== undefined) input.title = title;
+  if (slug !== undefined) input.slug = slug;
+  if (pinned !== undefined) input.pinned = pinned;
+  if (status !== undefined) input.status = status;
+  if (preview !== undefined) input.preview = preview;
+  if (tiles !== undefined) input.tiles = tiles;
+  if (document !== undefined) input.document = document;
+  return ok(input);
+}
