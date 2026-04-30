@@ -14,6 +14,7 @@ import {
   liveArtifactStorePaths,
   liveArtifactTilePath,
   listLiveArtifacts,
+  updateLiveArtifact,
   validateLiveArtifactStorageId,
 } from '../src/live-artifacts/store.js';
 
@@ -327,6 +328,118 @@ describe('live artifact store layout', () => {
       templatePath: 'template.html',
       generatedPreviewPath: 'index.html',
       dataPath: 'data.json',
+    });
+  });
+
+  it('updates mutable live artifact presentation fields without changing daemon-owned fields', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    const created = await createLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      input: validCreateInput(),
+      createdByRunId: 'run-123',
+      now: new Date('2026-04-30T10:11:12.345Z'),
+    });
+
+    const originalTile = created.artifact.tiles[0]!;
+    const updatedTile = {
+      ...originalTile,
+      title: 'Updated Revenue',
+      renderJson: { type: 'metric' as const, label: 'Updated Revenue', value: 42, tone: 'good' as const },
+      sourceJson: {
+        type: 'local_file' as const,
+        input: { path: 'metrics.json' },
+        refreshPermission: 'none' as const,
+      },
+    };
+    const updatedDocument = {
+      ...created.artifact.document!,
+      dataJson: { title: 'Updated <Title>', owner: 'Ops' },
+      sourceJson: {
+        type: 'daemon_tool' as const,
+        toolName: 'project_files.read_json',
+        input: { file: 'metrics.json' },
+        refreshPermission: 'none' as const,
+      },
+    };
+
+    const record = await updateLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      artifactId: created.artifact.id,
+      input: {
+        title: 'Updated Dashboard',
+        slug: 'Updated Dashboard!',
+        pinned: false,
+        status: 'active',
+        preview: { type: 'html', entry: 'index.html' },
+        tiles: [updatedTile],
+        document: updatedDocument,
+      },
+      now: new Date('2026-04-30T10:12:12.345Z'),
+    });
+
+    expect(record.artifact).toMatchObject({
+      id: created.artifact.id,
+      projectId: 'project-1',
+      createdByRunId: 'run-123',
+      schemaVersion: 1,
+      title: 'Updated Dashboard',
+      slug: 'updated-dashboard',
+      pinned: false,
+      status: 'active',
+      refreshStatus: 'never',
+      createdAt: '2026-04-30T10:11:12.345Z',
+      updatedAt: '2026-04-30T10:12:12.345Z',
+      tiles: [updatedTile],
+      document: updatedDocument,
+    });
+    expect(await readFile(record.paths.dataJsonPath, 'utf8')).toBe(`${JSON.stringify(updatedDocument.dataJson, null, 2)}\n`);
+    expect(await readFile(liveArtifactTilePath(record.paths, updatedTile.id), 'utf8')).toBe(
+      `${JSON.stringify(updatedTile, null, 2)}\n`,
+    );
+    expect(await readFile(record.paths.generatedPreviewHtmlPath, 'utf8')).toContain('Updated &lt;Title&gt;');
+  });
+
+  it('rejects daemon-owned and run override fields in update input', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    const created = await createLiveArtifact({
+      projectsRoot,
+      projectId: 'project-1',
+      input: validCreateInput(),
+    });
+
+    await expect(
+      updateLiveArtifact({
+        projectsRoot,
+        projectId: 'project-1',
+        artifactId: created.artifact.id,
+        input: {
+          title: 'Should fail',
+          id: 'other',
+          projectId: 'other-project',
+          run: 'run-override',
+          runId: 'run-override',
+          createdAt: '2026-04-30T10:11:12.345Z',
+          updatedAt: '2026-04-30T10:11:12.345Z',
+          createdByRunId: 'run-override',
+          schemaVersion: 1,
+          refreshStatus: 'running',
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'LiveArtifactStoreValidationError',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: 'id' }),
+        expect.objectContaining({ path: 'projectId' }),
+        expect.objectContaining({ path: 'run' }),
+        expect.objectContaining({ path: 'runId' }),
+        expect.objectContaining({ path: 'createdAt' }),
+        expect.objectContaining({ path: 'updatedAt' }),
+        expect.objectContaining({ path: 'createdByRunId' }),
+        expect.objectContaining({ path: 'schemaVersion' }),
+        expect.objectContaining({ path: 'refreshStatus' }),
+      ]),
     });
   });
 

@@ -154,6 +154,8 @@ const LIVE_ARTIFACT_BOUNDED_JSON_CONSTRAINTS = {
 const DAEMON_OWNED_INPUT_FIELDS = new Set([
   'id',
   'projectId',
+  'run',
+  'runId',
   'createdAt',
   'updatedAt',
   'createdByRunId',

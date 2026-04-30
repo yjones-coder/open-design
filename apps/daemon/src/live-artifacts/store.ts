@@ -5,8 +5,8 @@ import path from 'node:path';
 
 import { ensureProject, projectDir } from '../projects.js';
 import { renderHtmlTemplateV1 } from './render.js';
-import type { LiveArtifact, LiveArtifactCreateInput, LiveArtifactProvenance, LiveArtifactValidationIssue } from './schema.js';
-import { validateLiveArtifactCreateInput, validatePersistedLiveArtifact } from './schema.js';
+import type { LiveArtifact, LiveArtifactCreateInput, LiveArtifactProvenance, LiveArtifactUpdateInput, LiveArtifactValidationIssue } from './schema.js';
+import { validateLiveArtifactCreateInput, validateLiveArtifactUpdateInput, validatePersistedLiveArtifact } from './schema.js';
 
 export type LiveArtifactSummary = Omit<LiveArtifact, 'document' | 'tiles'> & {
   tileCount: number;
@@ -96,6 +96,16 @@ export interface GetLiveArtifactOptions {
   projectsRoot: string;
   projectId: string;
   artifactId: string;
+}
+
+export interface UpdateLiveArtifactOptions {
+  projectsRoot: string;
+  projectId: string;
+  artifactId: string;
+  input: unknown;
+  templateHtml?: string;
+  provenanceJson?: LiveArtifactProvenance;
+  now?: Date;
 }
 
 export class LiveArtifactStoreValidationError extends Error {
@@ -290,6 +300,26 @@ async function writeLiveArtifactFiles(paths: LiveArtifactStorePaths, artifact: L
   ]);
 }
 
+async function readTextFileOrDefault(filePath: string, fallback: string): Promise<string> {
+  try {
+    return await readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return fallback;
+    throw error;
+  }
+}
+
+async function readProvenanceOrDefault(paths: LiveArtifactStorePaths, nowIso: string): Promise<LiveArtifactProvenance> {
+  try {
+    const parsed = JSON.parse(await readFile(paths.provenanceJsonPath, 'utf8')) as LiveArtifactProvenance;
+    return parsed;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw validationError('provenance.json', 'live artifact provenance file contains invalid JSON');
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return defaultProvenance(nowIso);
+    throw error;
+  }
+}
+
 export async function createLiveArtifact(options: CreateLiveArtifactOptions): Promise<LiveArtifactStoreRecord> {
   const result = validateLiveArtifactCreateInput(options.input);
   if (!result.ok) throw new LiveArtifactStoreValidationError(result.error, result.issues);
@@ -378,6 +408,41 @@ export async function getLiveArtifact(options: GetLiveArtifactOptions): Promise<
   const artifact = await readPersistedLiveArtifact(paths);
   assertArtifactMatchesStorage(artifact, options.projectId, artifactId);
   return { artifact, paths };
+}
+
+export async function updateLiveArtifact(options: UpdateLiveArtifactOptions): Promise<LiveArtifactStoreRecord> {
+  const artifactId = validateLiveArtifactStorageId(options.artifactId);
+  const result = validateLiveArtifactUpdateInput(options.input);
+  if (!result.ok) throw new LiveArtifactStoreValidationError(result.error, result.issues);
+
+  const input: LiveArtifactUpdateInput = result.value;
+  const paths = liveArtifactStorePaths(options.projectsRoot, options.projectId, artifactId);
+  const current = await readPersistedLiveArtifact(paths);
+  assertArtifactMatchesStorage(current, options.projectId, artifactId);
+
+  const nowIso = (options.now ?? new Date()).toISOString();
+  const updated: LiveArtifact = {
+    ...current,
+    title: input.title ?? current.title,
+    slug: input.slug === undefined ? current.slug : generateLiveArtifactSlug(input.slug),
+    pinned: input.pinned ?? current.pinned,
+    status: input.status ?? current.status,
+    preview: input.preview ?? current.preview,
+    tiles: input.tiles ?? current.tiles,
+    updatedAt: nowIso,
+  };
+  if (input.document !== undefined) updated.document = input.document;
+
+  const persisted = validatePersistedLiveArtifact(updated);
+  if (!persisted.ok) throw new LiveArtifactStoreValidationError(persisted.error, persisted.issues);
+
+  const templateHtml = options.templateHtml ?? await readTextFileOrDefault(paths.templateHtmlPath, defaultTemplateHtml(persisted.value.title));
+  const provenanceJson = options.provenanceJson ?? await readProvenanceOrDefault(paths, nowIso);
+
+  await rm(paths.tilesDir, { recursive: true, force: true });
+  await writeLiveArtifactFiles(paths, persisted.value, templateHtml, provenanceJson);
+
+  return { artifact: persisted.value, paths };
 }
 
 export function summarizeLiveArtifactRecord(record: LiveArtifactStoreRecord): LiveArtifactStoreSummary {

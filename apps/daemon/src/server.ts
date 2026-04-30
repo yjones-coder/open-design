@@ -57,6 +57,10 @@ import {
   updateProject,
   upsertMessage,
 } from './db.js';
+import {
+  LiveArtifactStoreValidationError,
+  updateLiveArtifact,
+} from './live-artifacts/store.js';
 
 /** @typedef {import('@open-design/contracts').ApiErrorCode} ApiErrorCode */
 /** @typedef {import('@open-design/contracts').ApiError} ApiError */
@@ -130,6 +134,18 @@ export function createCompatApiErrorResponse(code, message, init = {}) {
  */
 function sendApiError(res, status, code, message, init = {}) {
   return res.status(status).json(createCompatApiErrorResponse(code, message, init));
+}
+
+function sendLiveArtifactRouteError(res, err) {
+  if (err instanceof LiveArtifactStoreValidationError) {
+    return sendApiError(res, 400, 'LIVE_ARTIFACT_INVALID', err.message, {
+      details: { kind: 'validation', issues: err.issues },
+    });
+  }
+  if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+    return sendApiError(res, 404, 'LIVE_ARTIFACT_NOT_FOUND', 'live artifact not found');
+  }
+  return sendApiError(res, 500, 'LIVE_ARTIFACT_STORAGE_FAILED', String(err));
 }
 
 /**
@@ -835,6 +851,47 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       });
     } catch (err) {
       res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post('/api/tools/live-artifacts/update', async (req, res) => {
+    try {
+      const { projectId, artifactId, input } = req.body || {};
+      if (typeof projectId !== 'string' || projectId.length === 0) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId is required');
+      }
+      if (typeof artifactId !== 'string' || artifactId.length === 0) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'artifactId is required');
+      }
+
+      const record = await updateLiveArtifact({
+        projectsRoot: PROJECTS_DIR,
+        projectId,
+        artifactId,
+        input: input ?? {},
+      });
+      res.json({ artifact: record.artifact });
+    } catch (err) {
+      sendLiveArtifactRouteError(res, err);
+    }
+  });
+
+  app.patch('/api/live-artifacts/:artifactId', async (req, res) => {
+    try {
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+      if (!projectId) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
+      }
+
+      const record = await updateLiveArtifact({
+        projectsRoot: PROJECTS_DIR,
+        projectId,
+        artifactId: req.params.artifactId,
+        input: req.body ?? {},
+      });
+      res.json({ artifact: record.artifact });
+    } catch (err) {
+      sendLiveArtifactRouteError(res, err);
     }
   });
 
