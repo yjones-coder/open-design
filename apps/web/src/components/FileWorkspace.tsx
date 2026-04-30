@@ -414,7 +414,11 @@ export function FileWorkspace({
             <div className="viewer-empty">{t('workspace.loadingSketch')}</div>
           )
         ) : activeLiveArtifact ? (
-          <LiveArtifactViewer projectId={projectId} liveArtifact={activeLiveArtifact} />
+          <LiveArtifactViewer
+            projectId={projectId}
+            liveArtifact={activeLiveArtifact}
+            onRefreshArtifacts={onRefreshFiles}
+          />
         ) : activeFile ? (
           <FileViewer
             projectId={projectId}

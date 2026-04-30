@@ -452,6 +452,24 @@ export interface Dict {
   'fileViewer.templateNamePrompt': string;
   'fileViewer.templateNameDefault': string;
   'fileViewer.templateDescPrompt': string;
+  'liveArtifact.refresh.button': string;
+  'liveArtifact.refresh.buttonTitle': string;
+  'liveArtifact.refresh.loadingTitle': string;
+  'liveArtifact.refresh.noSourceTitle': string;
+  'liveArtifact.refresh.running': string;
+  'liveArtifact.refresh.runningMessage': string;
+  'liveArtifact.refresh.runningAction': string;
+  'liveArtifact.refresh.successOne': string;
+  'liveArtifact.refresh.successMany': string;
+  'liveArtifact.refresh.successAction': string;
+  'liveArtifact.refresh.previousFailure': string;
+  'liveArtifact.refresh.failureAction': string;
+  'liveArtifact.refresh.networkFailure': string;
+  'liveArtifact.refresh.genericFailure': string;
+  'liveArtifact.refresh.statusNever': string;
+  'liveArtifact.refresh.statusReady': string;
+  'liveArtifact.refresh.statusSucceeded': string;
+  'liveArtifact.refresh.statusFailed': string;
 
   // Question form (assistant question UX)
   'questionForm.submit': string;

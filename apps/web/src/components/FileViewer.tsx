@@ -9,6 +9,8 @@ import {
   liveArtifactPreviewUrl,
   projectFileUrl,
   projectRawUrl,
+  LiveArtifactRefreshError,
+  refreshLiveArtifact,
 } from '../providers/registry';
 import type { ProjectFilePreview } from '../providers/registry';
 import { exportAsHtml, exportAsPdf, exportAsZip } from '../runtime/exports';
@@ -76,9 +78,11 @@ export function FileViewer({
 export function LiveArtifactViewer({
   projectId,
   liveArtifact,
+  onRefreshArtifacts,
 }: {
   projectId: string;
   liveArtifact: LiveArtifactWorkspaceEntry;
+  onRefreshArtifacts?: () => Promise<void> | void;
 }) {
   const t = useT();
   const [mode, setMode] = useState<LiveArtifactViewerTab>('preview');
@@ -86,6 +90,20 @@ export function LiveArtifactViewer({
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const [zoom, setZoom] = useState(100);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshSuccess, setRefreshSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRefreshError(null);
+    setRefreshSuccess(null);
+  }, [projectId, liveArtifact.artifactId]);
+
+  useEffect(() => {
+    if (!refreshSuccess) return;
+    const timeout = window.setTimeout(() => setRefreshSuccess(null), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [refreshSuccess]);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,7 +117,7 @@ export function LiveArtifactViewer({
     return () => {
       cancelled = true;
     };
-  }, [projectId, liveArtifact.artifactId, liveArtifact.updatedAt, reloadKey]);
+  }, [projectId, liveArtifact.artifactId, liveArtifact.updatedAt]);
 
   const previewUrl = useMemo(
     () => `${liveArtifactPreviewUrl(projectId, liveArtifact.artifactId)}&v=${reloadKey}`,
@@ -111,10 +129,38 @@ export function LiveArtifactViewer({
     setZoom((z) => Math.max(25, Math.min(200, z + delta)));
   }
 
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    setRefreshSuccess(null);
+    try {
+      const result = await refreshLiveArtifact(projectId, liveArtifact.artifactId);
+      setDetail(result.artifact);
+      setReloadKey((n) => n + 1);
+      setRefreshSuccess(
+        result.refresh.refreshedTileCount === 1
+          ? t('liveArtifact.refresh.successOne')
+          : t('liveArtifact.refresh.successMany', { count: result.refresh.refreshedTileCount }),
+      );
+      await onRefreshArtifacts?.();
+    } catch (error) {
+      setRefreshError(refreshErrorMessage(error, t));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   const sourcePayload = detail ? liveArtifactSourcePayload(detail) : null;
   const dataPayload = detail?.document?.dataJson ?? null;
   const provenancePayload = detail ? liveArtifactProvenancePayload(detail) : null;
   const refreshPayload = detail ? liveArtifactRefreshPayload(detail) : null;
+  const currentRefreshStatus = detail?.refreshStatus ?? liveArtifact.refreshStatus;
+  const refreshableTileCount = detail
+    ? detail.tiles.filter((tile) => tile.sourceJson?.refreshPermission === 'manual_refresh_granted_for_read_only').length
+    : null;
+  const isRunning = refreshing || currentRefreshStatus === 'running';
+  const lastTileError = detail?.tiles.find((tile) => tile.lastError)?.lastError ?? null;
 
   return (
     <div className="viewer html-viewer live-artifact-viewer">
@@ -130,10 +176,29 @@ export function LiveArtifactViewer({
             <Icon name="reload" size={14} />
           </button>
           <span className="viewer-meta">
-            Live artifact · {liveArtifact.refreshStatus}
+            Live artifact · {refreshStatusLabel(currentRefreshStatus, t)}
           </span>
         </div>
         <div className="viewer-toolbar-actions">
+          <button
+            type="button"
+            className="viewer-action primary"
+            onClick={() => void handleRefresh()}
+            disabled={isRunning || loading || refreshableTileCount === 0}
+            aria-busy={isRunning}
+            aria-label={isRunning ? t('liveArtifact.refresh.running') : t('liveArtifact.refresh.button')}
+            title={
+              loading
+                ? t('liveArtifact.refresh.loadingTitle')
+                : refreshableTileCount === 0
+                  ? t('liveArtifact.refresh.noSourceTitle')
+                  : t('liveArtifact.refresh.buttonTitle')
+            }
+          >
+            <Icon name={isRunning ? 'spinner' : 'reload'} size={13} />
+            <span>{isRunning ? t('liveArtifact.refresh.running') : t('liveArtifact.refresh.button')}</span>
+          </button>
+          <span className="viewer-divider" aria-hidden />
           <div className="viewer-tabs">
             {LIVE_ARTIFACT_VIEWER_TABS.map((tab) => (
               <button
@@ -190,6 +255,33 @@ export function LiveArtifactViewer({
         </div>
       </div>
       <div className="viewer-body">
+        {refreshError ? (
+          <LiveArtifactRefreshNotice
+            tone="error"
+            message={refreshError}
+            action={t('liveArtifact.refresh.failureAction')}
+          />
+        ) : refreshSuccess ? (
+          <LiveArtifactRefreshNotice
+            tone="success"
+            message={refreshSuccess}
+            action={t('liveArtifact.refresh.successAction')}
+            onDismiss={() => setRefreshSuccess(null)}
+            dismissLabel={t('common.close')}
+          />
+        ) : isRunning ? (
+          <LiveArtifactRefreshNotice
+            tone="running"
+            message={t('liveArtifact.refresh.runningMessage')}
+            action={t('liveArtifact.refresh.runningAction')}
+          />
+        ) : currentRefreshStatus === 'failed' && lastTileError ? (
+          <LiveArtifactRefreshNotice
+            tone="error"
+            message={t('liveArtifact.refresh.previousFailure', { message: lastTileError })}
+            action={t('liveArtifact.refresh.failureAction')}
+          />
+        ) : null}
         {mode === 'preview' ? (
           <div
             style={{
@@ -220,6 +312,61 @@ export function LiveArtifactViewer({
       </div>
     </div>
   );
+}
+
+function LiveArtifactRefreshNotice({
+  tone,
+  message,
+  action,
+  onDismiss,
+  dismissLabel,
+}: {
+  tone: 'running' | 'success' | 'error';
+  message: string;
+  action: string;
+  onDismiss?: () => void;
+  dismissLabel?: string;
+}) {
+  return (
+    <div
+      className={`live-artifact-refresh-notice ${tone}`}
+      role={tone === 'error' ? 'alert' : 'status'}
+      aria-label={`${message} ${action}`}
+    >
+      <span className="live-artifact-refresh-notice-copy">
+        <strong>{message}</strong>
+        <span>{action}</span>
+      </span>
+      {onDismiss ? (
+        <button type="button" className="icon-only" onClick={onDismiss} aria-label={dismissLabel}>
+          ×
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function refreshStatusLabel(status: LiveArtifact['refreshStatus'], t: TranslateFn): string {
+  switch (status) {
+    case 'never':
+      return t('liveArtifact.refresh.statusNever');
+    case 'idle':
+      return t('liveArtifact.refresh.statusReady');
+    case 'running':
+      return t('liveArtifact.refresh.running');
+    case 'succeeded':
+      return t('liveArtifact.refresh.statusSucceeded');
+    case 'failed':
+      return t('liveArtifact.refresh.statusFailed');
+  }
+}
+
+function refreshErrorMessage(error: unknown, t: TranslateFn): string {
+  if (error instanceof LiveArtifactRefreshError && error.status === 0) {
+    return t('liveArtifact.refresh.networkFailure');
+  }
+  if (error instanceof Error && error.message.length > 0) return error.message;
+  return t('liveArtifact.refresh.genericFailure');
 }
 
 const LIVE_ARTIFACT_VIEWER_TABS: Array<{ id: LiveArtifactViewerTab; label: string }> = [

@@ -127,6 +127,64 @@ export async function fetchLiveArtifact(
   }
 }
 
+export interface LiveArtifactRefreshResult {
+  artifact: LiveArtifact;
+  refresh: {
+    id: string;
+    status: 'succeeded';
+    refreshedTileCount: number;
+  };
+}
+
+export class LiveArtifactRefreshError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'LiveArtifactRefreshError';
+  }
+}
+
+export async function refreshLiveArtifact(
+  projectId: string,
+  artifactId: string,
+): Promise<LiveArtifactRefreshResult> {
+  let resp: Response;
+  try {
+    resp = await fetch(
+      `/api/live-artifacts/${encodeURIComponent(artifactId)}/refresh?projectId=${encodeURIComponent(projectId)}`,
+      { method: 'POST' },
+    );
+  } catch (error) {
+    throw new LiveArtifactRefreshError(
+      error instanceof Error ? error.message : 'Refresh request failed.',
+      0,
+    );
+  }
+
+  if (!resp.ok) {
+    const errorBody = await readApiErrorBody(resp);
+    throw new LiveArtifactRefreshError(errorBody.message, resp.status, errorBody.code);
+  }
+
+  return (await resp.json()) as LiveArtifactRefreshResult;
+}
+
+async function readApiErrorBody(resp: Response): Promise<{ message: string; code?: string }> {
+  try {
+    const json = (await resp.json()) as { error?: { code?: string; message?: string }; message?: string };
+    const message = json.error?.message ?? json.message;
+    return {
+      message: typeof message === 'string' && message.length > 0 ? message : `Request failed (${resp.status}).`,
+      ...(typeof json.error?.code === 'string' ? { code: json.error.code } : {}),
+    };
+  } catch {
+    return { message: `Request failed (${resp.status}).` };
+  }
+}
+
 export function liveArtifactDetailUrl(projectId: string, artifactId: string): string {
   return `/api/live-artifacts/${encodeURIComponent(artifactId)}?projectId=${encodeURIComponent(projectId)}`;
 }
