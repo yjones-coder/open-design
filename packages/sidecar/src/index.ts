@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer as createNetServer, type Server } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -437,9 +437,42 @@ export async function removePointerIfCurrent(pointerPath: string, runId: string)
   if (pointer?.runId === runId) await removeFile(pointerPath);
 }
 
+async function staleUnixSocketExists(socketPath: string): Promise<boolean> {
+  try {
+    const stat = await lstat(socketPath);
+    if (!stat.isSocket()) return false;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
+  }
+
+  return await new Promise<boolean>((resolveStale, rejectStale) => {
+    const socket = createConnection(socketPath);
+    let settled = false;
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      callback();
+    };
+
+    socket.once("connect", () => settle(() => resolveStale(false)));
+    socket.once("error", (error) => {
+      const code = errorCode(error);
+      if (code === "ENOENT" || code === "ECONNREFUSED") {
+        settle(() => resolveStale(true));
+        return;
+      }
+      settle(() => rejectStale(error));
+    });
+  });
+}
+
 async function prepareIpcPath(socketPath: string): Promise<void> {
   if (isWindowsNamedPipePath(socketPath)) return;
   await mkdir(dirname(socketPath), { recursive: true });
+  if (await staleUnixSocketExists(socketPath)) await rm(socketPath, { force: true });
 }
 
 export async function createJsonIpcServer({
