@@ -55,5 +55,7 @@ describe('buildReactComponentSrcdoc', () => {
     expect(doc).toContain('react@18/umd/react.development.js');
     expect(doc).toContain('@babel/standalone');
     expect(doc).toContain('artifact.tsx');
+    expect(doc).toContain('sandboxed iframe');
+    expect(doc).toContain('(0, eval)(compiled)');
   });
 });

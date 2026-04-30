@@ -128,6 +128,7 @@ function ReactComponentViewer({
   const t = useT();
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
   const [source, setSource] = useState<string | null>(null);
+  const [srcDoc, setSrcDoc] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   const shareRef = useRef<HTMLDivElement | null>(null);
@@ -162,10 +163,33 @@ function ReactComponentViewer({
 
   const exportTitle = file.name.replace(/\.(jsx|tsx)$/i, '') || file.name;
   const sourceExtension = file.name.toLowerCase().endsWith('.tsx') ? '.tsx' : '.jsx';
-  const srcDoc = useMemo(
-    () => (source === null ? '' : buildReactComponentSrcdoc(source, { title: exportTitle })),
-    [source, exportTitle],
-  );
+
+  useEffect(() => {
+    if (source === null) {
+      setSrcDoc('');
+      return;
+    }
+
+    let cancelled = false;
+    const buildSrcDoc = () => {
+      const nextSrcDoc = buildReactComponentSrcdoc(source, { title: exportTitle });
+      if (!cancelled) setSrcDoc(nextSrcDoc);
+    };
+
+    if (source.length > 100_000) {
+      setSrcDoc('');
+      const timeout = window.setTimeout(buildSrcDoc, 0);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timeout);
+      };
+    }
+
+    buildSrcDoc();
+    return () => {
+      cancelled = true;
+    };
+  }, [source, exportTitle]);
 
   return (
     <div className="viewer react-component-viewer">
@@ -262,7 +286,7 @@ function ReactComponentViewer({
         </div>
       </div>
       <div className="viewer-body">
-        {source === null ? (
+        {source === null || (mode === 'preview' && !srcDoc) ? (
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
         ) : mode === 'preview' ? (
           <iframe

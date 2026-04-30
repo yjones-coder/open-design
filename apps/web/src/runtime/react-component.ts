@@ -56,14 +56,23 @@ export function buildReactComponentSrcdoc(
           el.textContent = err && (err.stack || err.message) ? (err.stack || err.message) : String(err);
           root.appendChild(el);
         }
+        if (!window.React || !window.ReactDOM || !window.Babel) {
+          showError(new Error('React preview runtime failed to load.'));
+          return;
+        }
+        var compiled;
         try {
-          if (!window.React || !window.ReactDOM || !window.Babel) {
-            throw new Error('React preview runtime failed to load.');
-          }
-          var compiled = window.Babel.transform(${sourceJson}, {
+          compiled = window.Babel.transform(${sourceJson}, {
             filename: 'artifact.tsx',
             presets: ['typescript', 'react'],
           }).code;
+        } catch (err) {
+          showError(err);
+          return;
+        }
+        try {
+          // User-authored JSX runs only inside this sandboxed iframe. The parent omits
+          // allow-same-origin, so runtime effects are confined to the preview document.
           (0, eval)(compiled);
           var Component = window.__OpenDesignComponent ||
             (typeof App !== 'undefined' ? App : null) ||
