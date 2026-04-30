@@ -129,6 +129,30 @@ describe('live artifact schema validation', () => {
         },
       },
     });
+    const sourceWindowsAbsolutePath = validateLiveArtifactCreateInput({
+      ...validCreateInput(),
+      document: {
+        ...validCreateInput().document,
+        sourceJson: {
+          type: 'local_file',
+          toolName: 'project_files.read_json',
+          input: { file: 'C:\\Users\\secrets.json' },
+          refreshPermission: 'none',
+        },
+      },
+    });
+    const sourceBackslashAbsolutePath = validateLiveArtifactCreateInput({
+      ...validCreateInput(),
+      document: {
+        ...validCreateInput().document,
+        sourceJson: {
+          type: 'local_file',
+          toolName: 'project_files.read_json',
+          input: { file: '\\etc\\passwd' },
+          refreshPermission: 'none',
+        },
+      },
+    });
     const provenanceTraversal = validateLiveArtifactCreateInput({
       ...validCreateInput(),
       tiles: [
@@ -142,7 +166,14 @@ describe('live artifact schema validation', () => {
       ],
     });
 
-    for (const result of [previewTraversal, sourceTraversal, sourceAbsolutePath, provenanceTraversal]) {
+    for (const result of [
+      previewTraversal,
+      sourceTraversal,
+      sourceAbsolutePath,
+      sourceWindowsAbsolutePath,
+      sourceBackslashAbsolutePath,
+      provenanceTraversal,
+    ]) {
       expect(result.ok).toBe(false);
     }
   });

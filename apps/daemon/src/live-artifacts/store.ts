@@ -28,6 +28,22 @@ const MAX_LIVE_ARTIFACT_STORAGE_ID_LENGTH = 128;
 const MAX_LIVE_ARTIFACT_SLUG_LENGTH = 128;
 const FALLBACK_LIVE_ARTIFACT_SLUG = 'live-artifact';
 
+function isPathInside(parentDir: string, targetPath: string): boolean {
+  const relative = path.relative(parentDir, targetPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolveInside(parentDir: string, relativePath: string, escapeMessage: string): string {
+  if (path.isAbsolute(relativePath) || relativePath.includes('\0')) {
+    throw new Error(escapeMessage);
+  }
+  const targetPath = path.resolve(parentDir, relativePath);
+  if (!isPathInside(parentDir, targetPath)) {
+    throw new Error(escapeMessage);
+  }
+  return targetPath;
+}
+
 export interface LiveArtifactStorePaths {
   projectDir: string;
   rootDir: string;
@@ -99,7 +115,8 @@ export function validateLiveArtifactStorageId(artifactId: string): string {
 }
 
 export function liveArtifactsRootDir(projectsRoot: string, projectId: string): string {
-  return path.join(projectDir(projectsRoot, projectId), LIVE_ARTIFACTS_DIR_NAME);
+  const projectDirPath = path.resolve(projectDir(projectsRoot, projectId));
+  return resolveInside(projectDirPath, LIVE_ARTIFACTS_DIR_NAME, 'live artifact path escapes project dir');
 }
 
 export function liveArtifactStorePaths(
@@ -108,31 +125,32 @@ export function liveArtifactStorePaths(
   artifactId: string,
 ): LiveArtifactStorePaths {
   const safeArtifactId = validateLiveArtifactStorageId(artifactId);
-  const projectDirPath = projectDir(projectsRoot, projectId);
-  const rootDir = path.join(projectDirPath, LIVE_ARTIFACTS_DIR_NAME);
-  const artifactDir = path.resolve(rootDir, safeArtifactId);
-  if (!artifactDir.startsWith(rootDir + path.sep)) {
-    throw new Error('live artifact path escapes storage root');
-  }
+  const projectDirPath = path.resolve(projectDir(projectsRoot, projectId));
+  const rootDir = liveArtifactsRootDir(projectsRoot, projectId);
+  const artifactDir = resolveInside(rootDir, safeArtifactId, 'live artifact path escapes storage root');
+  if (!isPathInside(projectDirPath, artifactDir)) throw new Error('live artifact path escapes project dir');
 
   return {
     projectDir: projectDirPath,
     rootDir,
     artifactDir,
-    artifactJsonPath: path.join(artifactDir, LIVE_ARTIFACT_ARTIFACT_FILE),
-    templateHtmlPath: path.join(artifactDir, LIVE_ARTIFACT_TEMPLATE_FILE),
-    generatedPreviewHtmlPath: path.join(artifactDir, LIVE_ARTIFACT_PREVIEW_FILE),
-    dataJsonPath: path.join(artifactDir, LIVE_ARTIFACT_DATA_FILE),
-    provenanceJsonPath: path.join(artifactDir, LIVE_ARTIFACT_PROVENANCE_FILE),
-    tilesDir: path.join(artifactDir, LIVE_ARTIFACT_TILES_DIR),
-    refreshesJsonlPath: path.join(artifactDir, LIVE_ARTIFACT_REFRESHES_FILE),
-    snapshotsDir: path.join(artifactDir, LIVE_ARTIFACT_SNAPSHOTS_DIR),
+    artifactJsonPath: resolveInside(artifactDir, LIVE_ARTIFACT_ARTIFACT_FILE, 'live artifact path escapes artifact dir'),
+    templateHtmlPath: resolveInside(artifactDir, LIVE_ARTIFACT_TEMPLATE_FILE, 'live artifact path escapes artifact dir'),
+    generatedPreviewHtmlPath: resolveInside(artifactDir, LIVE_ARTIFACT_PREVIEW_FILE, 'live artifact path escapes artifact dir'),
+    dataJsonPath: resolveInside(artifactDir, LIVE_ARTIFACT_DATA_FILE, 'live artifact path escapes artifact dir'),
+    provenanceJsonPath: resolveInside(artifactDir, LIVE_ARTIFACT_PROVENANCE_FILE, 'live artifact path escapes artifact dir'),
+    tilesDir: resolveInside(artifactDir, LIVE_ARTIFACT_TILES_DIR, 'live artifact path escapes artifact dir'),
+    refreshesJsonlPath: resolveInside(artifactDir, LIVE_ARTIFACT_REFRESHES_FILE, 'live artifact path escapes artifact dir'),
+    snapshotsDir: resolveInside(artifactDir, LIVE_ARTIFACT_SNAPSHOTS_DIR, 'live artifact path escapes artifact dir'),
   };
 }
 
 export function liveArtifactTilePath(paths: LiveArtifactStorePaths, tileId: string): string {
   const safeTileId = validateLiveArtifactStorageId(tileId);
-  return path.join(paths.tilesDir, `${safeTileId}.json`);
+  const tilesDir = path.resolve(paths.tilesDir);
+  const tilePath = resolveInside(tilesDir, `${safeTileId}.json`, 'live artifact tile path escapes tiles dir');
+  if (!isPathInside(path.resolve(paths.projectDir), tilePath)) throw new Error('live artifact path escapes project dir');
+  return tilePath;
 }
 
 export async function ensureLiveArtifactStoreLayout(

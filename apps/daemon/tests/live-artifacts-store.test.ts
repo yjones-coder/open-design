@@ -101,7 +101,25 @@ describe('live artifact store layout', () => {
 
     expect(() => liveArtifactStorePaths(projectsRoot, 'project-1', '../artifact')).toThrow(/invalid live artifact id/);
     expect(() => liveArtifactStorePaths(projectsRoot, 'project-1', '/artifact')).toThrow(/invalid live artifact id/);
+    expect(() => liveArtifactStorePaths(projectsRoot, '../project-1', 'artifact-1')).toThrow(/invalid project id/);
+    expect(() => liveArtifactStorePaths(projectsRoot, '/project-1', 'artifact-1')).toThrow(/invalid project id/);
     expect(() => liveArtifactTilePath(paths, '../tile')).toThrow(/invalid live artifact id/);
+    expect(() => liveArtifactTilePath(paths, '/tile')).toThrow(/invalid live artifact id/);
+  });
+
+  it('rejects absolute and traversal paths from generic project file payloads', async () => {
+    const projectsRoot = await makeProjectsRoot();
+    await ensureLiveArtifactStoreLayout(projectsRoot, 'project-1', 'artifact-1');
+
+    await expect(writeProjectFile(projectsRoot, 'project-1', '/absolute.txt', Buffer.from('x'))).rejects.toThrow(
+      /invalid file name/,
+    );
+    await expect(writeProjectFile(projectsRoot, 'project-1', '\\absolute.txt', Buffer.from('x'))).rejects.toThrow(
+      /invalid file name/,
+    );
+    await expect(writeProjectFile(projectsRoot, 'project-1', 'nested/../secret.txt', Buffer.from('x'))).rejects.toThrow(
+      /invalid file name/,
+    );
   });
 
   it('excludes .live-artifacts from generic project file reads, writes, deletes, and listings', async () => {
