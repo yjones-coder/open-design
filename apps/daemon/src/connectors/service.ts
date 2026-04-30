@@ -40,6 +40,8 @@ export type ConnectorServiceErrorCode =
   | 'CONNECTOR_TOOL_NOT_FOUND'
   | 'CONNECTOR_SAFETY_DENIED'
   | 'CONNECTOR_INPUT_SCHEMA_MISMATCH'
+  | 'CONNECTOR_RATE_LIMITED'
+  | 'CONNECTOR_OUTPUT_TOO_LARGE'
   | 'CONNECTOR_EXECUTION_FAILED';
 
 export class ConnectorServiceError extends Error {
@@ -236,7 +238,95 @@ export interface ConnectorExecutionContext {
   signal?: AbortSignal;
 }
 
+export const CONNECTOR_MAX_OUTPUT_BYTES = 256 * 1024;
+export const CONNECTOR_RUN_RATE_LIMIT_CALLS = 10;
+export const CONNECTOR_RUN_RATE_LIMIT_WINDOW_MS = 60_000;
+export const CONNECTOR_RUN_TOTAL_CALL_LIMIT = 60;
+
+const CONNECTOR_REDACTED_VALUE = '[redacted]';
+
+const CONNECTOR_FORBIDDEN_OUTPUT_KEYS = new Set([
+  'raw',
+  'rawresponse',
+  'payload',
+  'body',
+  'headers',
+  'cookie',
+  'authorization',
+  'token',
+  'secret',
+  'credential',
+  'password',
+]);
+
+interface ConnectorRunLimitState {
+  windowStartedAt: number;
+  windowCalls: number;
+  totalCalls: number;
+}
+
+export interface ConnectorOutputProtectionResult {
+  output: BoundedJsonValue;
+  redacted: boolean;
+  serializedBytes: number;
+}
+
+function connectorRunLimitKey(context: ConnectorExecutionContext): string {
+  return `${context.projectId}\0${context.runId ?? `${context.purpose ?? 'agent_preview'}:no-run-id`}`;
+}
+
+function jsonSerializedBytes(value: BoundedJsonValue): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function isForbiddenConnectorOutputKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return CONNECTOR_FORBIDDEN_OUTPUT_KEYS.has(normalized) || /(?:token|secret|credential|password|authorization|cookie)/i.test(key);
+}
+
+function redactConnectorOutputValue(value: BoundedJsonValue): { value: BoundedJsonValue; redacted: boolean } {
+  if (Array.isArray(value)) {
+    let redacted = false;
+    const next = value.map((item) => {
+      const child = redactConnectorOutputValue(item);
+      redacted = child.redacted || redacted;
+      return child.value;
+    });
+    return { value: next, redacted };
+  }
+  if (value !== null && typeof value === 'object') {
+    let redacted = false;
+    const next: BoundedJsonObject = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (isForbiddenConnectorOutputKey(key)) {
+        next[key] = CONNECTOR_REDACTED_VALUE;
+        redacted = true;
+        continue;
+      }
+      const redactedChild = redactConnectorOutputValue(child);
+      next[key] = redactedChild.value;
+      redacted = redactedChild.redacted || redacted;
+    }
+    return { value: next, redacted };
+  }
+  return { value, redacted: false };
+}
+
+export function protectConnectorOutput(output: BoundedJsonValue): ConnectorOutputProtectionResult {
+  const redacted = redactConnectorOutputValue(output);
+  const serializedBytes = jsonSerializedBytes(redacted.value);
+  if (serializedBytes > CONNECTOR_MAX_OUTPUT_BYTES) {
+    throw new ConnectorServiceError('CONNECTOR_OUTPUT_TOO_LARGE', 'connector output exceeds max serialized size', 502, {
+      maxSerializedBytes: CONNECTOR_MAX_OUTPUT_BYTES,
+      serializedBytes,
+    });
+  }
+  return { output: redacted.value, redacted: redacted.redacted, serializedBytes };
+}
+
 export class ConnectorService {
+  private readonly runLimits = new Map<string, ConnectorRunLimitState>();
+
   constructor(private readonly statusService = new ConnectorStatusService()) {}
 
   listDefinitions(): ConnectorCatalogDefinition[] {
@@ -354,17 +444,11 @@ export class ConnectorService {
       });
     }
 
-    const output = await executeLocalDaemonRefreshSource({
-      projectsRoot: context.projectsRoot,
-      projectId: context.projectId,
-      source: {
-        type: 'daemon_tool',
-        toolName: request.toolName,
-        input: request.input,
-        refreshPermission: 'none',
-      },
-      ...(context.signal === undefined ? {} : { signal: context.signal }),
-    });
+    this.enforceRunLimits(context);
+
+    const providerOutput = await this.executeConnectorProviderTool(request, context);
+    const protectedOutput = protectConnectorOutput(providerOutput);
+    const output = protectedOutput.output;
     const outputSummary = summarizeConnectorOutput(output);
 
     return {
@@ -379,9 +463,54 @@ export class ConnectorService {
         connectorId: request.connectorId,
         toolName: request.toolName,
         purpose: context.purpose ?? 'agent_preview',
+        outputSerializedBytes: protectedOutput.serializedBytes,
+        ...(protectedOutput.redacted ? { redacted: true } : {}),
         ...(context.runId === undefined ? {} : { runId: context.runId }),
       },
     };
+  }
+
+  protected async executeConnectorProviderTool(request: ConnectorExecuteRequest, context: ConnectorExecutionContext): Promise<BoundedJsonObject> {
+    return await executeLocalDaemonRefreshSource({
+      projectsRoot: context.projectsRoot,
+      projectId: context.projectId,
+      source: {
+        type: 'daemon_tool',
+        toolName: request.toolName,
+        input: request.input,
+        refreshPermission: 'none',
+      },
+      ...(context.signal === undefined ? {} : { signal: context.signal }),
+    });
+  }
+
+  private enforceRunLimits(context: ConnectorExecutionContext): void {
+    if (context.runId === undefined) return;
+
+    const now = Date.now();
+    const key = connectorRunLimitKey(context);
+    const current = this.runLimits.get(key);
+    const state: ConnectorRunLimitState = current === undefined || now - current.windowStartedAt >= CONNECTOR_RUN_RATE_LIMIT_WINDOW_MS
+      ? { windowStartedAt: now, windowCalls: 0, totalCalls: current?.totalCalls ?? 0 }
+      : current;
+
+    if (state.totalCalls >= CONNECTOR_RUN_TOTAL_CALL_LIMIT) {
+      throw new ConnectorServiceError('CONNECTOR_RATE_LIMITED', 'connector tool run call limit exceeded', 429, {
+        runId: context.runId ?? null,
+        totalCallLimit: CONNECTOR_RUN_TOTAL_CALL_LIMIT,
+      });
+    }
+    if (state.windowCalls >= CONNECTOR_RUN_RATE_LIMIT_CALLS) {
+      throw new ConnectorServiceError('CONNECTOR_RATE_LIMITED', 'connector tool rate limit exceeded', 429, {
+        runId: context.runId ?? null,
+        rateLimit: CONNECTOR_RUN_RATE_LIMIT_CALLS,
+        windowMs: CONNECTOR_RUN_RATE_LIMIT_WINDOW_MS,
+      });
+    }
+
+    state.windowCalls += 1;
+    state.totalCalls += 1;
+    this.runLimits.set(key, state);
   }
 
   private toDetail(definition: ConnectorCatalogDefinition): ConnectorDetail {

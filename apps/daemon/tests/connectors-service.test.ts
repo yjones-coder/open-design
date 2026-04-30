@@ -1,15 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  CONNECTOR_RUN_RATE_LIMIT_CALLS,
+  CONNECTOR_RUN_TOTAL_CALL_LIMIT,
   ConnectorService,
   ConnectorServiceError,
   ConnectorStatusService,
+  type ConnectorExecuteRequest,
+  type ConnectorExecutionContext,
 } from '../src/connectors/service.js';
 import {
   classifyConnectorToolSafety,
   isRefreshEligibleConnectorToolSafety,
   type ConnectorCatalogDefinition,
 } from '../src/connectors/catalog.js';
+import type { BoundedJsonObject } from '../src/live-artifacts/schema.js';
 
 function externalConnector(overrides: Partial<ConnectorCatalogDefinition> = {}): ConnectorCatalogDefinition {
   return {
@@ -39,6 +44,38 @@ class TestConnectorService extends ConnectorService {
     return connectorId === this.definition.id ? this.definition : undefined;
   }
 }
+
+class OutputTestConnectorService extends TestConnectorService {
+  constructor(
+    definition: ConnectorCatalogDefinition,
+    statusService: ConnectorStatusService,
+    private readonly output: BoundedJsonObject = { ok: true },
+  ) {
+    super(definition, statusService);
+  }
+
+  protected override async executeConnectorProviderTool(_request: ConnectorExecuteRequest, _context: ConnectorExecutionContext): Promise<BoundedJsonObject> {
+    return this.output;
+  }
+}
+
+function readOnlyDefinition(): ConnectorCatalogDefinition {
+  return externalConnector({
+    tools: [{
+      name: 'docs.search',
+      title: 'Search docs',
+      requiredScopes: ['docs:read'],
+      safety: { sideEffect: 'read', approval: 'auto', reason: 'read-only docs search' },
+      refreshEligible: true,
+    }],
+    allowedToolNames: ['docs.search'],
+    minimumApproval: 'auto',
+  });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('connector status service', () => {
   it('reports local read-only connectors as connected with account labels', () => {
@@ -194,5 +231,76 @@ describe('connector execution policy', () => {
       { connectorId: 'external_docs', toolName: 'docs.update_page', input: {} },
       { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
     )).rejects.toMatchObject({ code: 'CONNECTOR_SAFETY_DENIED' });
+  });
+
+  it('redacts credential and provider-envelope fields from connector outputs', async () => {
+    const definition = readOnlyDefinition();
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'docs@example.com');
+    const service = new OutputTestConnectorService(definition, statusService, {
+      toolName: 'docs.search',
+      count: 1,
+      rawResponse: { id: 'provider-envelope' },
+      item: {
+        title: 'Safe title',
+        authorization: 'Bearer secret-token',
+        nestedApiToken: 'secret-token',
+      },
+    });
+
+    const response = await service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.search', input: {} },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', runId: 'run-redact', purpose: 'agent_preview' },
+    );
+
+    expect(response.output).toMatchObject({
+      rawResponse: '[redacted]',
+      item: {
+        title: 'Safe title',
+        authorization: '[redacted]',
+        nestedApiToken: '[redacted]',
+      },
+    });
+    expect(response.metadata).toMatchObject({ redacted: true });
+    expect(JSON.stringify(response.output)).not.toContain('secret-token');
+    expect(JSON.stringify(response.output)).not.toContain('provider-envelope');
+  });
+
+  it('rejects connector outputs above the serialized size limit', async () => {
+    const definition = readOnlyDefinition();
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'docs@example.com');
+    const service = new OutputTestConnectorService(definition, statusService, {
+      toolName: 'docs.search',
+      data: 'x'.repeat(257 * 1024),
+    });
+
+    await expect(service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.search', input: {} },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', runId: 'run-large', purpose: 'agent_preview' },
+    )).rejects.toMatchObject({ code: 'CONNECTOR_OUTPUT_TOO_LARGE', status: 502 });
+  });
+
+  it('enforces per-run connector rate and total call limits', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-30T00:00:00.000Z'));
+    const definition = readOnlyDefinition();
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'docs@example.com');
+    const service = new OutputTestConnectorService(definition, statusService, { toolName: 'docs.search', count: 0 });
+    const request = { connectorId: 'external_docs', toolName: 'docs.search', input: {} };
+    const context = { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', runId: 'run-limits', purpose: 'agent_preview' } as const;
+
+    for (let index = 0; index < CONNECTOR_RUN_RATE_LIMIT_CALLS; index += 1) {
+      await expect(service.execute(request, context)).resolves.toMatchObject({ ok: true });
+    }
+    await expect(service.execute(request, context)).rejects.toMatchObject({ code: 'CONNECTOR_RATE_LIMITED', status: 429 });
+
+    for (let index = CONNECTOR_RUN_RATE_LIMIT_CALLS; index < CONNECTOR_RUN_TOTAL_CALL_LIMIT; index += 1) {
+      vi.advanceTimersByTime(60_000);
+      await expect(service.execute(request, context)).resolves.toMatchObject({ ok: true });
+    }
+    vi.advanceTimersByTime(60_000);
+    await expect(service.execute(request, context)).rejects.toMatchObject({ code: 'CONNECTOR_RATE_LIMITED', status: 429 });
   });
 });
