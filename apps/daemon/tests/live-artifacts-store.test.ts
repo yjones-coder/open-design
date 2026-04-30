@@ -47,7 +47,7 @@ function validCreateInput() {
         renderJson: {
           type: 'metric' as const,
           label: 'Revenue',
-          value: '<script>alert("x")</script>',
+          value: '$42K',
         },
         provenanceJson: {
           generatedAt: '2026-04-29T12:00:00.000Z',

@@ -60,6 +60,11 @@ async function jsonFetch(url, init) {
   return { status: response.status, body: await response.json() };
 }
 
+async function textFetch(url, init) {
+  const response = await fetch(url, init);
+  return { status: response.status, headers: response.headers, body: await response.text() };
+}
+
 function mintToolToken(projectId, runId, overrides = {}) {
   return toolTokenRegistry.mint({
     projectId,
@@ -112,6 +117,89 @@ describe('live artifact tool routes', () => {
     });
     expect(list.body.artifacts[0].document).toBeUndefined();
     expect(list.body.artifacts[0].tiles).toBeUndefined();
+  });
+
+  it('serves live artifact previews with restrictive iframe headers', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-preview');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Preview Route Artifact'),
+        templateHtml: '<!doctype html><html><body><h1>{{data.title}}</h1><p>{{data.owner}}</p></body></html>',
+      }),
+    });
+
+    expect(create.status).toBe(200);
+    const preview = await textFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/preview?projectId=${encodeURIComponent(projectId)}`);
+
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get('content-type')).toContain('text/html');
+    expect(preview.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(preview.headers.get('referrer-policy')).toBe('no-referrer');
+    const csp = preview.headers.get('content-security-policy') || '';
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("frame-ancestors 'self'");
+    expect(csp).toContain('sandbox allow-same-origin');
+    expect(preview.body).toContain('<h1>Preview Route Artifact</h1>');
+    expect(preview.body).toContain('<p>Agent</p>');
+  });
+
+  it('rejects executable script in persisted render JSON', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-render-json-script');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: {
+          ...validCreateInput('Unsafe Render JSON'),
+          tiles: [
+            {
+              id: 'unsafe-tile',
+              kind: 'markdown',
+              title: 'Unsafe tile',
+              renderJson: { type: 'markdown', markdown: '<script>alert(1)</script>' },
+              provenanceJson: {
+                generatedAt: '2026-04-30T00:00:00.000Z',
+                generatedBy: 'agent',
+                sources: [{ label: 'Route test', type: 'user_input' }],
+              },
+              refreshStatus: 'not_refreshable',
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(create.status).toBe(400);
+    expect(create.body.error).toMatchObject({
+      code: 'LIVE_ARTIFACT_INVALID',
+      details: { kind: 'validation' },
+    });
+    expect(JSON.stringify(create.body.error.details.issues)).toContain('script elements are not supported');
+  });
+
+  it('rejects executable script in template previews', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-template-script');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Unsafe Template'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1><script src="/evil.js"></script>',
+      }),
+    });
+
+    expect(create.status).toBe(400);
+    expect(create.body.error).toMatchObject({
+      code: 'LIVE_ARTIFACT_INVALID',
+      details: { kind: 'validation' },
+    });
+    expect(JSON.stringify(create.body.error.details.issues)).toContain('script elements are not supported');
   });
 
   it('returns shared API validation errors from tool create', async () => {

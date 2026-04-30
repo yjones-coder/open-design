@@ -239,6 +239,13 @@ const PROVENANCE_SOURCE_TYPES = new Set<LiveArtifactProvenanceSource['type']>([
   'user_input',
   'derived',
 ]);
+const EXECUTABLE_RENDER_JSON_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
+  { pattern: /<\s*script\b/i, message: 'script elements are not supported in live artifact render JSON' },
+  { pattern: /<\s*iframe\b/i, message: 'iframe elements are not supported in live artifact render JSON' },
+  { pattern: /\bsrcdoc\s*=/i, message: 'srcdoc attributes are not supported in live artifact render JSON' },
+  { pattern: /\son[a-z][a-z0-9_-]*\s*=/i, message: 'event handler attributes are not supported in live artifact render JSON' },
+  { pattern: /javascript\s*:/i, message: 'javascript: URLs are not supported in live artifact render JSON' },
+];
 
 function fail<T>(issues: LiveArtifactValidationIssue[]): LiveArtifactValidationResult<T> {
   return {
@@ -256,6 +263,26 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
+}
+
+function validateNoExecutableRenderJson(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): void {
+  if (typeof value === 'string') {
+    for (const { pattern, message } of EXECUTABLE_RENDER_JSON_PATTERNS) {
+      if (pattern.test(value)) issues.push({ path, message });
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateNoExecutableRenderJson(item, `${path}.${index}`, issues));
+    return;
+  }
+
+  if (isPlainObject(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      validateNoExecutableRenderJson(child, `${path}.${key}`, issues);
+    }
+  }
 }
 
 function asString(value: unknown, path: string, issues: LiveArtifactValidationIssue[], max = MAX_SHORT_TEXT_LENGTH): string | undefined {
@@ -584,6 +611,7 @@ function validateRenderJson(value: unknown, path: string, issues: LiveArtifactVa
     issues.push({ path, message: `${path} must be an object` });
     return undefined;
   }
+  validateNoExecutableRenderJson(value, path, issues);
   switch (value.type) {
     case 'metric': {
       const label = asString(value.label, `${path}.label`, issues);

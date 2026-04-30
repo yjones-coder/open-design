@@ -17,6 +17,20 @@ export interface LiveArtifactRenderOutput {
 const TEMPLATE_INTERPOLATION = /{{\s*([^{}]+?)\s*}}/g;
 const RAW_TEMPLATE_INTERPOLATION = /{{{[^{}]*}}}|{{\s*&[^{}]*}}/;
 const TEMPLATE_PATH = /^(?:data|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:[A-Za-z_][A-Za-z0-9_-]*|\d+))*$/;
+const EXECUTABLE_TEMPLATE_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
+  { pattern: /<\s*script\b/i, message: 'script elements are not supported in live artifact previews' },
+  { pattern: /<\s*iframe\b/i, message: 'iframe elements are not supported in live artifact previews' },
+  { pattern: /\bsrcdoc\s*=/i, message: 'srcdoc attributes are not supported in live artifact previews' },
+  { pattern: /\son[a-z][a-z0-9_-]*\s*=/i, message: 'event handler attributes are not supported in live artifact previews' },
+  { pattern: /(?:href|src|action|formaction)\s*=\s*['"]?\s*javascript\s*:/i, message: 'javascript: URLs are not supported in live artifact previews' },
+  { pattern: /\bdata-od-(?:html|raw|bind-html)\b/i, message: 'raw HTML insertion directives are not supported' },
+];
+
+export function validateHtmlTemplateV1Security(templateHtml: string): void {
+  for (const { pattern, message } of EXECUTABLE_TEMPLATE_PATTERNS) {
+    if (pattern.test(templateHtml)) throw new Error(message);
+  }
+}
 
 export function escapeHtmlTemplateValue(value: unknown): string {
   return String(value)
@@ -47,6 +61,8 @@ function readTemplatePath(dataJson: BoundedJsonObject, rawPath: string): unknown
 }
 
 export function renderHtmlTemplateV1(input: LiveArtifactRenderInput): LiveArtifactRenderOutput {
+  validateHtmlTemplateV1Security(input.templateHtml);
+
   if (RAW_TEMPLATE_INTERPOLATION.test(input.templateHtml)) {
     throw new Error('raw template interpolation is not supported');
   }

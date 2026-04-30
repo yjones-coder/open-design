@@ -59,6 +59,7 @@ import {
 } from './db.js';
 import {
   createLiveArtifact,
+  ensureLiveArtifactPreview,
   getLiveArtifact,
   LiveArtifactStoreValidationError,
   listLiveArtifacts,
@@ -169,6 +170,29 @@ function sendLiveArtifactRouteError(res, err) {
     return sendApiError(res, 404, 'LIVE_ARTIFACT_NOT_FOUND', 'live artifact not found');
   }
   return sendApiError(res, 500, 'LIVE_ARTIFACT_STORAGE_FAILED', String(err));
+}
+
+function setLiveArtifactPreviewHeaders(res) {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'none'",
+      "base-uri 'none'",
+      "script-src 'none'",
+      "object-src 'none'",
+      "connect-src 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'self'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "style-src 'unsafe-inline'",
+      'sandbox allow-same-origin',
+    ].join('; '),
+  );
 }
 
 function bearerTokenFromRequest(req) {
@@ -918,6 +942,25 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
         projectId,
       });
       res.json({ artifacts });
+    } catch (err) {
+      sendLiveArtifactRouteError(res, err);
+    }
+  });
+
+  app.get('/api/live-artifacts/:artifactId/preview', async (req, res) => {
+    try {
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+      if (!projectId) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
+      }
+
+      const record = await ensureLiveArtifactPreview({
+        projectsRoot: PROJECTS_DIR,
+        projectId,
+        artifactId: req.params.artifactId,
+      });
+      setLiveArtifactPreviewHeaders(res);
+      res.status(200).send(record.html);
     } catch (err) {
       sendLiveArtifactRouteError(res, err);
     }

@@ -312,6 +312,15 @@ function artifactWithDataJson(artifact: LiveArtifact, dataJson: BoundedJsonObjec
   return { ...artifact, document: { ...artifact.document, dataJson } };
 }
 
+function renderPreviewHtml(templateHtml: string, dataJson: BoundedJsonObject): string {
+  try {
+    return renderHtmlTemplateV1({ templateHtml, dataJson }).html;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new LiveArtifactStoreValidationError(message, [{ path: 'template.html', message }]);
+  }
+}
+
 async function writeLiveArtifactFiles(
   paths: LiveArtifactStorePaths,
   artifact: LiveArtifact,
@@ -322,7 +331,7 @@ async function writeLiveArtifactFiles(
   const dataJson = dataJsonOverride ?? artifact.document?.dataJson ?? {};
   const artifactForWrite = artifactWithDataJson(artifact, dataJson);
   const previewHtml = artifactForWrite.document?.format === 'html_template_v1'
-    ? renderHtmlTemplateV1({ templateHtml, dataJson }).html
+    ? renderPreviewHtml(templateHtml, dataJson)
     : templateHtml;
 
   await mkdir(paths.tilesDir, { recursive: true });
@@ -344,7 +353,7 @@ async function renderLiveArtifactPreviewFromFiles(paths: LiveArtifactStorePaths,
   if (artifact.document?.format !== 'html_template_v1') return templateHtml;
 
   const dataJson = await readPersistedDataJson(paths);
-  return renderHtmlTemplateV1({ templateHtml, dataJson }).html;
+  return renderPreviewHtml(templateHtml, dataJson);
 }
 
 async function readTextFileOrDefault(filePath: string, fallback: string): Promise<string> {
