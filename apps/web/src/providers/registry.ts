@@ -1,4 +1,9 @@
 import type {
+  ConnectorDetail,
+  ConnectorDetailResponse,
+  ConnectorListResponse,
+} from '@open-design/contracts';
+import type {
   AgentInfo,
   ChatAttachment,
   DesignSystemDetail,
@@ -70,6 +75,43 @@ export async function daemonIsLive(): Promise<boolean> {
     return resp.ok;
   } catch {
     return false;
+  }
+}
+
+export async function fetchConnectors(): Promise<ConnectorDetail[]> {
+  try {
+    const resp = await fetch('/api/connectors');
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as ConnectorListResponse;
+    return json.connectors ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function connectConnector(connectorId: string): Promise<ConnectorDetail | null> {
+  try {
+    const resp = await fetch(`/api/connectors/${encodeURIComponent(connectorId)}/connect`, {
+      method: 'POST',
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as ConnectorDetailResponse;
+    return json.connector ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function disconnectConnector(connectorId: string): Promise<ConnectorDetail | null> {
+  try {
+    const resp = await fetch(`/api/connectors/${encodeURIComponent(connectorId)}/connection`, {
+      method: 'DELETE',
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as ConnectorDetailResponse;
+    return json.connector ?? null;
+  } catch {
+    return null;
   }
 }
 

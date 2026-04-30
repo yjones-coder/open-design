@@ -106,6 +106,7 @@ export const en: Dict = {
   'connectors.noAccount': 'Not connected',
   'connectors.tools': 'Tools',
   'connectors.connect': 'Connect',
+  'connectors.disconnect': 'Disconnect',
   'connectors.configure': 'Configure',
   'connectors.unavailable': 'Unavailable',
   'connectors.phaseStubTitle': 'Connector APIs arrive in Phase 3; this is a preview surface.',

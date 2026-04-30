@@ -105,6 +105,7 @@ export const zhCN: Dict = {
   'connectors.noAccount': '未连接',
   'connectors.tools': '工具',
   'connectors.connect': '连接',
+  'connectors.disconnect': '断开连接',
   'connectors.configure': '配置',
   'connectors.unavailable': '不可用',
   'connectors.phaseStubTitle': '连接器 API 将在 Phase 3 提供；这里是预览入口。',

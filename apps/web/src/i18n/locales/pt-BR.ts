@@ -106,6 +106,7 @@ export const ptBR: Dict = {
   'connectors.noAccount': 'Não conectado',
   'connectors.tools': 'Ferramentas',
   'connectors.connect': 'Conectar',
+  'connectors.disconnect': 'Desconectar',
   'connectors.configure': 'Configurar',
   'connectors.unavailable': 'Indisponível',
   'connectors.phaseStubTitle': 'As APIs de conectores chegam na Phase 3; esta é uma superfície de prévia.',

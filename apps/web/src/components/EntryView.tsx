@@ -19,46 +19,9 @@ import { Icon } from './Icon';
 import { LanguageMenu } from './LanguageMenu';
 import { CenteredLoader } from './Loading';
 import { NewProjectPanel, type CreateInput } from './NewProjectPanel';
+import { connectConnector, disconnectConnector, fetchConnectors } from '../providers/registry';
 
 type TopTab = 'designs' | 'examples' | 'design-systems' | 'connectors';
-
-const PHASE_1B_CONNECTORS: ConnectorDetail[] = [
-  {
-    id: 'project_files',
-    name: 'Project files',
-    provider: 'Open Design',
-    category: 'Local',
-    description: 'Read-only access to project files for live artifact previews and future refreshes.',
-    status: 'available',
-    accountLabel: 'Current project',
-    tools: [
-      {
-        name: 'project_files.search',
-        title: 'Search project files',
-        description: 'Find filenames and compact text snippets inside the active project.',
-        safety: {
-          sideEffect: 'read',
-          approval: 'auto',
-          reason: 'Local read-only lookup; no file mutation.',
-        },
-        refreshEligible: true,
-      },
-    ],
-    featuredToolNames: ['project_files.search'],
-    minimumApproval: 'auto',
-  },
-  {
-    id: 'git_summary',
-    name: 'Git summary',
-    provider: 'Open Design',
-    category: 'Local',
-    description: 'Summarize branch, status, and recent changes for refreshable reports.',
-    status: 'disabled',
-    accountLabel: 'Coming in Phase 2',
-    tools: [],
-    minimumApproval: 'auto',
-  },
-];
 
 interface Props {
   skills: SkillSummary[];
@@ -117,6 +80,8 @@ export function EntryView({
   const [previewSystemId, setPreviewSystemId] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => loadSidebarWidth());
   const [resizing, setResizing] = useState(false);
+  const [connectors, setConnectors] = useState<ConnectorDetail[]>([]);
+  const [connectorsLoading, setConnectorsLoading] = useState(false);
 
   const currentAgent = useMemo(
     () => agents.find((a) => a.id === config.agentId) ?? null,
@@ -195,6 +160,26 @@ export function EntryView({
       /* ignore */
     }
   }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (topTab !== 'connectors') return;
+    let cancelled = false;
+    setConnectorsLoading(true);
+    (async () => {
+      const next = await fetchConnectors();
+      if (cancelled) return;
+      setConnectors(next);
+      setConnectorsLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [topTab]);
+
+  function updateConnector(next: ConnectorDetail | null) {
+    if (!next) return;
+    setConnectors((curr) => curr.map((connector) => (connector.id === next.id ? next : connector)));
+  }
 
   return (
     <div
@@ -313,7 +298,14 @@ export function EntryView({
                   onPreview={previewDesignSystem}
                 />
               ) : null}
-              {topTab === 'connectors' ? <ConnectorsTab connectors={PHASE_1B_CONNECTORS} /> : null}
+              {topTab === 'connectors' ? (
+                <ConnectorsTab
+                  connectors={connectors}
+                  loading={connectorsLoading}
+                  onConnect={async (connectorId) => updateConnector(await connectConnector(connectorId))}
+                  onDisconnect={async (connectorId) => updateConnector(await disconnectConnector(connectorId))}
+                />
+              ) : null}
             </>
           )}
         </div>
@@ -328,7 +320,17 @@ export function EntryView({
   );
 }
 
-function ConnectorsTab({ connectors }: { connectors: ConnectorDetail[] }) {
+function ConnectorsTab({
+  connectors,
+  loading,
+  onConnect,
+  onDisconnect,
+}: {
+  connectors: ConnectorDetail[];
+  loading: boolean;
+  onConnect: (connectorId: string) => Promise<void> | void;
+  onDisconnect: (connectorId: string) => Promise<void> | void;
+}) {
   const t = useT();
 
   return (
@@ -341,23 +343,31 @@ function ConnectorsTab({ connectors }: { connectors: ConnectorDetail[] }) {
           </div>
         </div>
       </div>
-      <div className="connector-grid">
-        {connectors.map((connector) => (
-          <ConnectorCard key={connector.id} connector={connector} />
-        ))}
-      </div>
+      {loading ? (
+        <CenteredLoader label={t('common.loading')} />
+      ) : (
+        <div className="connector-grid">
+          {connectors.map((connector) => (
+            <ConnectorCard key={connector.id} connector={connector} onConnect={onConnect} onDisconnect={onDisconnect} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function ConnectorCard({ connector }: { connector: ConnectorDetail }) {
+function ConnectorCard({
+  connector,
+  onConnect,
+  onDisconnect,
+}: {
+  connector: ConnectorDetail;
+  onConnect: (connectorId: string) => Promise<void> | void;
+  onDisconnect: (connectorId: string) => Promise<void> | void;
+}) {
   const t = useT();
-  const isAvailable = connector.status === 'available' || connector.status === 'connected';
-  const primaryAction = connector.status === 'connected'
-    ? t('connectors.configure')
-    : connector.status === 'available'
-      ? t('connectors.connect')
-      : t('connectors.unavailable');
+  const canConnect = connector.status === 'available';
+  const canDisconnect = connector.status === 'connected';
 
   return (
     <article className={`connector-card status-${connector.status}`}>
@@ -388,11 +398,11 @@ function ConnectorCard({ connector }: { connector: ConnectorDetail }) {
         </div>
       </dl>
       <div className="connector-actions">
-        <button type="button" className="primary connector-action" disabled={!isAvailable} title={t('connectors.phaseStubTitle')}>
-          {primaryAction}
+        <button type="button" className="primary connector-action" disabled={!canConnect} onClick={() => onConnect(connector.id)}>
+          {canConnect ? t('connectors.connect') : statusLabel(connector.status, t)}
         </button>
-        <button type="button" className="ghost connector-action" disabled title={t('connectors.phaseStubTitle')}>
-          {t('connectors.configure')}
+        <button type="button" className="ghost connector-action" disabled={!canDisconnect} onClick={() => onDisconnect(connector.id)}>
+          {t('connectors.disconnect')}
         </button>
       </div>
     </article>

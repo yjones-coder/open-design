@@ -105,6 +105,7 @@ export const zhTW: Dict = {
   'connectors.noAccount': '未連接',
   'connectors.tools': '工具',
   'connectors.connect': '連接',
+  'connectors.disconnect': '中斷連接',
   'connectors.configure': '設定',
   'connectors.unavailable': '不可用',
   'connectors.phaseStubTitle': '連接器 API 將在 Phase 3 提供；這裡是預覽入口。',

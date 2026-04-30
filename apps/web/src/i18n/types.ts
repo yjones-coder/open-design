@@ -119,6 +119,7 @@ export interface Dict {
   'connectors.noAccount': string;
   'connectors.tools': string;
   'connectors.connect': string;
+  'connectors.disconnect': string;
   'connectors.configure': string;
   'connectors.unavailable': string;
   'connectors.phaseStubTitle': string;

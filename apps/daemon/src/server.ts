@@ -69,6 +69,7 @@ import {
   updateLiveArtifact,
 } from './live-artifacts/store.js';
 import { refreshLiveArtifact } from './live-artifacts/refresh-service.js';
+import { registerConnectorRoutes } from './connectors/routes.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from './tool-tokens.js';
 
 /** @typedef {import('@open-design/contracts').ApiErrorCode} ApiErrorCode */
@@ -540,6 +541,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, version: '0.1.0' });
   });
+
+  registerConnectorRoutes(app, { sendApiError });
 
   // ---- Projects (DB-backed) -------------------------------------------------
 
