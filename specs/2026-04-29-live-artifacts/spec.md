@@ -850,6 +850,37 @@ Exit criteria:
 - Do not make MCP required.
 - Do not mutate global user MCP config automatically.
 
+#### 11.5.1 Optional MCP server design
+
+The MCP integration, if added, should be a **thin stdio adapter over the existing daemon tool endpoints**, not a second tool implementation. The MCP process should be launched only for an agent run that explicitly supports MCP and receives the same injected runtime environment as the wrapper CLI:
+
+```text
+MCP-capable agent
+  ⇄ stdio MCP protocol
+od mcp live-artifacts          # TypeScript source under apps/daemon/src, built into the od bin
+  ⇄ local HTTP with Authorization: Bearer $OD_TOOL_TOKEN
+/api/tools/live-artifacts/* and /api/tools/connectors/*
+  ⇄ daemon live artifact, refresh, connector, auth, validation, and policy services
+```
+
+Design constraints:
+
+- **Single policy path:** the MCP server must call the existing `/api/tools/*` endpoints using `OD_DAEMON_URL` and `OD_TOOL_TOKEN`. It must not import store/service modules to bypass token scoping, connector policy, output redaction, rate limits, or route validation.
+- **Run scoped:** one MCP server instance is scoped to one agent run and one project through the bearer token. It exits when stdio closes; daemon token expiry/revocation remains authoritative.
+- **Equivalent tools only:** expose MCP tools that mirror the CLI/API surface, with the same schemas and compact results:
+  - `od_live_artifacts_create` → `POST /api/tools/live-artifacts/create`
+  - `od_live_artifacts_list` → `GET /api/tools/live-artifacts/list`
+  - `od_live_artifacts_update` → `POST /api/tools/live-artifacts/update`
+  - `od_live_artifacts_refresh` → `POST /api/tools/live-artifacts/refresh`
+  - `od_connectors_list` → `GET /api/tools/connectors/list`
+  - `od_connectors_execute` → `POST /api/tools/connectors/execute`
+- **No project overrides:** tool input schemas must not accept `projectId`; project/run scope is always derived from `OD_TOOL_TOKEN` by daemon routes.
+- **No global config mutation:** OD may display or generate an ephemeral MCP launch descriptor for compatible agents, but must not edit user-level MCP config files automatically.
+- **No primary-path dependency:** `SKILL.md`, `od tools ...`, and raw-token debugging remain unchanged and continue to work when MCP is disabled or unsupported.
+- **Typed implementation:** project-owned MCP code should be TypeScript source under `apps/daemon/src` (for example `apps/daemon/src/mcp/live-artifacts-server.ts` plus small CLI dispatch in `apps/daemon/src/cli.ts`). Any JavaScript entrypoint must be generated build output or an explicitly documented compatibility artifact.
+
+MCP tool errors should translate daemon `ApiErrorResponse` values into MCP tool errors without expanding secret-bearing details. Validation field details may be included only when they are already safe to return from the corresponding `/api/tools/*` route.
+
 Exit criteria:
 
 - Claude Code or another MCP-capable agent can discover equivalent tools through MCP.
