@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { deleteProjectFile, listFiles, readProjectFile, writeProjectFile } from '../src/projects.js';
 import {
@@ -27,6 +27,13 @@ import {
   updateLiveArtifact,
   validateLiveArtifactStorageId,
 } from '../src/live-artifacts/store.js';
+import {
+  LiveArtifactRefreshAbortError,
+  LiveArtifactRefreshRunRegistry,
+  normalizeLiveArtifactRefreshTimeouts,
+  withLiveArtifactRefreshRun,
+  withLiveArtifactRefreshSourceTimeout,
+} from '../src/live-artifacts/refresh.js';
 
 const tempRoots: string[] = [];
 
@@ -80,6 +87,7 @@ function validCreateInput() {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -562,6 +570,81 @@ describe('live artifact store layout', () => {
     });
     expect(thirdLock.metadata.refreshId).toBe('refresh-000003');
     await releaseLiveArtifactRefreshLock(thirdLock);
+  });
+
+  it('normalizes refresh timeout configuration and rejects invalid durations', () => {
+    expect(normalizeLiveArtifactRefreshTimeouts()).toEqual({
+      sourceTimeoutMs: 30_000,
+      totalTimeoutMs: 120_000,
+    });
+    expect(normalizeLiveArtifactRefreshTimeouts({ sourceTimeoutMs: 250, totalTimeoutMs: 1_000 })).toEqual({
+      sourceTimeoutMs: 250,
+      totalTimeoutMs: 1_000,
+    });
+    expect(() => normalizeLiveArtifactRefreshTimeouts({ sourceTimeoutMs: 0 })).toThrow(RangeError);
+    expect(() => normalizeLiveArtifactRefreshTimeouts({ totalTimeoutMs: Number.MAX_SAFE_INTEGER + 1 })).toThrow(RangeError);
+  });
+
+  it('aborts a refresh source when its per-source timeout expires', async () => {
+    vi.useFakeTimers();
+    const registry = new LiveArtifactRefreshRunRegistry();
+    const scope = { projectId: 'project-1', artifactId: 'artifact-1', refreshId: 'refresh-000001' };
+    const promise = withLiveArtifactRefreshRun(registry, { ...scope, totalTimeoutMs: 1_000 }, async (run) => (
+      withLiveArtifactRefreshSourceTimeout(run, { step: 'tile:tile-1:execute', sourceTimeoutMs: 25 }, async () => new Promise<string>(() => {}))
+    ));
+    promise.catch(() => undefined);
+
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(promise).rejects.toMatchObject({
+      name: 'LiveArtifactRefreshAbortError',
+      kind: 'source_timeout',
+      projectId: 'project-1',
+      artifactId: 'artifact-1',
+      refreshId: 'refresh-000001',
+      timeoutMs: 25,
+      step: 'tile:tile-1:execute',
+    });
+    expect(registry.hasRun(scope)).toBe(false);
+  });
+
+  it('aborts the whole refresh when the total timeout expires', async () => {
+    vi.useFakeTimers();
+    const registry = new LiveArtifactRefreshRunRegistry();
+    const scope = { projectId: 'project-1', artifactId: 'artifact-1', refreshId: 'refresh-000002' };
+    const promise = withLiveArtifactRefreshRun(registry, { ...scope, totalTimeoutMs: 50 }, async () => new Promise<string>(() => {}));
+    promise.catch(() => undefined);
+
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(promise).rejects.toMatchObject({
+      name: 'LiveArtifactRefreshAbortError',
+      kind: 'total_timeout',
+      projectId: 'project-1',
+      artifactId: 'artifact-1',
+      refreshId: 'refresh-000002',
+      timeoutMs: 50,
+    });
+    expect(registry.hasRun(scope)).toBe(false);
+  });
+
+  it('supports user cancellation of a registered refresh run', async () => {
+    const registry = new LiveArtifactRefreshRunRegistry();
+    const scope = { projectId: 'project-1', artifactId: 'artifact-1', refreshId: 'refresh-000003' };
+    const promise = withLiveArtifactRefreshRun(registry, { ...scope, totalTimeoutMs: 60_000 }, async (run) => {
+      expect(registry.hasRun(run)).toBe(true);
+      expect(registry.cancelRun(run, 'Stopped by user')).toBe(true);
+      return new Promise<string>(() => {});
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      name: 'LiveArtifactRefreshAbortError',
+      kind: 'cancelled',
+      message: 'Stopped by user',
+      projectId: 'project-1',
+      artifactId: 'artifact-1',
+      refreshId: 'refresh-000003',
+    });
+    expect(registry.hasRun(scope)).toBe(false);
+    expect(registry.cancelRun(scope)).toBe(false);
   });
 
   it('rejects unsafe refresh log metadata and compacts arbitrary errors', async () => {
