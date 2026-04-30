@@ -29,6 +29,7 @@ import {
   validateLiveArtifactStorageId,
 } from '../src/live-artifacts/store.js';
 import {
+  applyLiveArtifactOutputMapping,
   LiveArtifactRefreshAbortError,
   executeLocalDaemonRefreshSource,
   LiveArtifactRefreshRunRegistry,
@@ -853,6 +854,63 @@ describe('live artifact store layout', () => {
       recentCommits: [],
       diffStat: [],
     });
+  });
+
+  it('applies declarative refresh output mappings and transforms', () => {
+    const output = {
+      json: {
+        title: 'Q2 Metrics',
+        rows: [
+          { name: 'Revenue', value: 42, extra: { ignored: true } },
+          { name: 'Activation', value: 0.73 },
+        ],
+      },
+      count: 2,
+    };
+
+    expect(applyLiveArtifactOutputMapping({
+      output,
+      source: {
+        type: 'daemon_tool',
+        toolName: 'project_files.read_json',
+        input: { path: 'metrics.json' },
+        outputMapping: {
+          dataPaths: [
+            { from: 'json.title', to: 'summary.title' },
+            { from: 'json.rows.0.value', to: 'summary.primaryValue' },
+          ],
+          transform: 'identity',
+        },
+        refreshPermission: 'manual_refresh_granted_for_read_only',
+      },
+    })).toEqual({ summary: { title: 'Q2 Metrics', primaryValue: 42 } });
+
+    expect(applyLiveArtifactOutputMapping({
+      output,
+      source: {
+        type: 'daemon_tool',
+        toolName: 'project_files.read_json',
+        input: { path: 'metrics.json' },
+        outputMapping: { dataPaths: [{ from: 'json.rows', to: 'rows' }], transform: 'compact_table' },
+        refreshPermission: 'manual_refresh_granted_for_read_only',
+      },
+    })).toMatchObject({
+      columns: [{ key: 'name', label: 'Name' }, { key: 'value', label: 'Value' }],
+      rows: [{ name: 'Revenue', value: 42 }, { name: 'Activation', value: 0.73 }],
+      count: 2,
+      truncated: false,
+    });
+
+    expect(applyLiveArtifactOutputMapping({
+      output: { metric: { label: 'Revenue', value: 42, unit: 'k' } },
+      source: {
+        type: 'daemon_tool',
+        toolName: 'project_files.read_json',
+        input: { path: 'metrics.json' },
+        outputMapping: { dataPaths: [{ from: 'metric', to: 'metric' }], transform: 'metric_summary' },
+        refreshPermission: 'manual_refresh_granted_for_read_only',
+      },
+    })).toMatchObject({ label: 'Revenue', value: 42, unit: 'k', source: { label: 'Revenue', value: 42, unit: 'k' } });
   });
 
   it('regenerates preview HTML from template.html and data.json as the source of truth', async () => {
