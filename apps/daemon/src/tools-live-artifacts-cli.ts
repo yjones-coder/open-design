@@ -3,6 +3,14 @@ import path from 'node:path';
 
 type JsonObject = Record<string, unknown>;
 
+interface CliError {
+  code?: string;
+  message: string;
+  details?: unknown;
+  retryable?: boolean;
+  requestId?: string;
+}
+
 interface ToolCliResult {
   exitCode: number;
 }
@@ -179,17 +187,48 @@ function compactList(value: unknown): unknown {
   };
 }
 
-function apiErrorBody(body: unknown): unknown {
-  if (body && typeof body === 'object' && 'error' in body) return (body as JsonObject).error;
-  return body;
+function compactValidationDetails(details: unknown): unknown {
+  if (!details || typeof details !== 'object') return details;
+  const record = details as JsonObject;
+  if (record.kind !== 'validation' || !Array.isArray(record.issues)) return details;
+  return {
+    kind: 'validation',
+    issues: record.issues.map((issue) => {
+      if (!issue || typeof issue !== 'object') return { message: String(issue) };
+      const issueRecord = issue as JsonObject;
+      return {
+        ...(typeof issueRecord.path === 'string' ? { path: issueRecord.path } : {}),
+        message: typeof issueRecord.message === 'string' ? issueRecord.message : String(issueRecord.message ?? 'validation failed'),
+        ...(typeof issueRecord.code === 'string' ? { code: issueRecord.code } : {}),
+      };
+    }),
+  };
+}
+
+function normalizeCliError(body: unknown): CliError {
+  const rawError = body && typeof body === 'object' && 'error' in body ? (body as JsonObject).error : body;
+
+  if (typeof rawError === 'string') return { message: rawError };
+  if (!rawError || typeof rawError !== 'object') return { message: String(rawError ?? 'request failed') };
+
+  const error = rawError as JsonObject;
+  const normalized: CliError = {
+    ...(typeof error.code === 'string' ? { code: error.code } : {}),
+    message: typeof error.message === 'string' ? error.message : String(error.error ?? 'request failed'),
+    ...(error.details === undefined ? {} : { details: compactValidationDetails(error.details) }),
+    ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+    ...(typeof error.requestId === 'string' ? { requestId: error.requestId } : {}),
+  };
+  return normalized;
 }
 
 async function printApiResult(response: { status: number; body: unknown }, compact: (body: unknown) => unknown): Promise<ToolCliResult> {
   if (response.status < 200 || response.status >= 300) {
-    writeJson({ ok: false, status: response.status, error: apiErrorBody(response.body) }, process.stderr);
+    writeJson({ ok: false, status: response.status, error: normalizeCliError(response.body) }, process.stderr);
     return { exitCode: 1 };
   }
-  writeJson({ ok: true, ...compact(response.body) as JsonObject });
+  const body = compact(response.body);
+  writeJson(body && typeof body === 'object' && !Array.isArray(body) ? { ok: true, ...(body as JsonObject) } : { ok: true, result: body });
   return { exitCode: 0 };
 }
 

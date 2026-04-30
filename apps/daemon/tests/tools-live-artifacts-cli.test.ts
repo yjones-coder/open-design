@@ -7,13 +7,18 @@ const ORIGINAL_ENV = { ...process.env };
 describe('live artifact tool CLI environment', () => {
   let stdoutWrite: { mockRestore: () => void };
   let stderrWrite: { mockRestore: () => void };
+  let stdoutOutput: string[];
   let stderrOutput: string[];
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV };
+    stdoutOutput = [];
     stderrOutput = [];
-    stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      stdoutOutput.push(String(chunk));
+      return true;
+    });
     stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
       stderrOutput.push(String(chunk));
       return true;
@@ -51,6 +56,100 @@ describe('live artifact tool CLI environment', () => {
         }),
       }),
     );
+    expect(JSON.parse(stdoutOutput.join(''))).toEqual({ ok: true, artifacts: [] });
+  });
+
+  it('prints compact success JSON for list results', async () => {
+    process.env.OD_DAEMON_URL = 'http://127.0.0.1:7456';
+    process.env.OD_TOOL_TOKEN = 'agent-run-token';
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          artifacts: [
+            {
+              id: 'live_1',
+              title: 'Launch Metrics',
+              status: 'active',
+              refreshStatus: 'idle',
+              preview: { type: 'html', entry: 'index.html' },
+              updatedAt: '2026-04-30T12:00:00.000Z',
+              dataJson: { large: 'omitted from compact output' },
+            },
+          ],
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 200 },
+      ),
+    );
+
+    const result = await runLiveArtifactsToolCli(['list']);
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(stdoutOutput.join(''))).toEqual({
+      ok: true,
+      artifacts: [
+        {
+          id: 'live_1',
+          title: 'Launch Metrics',
+          status: 'active',
+          refreshStatus: 'idle',
+          preview: { type: 'html', entry: 'index.html' },
+          updatedAt: '2026-04-30T12:00:00.000Z',
+        },
+      ],
+    });
+    expect(stderrOutput.join('')).toBe('');
+  });
+
+  it('prints compact validation errors and exits non-zero on API failure', async () => {
+    process.env.OD_DAEMON_URL = 'http://127.0.0.1:7456';
+    process.env.OD_TOOL_TOKEN = 'agent-run-token';
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'LIVE_ARTIFACT_INVALID',
+            message: 'Live artifact validation failed',
+            details: {
+              kind: 'validation',
+              issues: [
+                {
+                  path: 'sourceJson.token',
+                  message: 'credential-like fields are not allowed',
+                  code: 'FORBIDDEN_KEY',
+                  received: 'secret value that must not be echoed',
+                },
+              ],
+            },
+            retryable: false,
+          },
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 400 },
+      ),
+    );
+
+    const result = await runLiveArtifactsToolCli(['list']);
+
+    expect(result.exitCode).toBe(1);
+    expect(stdoutOutput.join('')).toBe('');
+    expect(JSON.parse(stderrOutput.join(''))).toEqual({
+      ok: false,
+      status: 400,
+      error: {
+        code: 'LIVE_ARTIFACT_INVALID',
+        message: 'Live artifact validation failed',
+        details: {
+          kind: 'validation',
+          issues: [
+            {
+              path: 'sourceJson.token',
+              message: 'credential-like fields are not allowed',
+              code: 'FORBIDDEN_KEY',
+            },
+          ],
+        },
+        retryable: false,
+      },
+    });
   });
 
   it('fails before making a request when the injected environment is missing', async () => {
