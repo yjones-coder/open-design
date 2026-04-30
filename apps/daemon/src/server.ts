@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import net from 'node:net';
 import {
   detectAgents,
   getAgentDef,
@@ -170,6 +171,83 @@ function sendLiveArtifactRouteError(res, err) {
     return sendApiError(res, 404, 'LIVE_ARTIFACT_NOT_FOUND', 'live artifact not found');
   }
   return sendApiError(res, 500, 'LIVE_ARTIFACT_STORAGE_FAILED', String(err));
+}
+
+function normalizeLocalAuthority(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || /[\s/@]/.test(trimmed) || trimmed.includes(',')) return null;
+
+  try {
+    const parsed = new URL(`http://${trimmed}`);
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+    if (!hostname || parsed.username || parsed.password || parsed.pathname !== '/') return null;
+    return { hostname, port: parsed.port };
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (normalized === 'localhost') return true;
+  if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
+  if (net.isIP(normalized) === 4) return normalized === '127.0.0.1' || normalized.startsWith('127.');
+  return false;
+}
+
+function localOriginFromHeader(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === 'null' || trimmed.includes(',')) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) return null;
+    if (!isLoopbackHostname(parsed.hostname)) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function validateLocalDaemonRequest(req) {
+  const host = normalizeLocalAuthority(req.get('host'));
+  if (!host || !isLoopbackHostname(host.hostname)) {
+    return {
+      ok: false,
+      message: 'request host must be a loopback daemon address',
+      details: { header: 'host' },
+    };
+  }
+
+  const originHeader = req.get('origin');
+  if (originHeader !== undefined && !localOriginFromHeader(originHeader)) {
+    return {
+      ok: false,
+      message: 'request origin must be a loopback daemon origin',
+      details: { header: 'origin' },
+    };
+  }
+
+  return { ok: true, origin: localOriginFromHeader(originHeader) };
+}
+
+function requireLocalDaemonRequest(req, res, next) {
+  const validation = validateLocalDaemonRequest(req);
+  if (!validation.ok) {
+    return sendApiError(res, 403, 'FORBIDDEN', validation.message, validation.details ? { details: validation.details } : {});
+  }
+
+  res.setHeader('Vary', 'Origin');
+  if (validation.origin) {
+    res.setHeader('Access-Control-Allow-Origin', validation.origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '600');
+  next();
 }
 
 function setLiveArtifactPreviewHeaders(res) {
@@ -947,7 +1025,11 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     }
   });
 
-  app.get('/api/live-artifacts/:artifactId/preview', async (req, res) => {
+  app.options('/api/live-artifacts/:artifactId/preview', requireLocalDaemonRequest, (_req, res) => {
+    res.status(204).end();
+  });
+
+  app.get('/api/live-artifacts/:artifactId/preview', requireLocalDaemonRequest, async (req, res) => {
     try {
       const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
       if (!projectId) {

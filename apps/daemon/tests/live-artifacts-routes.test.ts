@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { rm } from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,6 +64,37 @@ async function jsonFetch(url, init) {
 async function textFetch(url, init) {
   const response = await fetch(url, init);
   return { status: response.status, headers: response.headers, body: await response.text() };
+}
+
+async function rawHttpJsonFetch(url, { headers = {} } = {}) {
+  const parsed = new URL(url);
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: 'GET',
+        headers,
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(body) });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 function mintToolToken(projectId, runId, overrides = {}) {
@@ -138,6 +170,8 @@ describe('live artifact tool routes', () => {
     expect(preview.headers.get('content-type')).toContain('text/html');
     expect(preview.headers.get('x-content-type-options')).toBe('nosniff');
     expect(preview.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(preview.headers.get('access-control-allow-origin')).toBeNull();
+    expect(preview.headers.get('vary')).toContain('Origin');
     const csp = preview.headers.get('content-security-policy') || '';
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'none'");
@@ -145,6 +179,49 @@ describe('live artifact tool routes', () => {
     expect(csp).toContain('sandbox allow-same-origin');
     expect(preview.body).toContain('<h1>Preview Route Artifact</h1>');
     expect(preview.body).toContain('<p>Agent</p>');
+  });
+
+  it('rejects preview requests with non-loopback host or origin headers', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-preview-local-security');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Preview Local Security'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+
+    expect(create.status).toBe(200);
+    const previewUrl = `${baseUrl}/api/live-artifacts/${create.body.artifact.id}/preview?projectId=${encodeURIComponent(projectId)}`;
+
+    const rejectedHost = await rawHttpJsonFetch(previewUrl, { headers: { Host: 'attacker.example' } });
+    expect(rejectedHost.status).toBe(403);
+    expect(rejectedHost.body.error).toMatchObject({
+      code: 'FORBIDDEN',
+      details: { header: 'host' },
+    });
+
+    const rejectedOrigin = await jsonFetch(previewUrl, { headers: { Origin: 'https://attacker.example' } });
+    expect(rejectedOrigin.status).toBe(403);
+    expect(rejectedOrigin.body.error).toMatchObject({
+      code: 'FORBIDDEN',
+      details: { header: 'origin' },
+    });
+  });
+
+  it('allows loopback-origin preview preflight without opening broad CORS', async () => {
+    const projectId = uniqueProjectId();
+    const response = await fetch(`${baseUrl}/api/live-artifacts/unused/preview?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:17573' },
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:17573');
+    expect(response.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
+    expect(response.headers.get('access-control-allow-origin')).not.toBe('*');
   });
 
   it('rejects executable script in persisted render JSON', async () => {
