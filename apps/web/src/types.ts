@@ -28,6 +28,19 @@ import type {
 export type ExecMode = 'daemon' | 'api';
 
 export type LiveArtifactTabId = `live:${string}`;
+export type ProjectWorkspaceTabId = string | LiveArtifactTabId;
+
+export function liveArtifactTabId(artifactId: string): LiveArtifactTabId {
+  return `live:${artifactId}`;
+}
+
+export function isLiveArtifactTabId(tabId: string): tabId is LiveArtifactTabId {
+  return tabId.startsWith('live:') && tabId.length > 'live:'.length;
+}
+
+export function liveArtifactIdFromTabId(tabId: LiveArtifactTabId): string {
+  return tabId.slice('live:'.length);
+}
 
 export type LiveArtifactViewerTab =
   | 'preview'
@@ -61,6 +74,28 @@ export interface LiveArtifactWorkspaceEntry {
 }
 
 export type ProjectWorkspaceEntry = ProjectFileWorkspaceEntry | LiveArtifactWorkspaceEntry;
+
+export function liveArtifactSummaryToWorkspaceEntry(
+  liveArtifact: LiveArtifactSummary,
+): LiveArtifactWorkspaceEntry {
+  const entry: LiveArtifactWorkspaceEntry = {
+    kind: 'live-artifact',
+    tabId: liveArtifactTabId(liveArtifact.id),
+    artifactId: liveArtifact.id,
+    projectId: liveArtifact.projectId,
+    title: liveArtifact.title,
+    slug: liveArtifact.slug,
+    status: liveArtifact.status,
+    refreshStatus: liveArtifact.refreshStatus,
+    pinned: liveArtifact.pinned,
+    preview: liveArtifact.preview,
+    tileCount: liveArtifact.tileCount,
+    hasDocument: liveArtifact.hasDocument,
+    updatedAt: liveArtifact.updatedAt,
+  };
+  if (liveArtifact.lastRefreshedAt) entry.lastRefreshedAt = liveArtifact.lastRefreshedAt;
+  return entry;
+}
 
 export interface LiveArtifactPreviewRequest {
   projectId: string;
@@ -142,6 +177,6 @@ export type {
 };
 
 export interface OpenTabsState {
-  tabs: string[];
-  active: string | null;
+  tabs: ProjectWorkspaceTabId[];
+  active: ProjectWorkspaceTabId | null;
 }
