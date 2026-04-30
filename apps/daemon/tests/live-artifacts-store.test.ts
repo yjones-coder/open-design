@@ -7,8 +7,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { deleteProjectFile, listFiles, readProjectFile, writeProjectFile } from '../src/projects.js';
 import {
   ensureLiveArtifactStoreLayout,
+  generateLiveArtifactId,
+  generateLiveArtifactSlug,
   liveArtifactStorePaths,
   liveArtifactTilePath,
+  validateLiveArtifactStorageId,
 } from '../src/live-artifacts/store.js';
 
 const tempRoots: string[] = [];
@@ -24,6 +27,45 @@ afterEach(async () => {
 });
 
 describe('live artifact store layout', () => {
+  it('generates normalized live artifact slugs', () => {
+    expect(generateLiveArtifactSlug(' Launch Metrics: Q2! ')).toBe('launch-metrics-q2');
+    expect(generateLiveArtifactSlug('Crème brûlée dashboard')).toBe('creme-brulee-dashboard');
+    expect(generateLiveArtifactSlug('---')).toBe('live-artifact');
+    expect(generateLiveArtifactSlug('A'.repeat(200))).toHaveLength(128);
+  });
+
+  it('generates safe collision-resistant live artifact storage ids', () => {
+    const id = generateLiveArtifactId({
+      title: 'Launch Metrics: Q2!',
+      randomSuffix: 'A1B2C3D4E5F6',
+    });
+
+    expect(id).toBe('la-launch-metrics-q2-a1b2c3d4e5f6');
+    expect(validateLiveArtifactStorageId(id)).toBe(id);
+    expect(generateLiveArtifactId({ title: 'Launch Metrics', randomSuffix: '000001' })).not.toBe(
+      generateLiveArtifactId({ title: 'Launch Metrics', randomSuffix: '000002' }),
+    );
+  });
+
+  it('uses normalized caller-provided slugs and keeps generated ids bounded', () => {
+    const id = generateLiveArtifactId({
+      title: 'Ignored title',
+      slug: '../Custom Slug With Spaces/'.repeat(20),
+      randomSuffix: 'abcdef123456',
+    });
+
+    expect(id).toMatch(/^la-custom-slug-with-spaces-custom-slug-with-spaces/);
+    expect(id.endsWith('-abcdef123456')).toBe(true);
+    expect(id.length).toBeLessThanOrEqual(128);
+    expect(validateLiveArtifactStorageId(id)).toBe(id);
+  });
+
+  it('rejects invalid deterministic suffixes used by id generation tests', () => {
+    expect(() => generateLiveArtifactId({ title: 'Launch Metrics', randomSuffix: '../bad' })).toThrow(
+      /invalid live artifact id random suffix/,
+    );
+  });
+
   it('resolves and creates the project-scoped live artifact directory layout', async () => {
     const projectsRoot = await makeProjectsRoot();
     const paths = await ensureLiveArtifactStoreLayout(projectsRoot, 'project-1', 'artifact-1');

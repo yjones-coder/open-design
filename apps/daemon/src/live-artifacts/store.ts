@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -20,6 +21,12 @@ export const LIVE_ARTIFACT_TILES_DIR = 'tiles' as const;
 export const LIVE_ARTIFACT_SNAPSHOTS_DIR = 'snapshots' as const;
 
 const SAFE_LIVE_ARTIFACT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const LIVE_ARTIFACT_ID_PREFIX = 'la';
+const LIVE_ARTIFACT_ID_RANDOM_BYTES = 6;
+const LIVE_ARTIFACT_ID_RANDOM_SUFFIX_LENGTH = LIVE_ARTIFACT_ID_RANDOM_BYTES * 2;
+const MAX_LIVE_ARTIFACT_STORAGE_ID_LENGTH = 128;
+const MAX_LIVE_ARTIFACT_SLUG_LENGTH = 128;
+const FALLBACK_LIVE_ARTIFACT_SLUG = 'live-artifact';
 
 export interface LiveArtifactStorePaths {
   projectDir: string;
@@ -43,6 +50,45 @@ export interface LiveArtifactStoreSummary {
 export interface LiveArtifactStoreRecord {
   artifact: LiveArtifact;
   paths: LiveArtifactStorePaths;
+}
+
+export interface GenerateLiveArtifactIdOptions {
+  title: string;
+  slug?: string;
+  randomSuffix?: string;
+}
+
+function truncateSlugAtSegmentBoundary(slug: string, maxLength: number): string {
+  if (slug.length <= maxLength) return slug;
+  const truncated = slug.slice(0, maxLength).replace(/-+$/g, '');
+  return truncated.length > 0 ? truncated : slug.slice(0, maxLength);
+}
+
+export function generateLiveArtifactSlug(input: string): string {
+  const slug = input
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+
+  return truncateSlugAtSegmentBoundary(slug || FALLBACK_LIVE_ARTIFACT_SLUG, MAX_LIVE_ARTIFACT_SLUG_LENGTH);
+}
+
+export function generateLiveArtifactId(options: GenerateLiveArtifactIdOptions): string {
+  const randomSuffix = options.randomSuffix ?? randomBytes(LIVE_ARTIFACT_ID_RANDOM_BYTES).toString('hex');
+  if (!/^[a-f0-9]+$/i.test(randomSuffix) || randomSuffix.length === 0) {
+    throw new Error('invalid live artifact id random suffix');
+  }
+
+  const suffix = randomSuffix.toLowerCase();
+  const maxSlugLength = MAX_LIVE_ARTIFACT_STORAGE_ID_LENGTH - LIVE_ARTIFACT_ID_PREFIX.length - suffix.length - 2;
+  if (maxSlugLength < 1) {
+    throw new Error('invalid live artifact id random suffix');
+  }
+  const slug = truncateSlugAtSegmentBoundary(generateLiveArtifactSlug(options.slug ?? options.title), maxSlugLength);
+  return validateLiveArtifactStorageId(`${LIVE_ARTIFACT_ID_PREFIX}-${slug}-${suffix}`);
 }
 
 export function validateLiveArtifactStorageId(artifactId: string): string {
