@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ConnectorDetail } from '@open-design/contracts';
 import { useT } from '../i18n';
 import type {
   AgentInfo,
@@ -19,7 +20,45 @@ import { LanguageMenu } from './LanguageMenu';
 import { CenteredLoader } from './Loading';
 import { NewProjectPanel, type CreateInput } from './NewProjectPanel';
 
-type TopTab = 'designs' | 'examples' | 'design-systems';
+type TopTab = 'designs' | 'examples' | 'design-systems' | 'connectors';
+
+const PHASE_1B_CONNECTORS: ConnectorDetail[] = [
+  {
+    id: 'project_files',
+    name: 'Project files',
+    provider: 'Open Design',
+    category: 'Local',
+    description: 'Read-only access to project files for live artifact previews and future refreshes.',
+    status: 'available',
+    accountLabel: 'Current project',
+    tools: [
+      {
+        name: 'project_files.search',
+        title: 'Search project files',
+        description: 'Find filenames and compact text snippets inside the active project.',
+        safety: {
+          sideEffect: 'read',
+          approval: 'auto',
+          reason: 'Local read-only lookup; no file mutation.',
+        },
+        refreshEligible: true,
+      },
+    ],
+    featuredToolNames: ['project_files.search'],
+    minimumApproval: 'auto',
+  },
+  {
+    id: 'git_summary',
+    name: 'Git summary',
+    provider: 'Open Design',
+    category: 'Local',
+    description: 'Summarize branch, status, and recent changes for refreshable reports.',
+    status: 'disabled',
+    accountLabel: 'Coming in Phase 2',
+    tools: [],
+    minimumApproval: 'auto',
+  },
+];
 
 interface Props {
   skills: SkillSummary[];
@@ -225,6 +264,7 @@ export function EntryView({
               label={t('entry.tabDesignSystems')}
               onClick={setTopTab}
             />
+            <TopTabButton current={topTab} value="connectors" label={t('entry.tabConnectors')} onClick={setTopTab} />
           </div>
           <div className="entry-header-right">
             {/* Avatar settings live next to tabs to mirror the project view. */}
@@ -270,6 +310,7 @@ export function EntryView({
                   onPreview={previewDesignSystem}
                 />
               ) : null}
+              {topTab === 'connectors' ? <ConnectorsTab connectors={PHASE_1B_CONNECTORS} /> : null}
             </>
           )}
         </div>
@@ -282,6 +323,90 @@ export function EntryView({
       ) : null}
     </div>
   );
+}
+
+function ConnectorsTab({ connectors }: { connectors: ConnectorDetail[] }) {
+  const t = useT();
+
+  return (
+    <div className="tab-panel connectors-panel">
+      <div className="tab-panel-toolbar">
+        <div className="toolbar-left connectors-heading">
+          <div>
+            <h2>{t('connectors.title')}</h2>
+            <p>{t('connectors.subtitle')}</p>
+          </div>
+        </div>
+      </div>
+      <div className="connector-grid">
+        {connectors.map((connector) => (
+          <ConnectorCard key={connector.id} connector={connector} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConnectorCard({ connector }: { connector: ConnectorDetail }) {
+  const t = useT();
+  const isAvailable = connector.status === 'available' || connector.status === 'connected';
+  const primaryAction = connector.status === 'connected'
+    ? t('connectors.configure')
+    : connector.status === 'available'
+      ? t('connectors.connect')
+      : t('connectors.unavailable');
+
+  return (
+    <article className={`connector-card status-${connector.status}`}>
+      <div className="connector-card-top">
+        <div>
+          <div className="connector-name-row">
+            <h3>{connector.name}</h3>
+            <span className={`connector-status status-${connector.status}`}>
+              {statusLabel(connector.status, t)}
+            </span>
+          </div>
+          <div className="connector-meta">
+            <span>{connector.category}</span>
+            <span aria-hidden>·</span>
+            <span>{connector.provider}</span>
+          </div>
+        </div>
+      </div>
+      {connector.description ? <p className="connector-description">{connector.description}</p> : null}
+      <dl className="connector-details">
+        <div>
+          <dt>{t('connectors.account')}</dt>
+          <dd>{connector.accountLabel ?? t('connectors.noAccount')}</dd>
+        </div>
+        <div>
+          <dt>{t('connectors.tools')}</dt>
+          <dd>{connector.tools.length ? String(connector.tools.length) : t('common.none')}</dd>
+        </div>
+      </dl>
+      <div className="connector-actions">
+        <button type="button" className="primary connector-action" disabled={!isAvailable} title={t('connectors.phaseStubTitle')}>
+          {primaryAction}
+        </button>
+        <button type="button" className="ghost connector-action" disabled title={t('connectors.phaseStubTitle')}>
+          {t('connectors.configure')}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function statusLabel(status: ConnectorDetail['status'], t: ReturnType<typeof useT>): string {
+  switch (status) {
+    case 'available':
+      return t('connectors.statusAvailable');
+    case 'connected':
+      return t('connectors.statusConnected');
+    case 'error':
+      return t('connectors.statusError');
+    case 'disabled':
+      return t('connectors.statusDisabled');
+  }
 }
 
 function TopTabButton({

@@ -106,10 +106,26 @@ export interface Dict {
   'entry.tabDesigns': string;
   'entry.tabExamples': string;
   'entry.tabDesignSystems': string;
+  'entry.tabConnectors': string;
   'entry.openSettingsTitle': string;
   'entry.openSettingsAria': string;
   'entry.resizeAria': string;
   'entry.loadingWorkspace': string;
+
+  // Connectors tab
+  'connectors.title': string;
+  'connectors.subtitle': string;
+  'connectors.account': string;
+  'connectors.noAccount': string;
+  'connectors.tools': string;
+  'connectors.connect': string;
+  'connectors.configure': string;
+  'connectors.unavailable': string;
+  'connectors.phaseStubTitle': string;
+  'connectors.statusAvailable': string;
+  'connectors.statusConnected': string;
+  'connectors.statusError': string;
+  'connectors.statusDisabled': string;
 
   // New project panel
   'newproj.tabPrototype': string;
