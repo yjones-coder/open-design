@@ -114,7 +114,7 @@ open-design/
 ## Troubleshooting
 
 - **"no agents found on PATH"** — install one of: `claude`, `codex`, `gemini`, `opencode`, `cursor-agent`, `qwen`, `copilot`. Or switch to "Anthropic API · BYOK" in the top bar and paste a key in **Settings**.
-- **daemon 500 on /api/chat** — check the daemon terminal for the stderr tail; usually the CLI rejected its args. Different CLIs take different argv shapes; see `daemon/agents.js` `buildArgs` if you need to tweak.
+- **daemon 500 on /api/chat** — check the daemon terminal for the stderr tail; usually the CLI rejected its args. Different CLIs take different argv shapes; see `apps/daemon/agents.js` `buildArgs` if you need to tweak.
 - **artifact never renders** — the model produced text without wrapping in `<artifact>`. Confirm the system prompt is going through (check daemon log) and consider switching to a more capable model or a stricter skill.
 
 ## Mapping back to the vision
@@ -122,6 +122,6 @@ open-design/
 This Quickstart is the runnable seed of the spec in [`docs/`](docs/). The spec describes where this grows (see [`docs/roadmap.md`](docs/roadmap.md)). Highlights:
 
 - `docs/architecture.md` now matches the shipped stack: Next.js 16 App Router in front, local daemon behind it, and `next.config.ts` rewrites in dev to keep the browser talking to the same `/api` surface.
-- `docs/skills-protocol.md` describes the full `od:` frontmatter (typed inputs, sliders, capability gating). This MVP reads `name` / `description` / `triggers` / `od.mode` / `od.design_system.requires` only — extend `daemon/skills.js` to add the rest.
-- `docs/agent-adapters.md` foresees richer dispatch (capability detection, streaming tool-calls). Our `daemon/agents.js` is a minimal dispatcher — enough to prove the wiring.
+- `docs/skills-protocol.md` describes the full `od:` frontmatter (typed inputs, sliders, capability gating). This MVP reads `name` / `description` / `triggers` / `od.mode` / `od.design_system.requires` only — extend `apps/daemon/skills.js` to add the rest.
+- `docs/agent-adapters.md` foresees richer dispatch (capability detection, streaming tool-calls). Our `apps/daemon/agents.js` is a minimal dispatcher — enough to prove the wiring.
 - `docs/modes.md` lists four modes: prototype / deck / template / design-system. We ship skills for the first two; the picker already filters by `mode`.

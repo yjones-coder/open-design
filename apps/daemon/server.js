@@ -59,16 +59,16 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = path.resolve(__dirname, '..');
+const PROJECT_ROOT = path.resolve(__dirname, '../..');
 // Built web app lives in `out/` — that's where Next.js writes the static
 // export configured in next.config.ts. The folder name used to be `dist/`
 // when this project shipped with Vite; the daemon serves whatever the
 // frontend toolchain emits, no further config needed.
-const STATIC_DIR = path.join(PROJECT_ROOT, 'out');
+const STATIC_DIR = path.join(PROJECT_ROOT, 'apps', 'web', 'out');
 const SKILLS_DIR = path.join(PROJECT_ROOT, 'skills');
 const DESIGN_SYSTEMS_DIR = path.join(PROJECT_ROOT, 'design-systems');
 const RUNTIME_DATA_DIR = process.env.OD_DATA_DIR
-  ? path.resolve(process.env.OD_DATA_DIR)
+  ? path.resolve(PROJECT_ROOT, process.env.OD_DATA_DIR)
   : path.join(PROJECT_ROOT, '.od');
 const ARTIFACTS_DIR = path.join(RUNTIME_DATA_DIR, 'artifacts');
 const PROJECTS_DIR = path.join(RUNTIME_DATA_DIR, 'projects');
@@ -721,7 +721,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   // Project files. Each project owns a flat folder under .od/projects/<id>/
   // containing every file the user has uploaded, pasted, sketched, or that
   // the agent has generated. Names are sanitized; paths are confined to the
-  // project's own folder (see daemon/projects.js).
+  // project's own folder (see apps/daemon/projects.js).
   app.get('/api/projects/:id/files', async (req, res) => {
     try {
       const files = await listFiles(PROJECTS_DIR, req.params.id);

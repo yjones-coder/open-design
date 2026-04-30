@@ -1,6 +1,6 @@
 import type { NextConfig } from 'next';
 
-// Daemon port the local Express server binds to (see daemon/cli.js). The
+// Daemon port the local Express server binds to (see apps/daemon/cli.js). The
 // dev-all launcher overrides OD_PORT after probing for a free port; we read
 // the same env so /api, /artifacts, and /frames always reach the right
 // daemon instance during `next dev`.
@@ -17,6 +17,7 @@ const DAEMON_ORIGIN = `http://127.0.0.1:${DAEMON_PORT}`;
 const isProd = process.env.NODE_ENV !== 'development';
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ['127.0.0.1'],
   reactStrictMode: true,
   // Keep the bundle output predictable so the daemon's STATIC_DIR can point
   // at it without any glob trickery.
@@ -32,7 +33,7 @@ const nextConfig: NextConfig = {
       }
     : {
         async rewrites() {
-          // In dev we run the daemon on a sibling port; mirror the old Vite
+          // In dev we run the daemon on a sibling port; proxy the app API
           // proxy so the SPA can hit /api, /artifacts, and /frames without
           // CORS gymnastics. SSE on /api/chat works through this rewrite
           // because Next.js's dev server streams responses unbuffered.

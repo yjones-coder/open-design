@@ -44,7 +44,7 @@ export default defineConfig({
     command:
       `OD_DATA_DIR=e2e/.od-data ` +
       `OD_PORT=${daemonPort} OD_PORT_STRICT=1 ` +
-      `NEXT_PORT=${nextPort} NEXT_PORT_STRICT=1 npm run dev:all`,
+      `NEXT_PORT=${nextPort} NEXT_PORT_STRICT=1 pnpm run dev:all`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

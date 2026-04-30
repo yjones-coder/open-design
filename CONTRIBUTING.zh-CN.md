@@ -14,8 +14,8 @@
 |---|---|---|---|
 | 让 OD 渲染一种新的 artifact（一份发票、一个 iOS 设置页、一张 one-pager……） | 一个 **Skill** | [`skills/<your-skill>/`](skills/) | 一个文件夹，约 2 个文件 |
 | 让 OD 说一种新品牌的视觉语言 | 一套 **Design System** | [`design-systems/<brand>/DESIGN.md`](design-systems/) | 一个 Markdown 文件 |
-| 接入一个新的 coding-agent CLI | 一个 **Agent adapter** | [`daemon/agents.js`](daemon/agents.js) | 一个数组里 ~10 行 |
-| 加功能、修 bug、从 [`open-codesign`][ocod] 移植一个 UX 模式 | 代码 | `src/`、`daemon/` | 普通 PR |
+| 接入一个新的 coding-agent CLI | 一个 **Agent adapter** | [`apps/daemon/agents.js`](apps/daemon/agents.js) | 一个数组里 ~10 行 |
+| 加功能、修 bug、从 [`open-codesign`][ocod] 移植一个 UX 模式 | 代码 | `apps/web/src/`、`apps/daemon/` | 普通 PR |
 | 改文档、补中文翻译、修错别字 | 文档 | `README.md`、`README.zh-CN.md`、`docs/`、`QUICKSTART.md` | 一个 PR |
 
 不确定自己想做的属于哪一桶？[先开 issue / discussion](https://github.com/nexu-io/open-design/issues/new)，我们告诉你该改哪个面。
@@ -168,7 +168,7 @@ design-systems/your-brand/
 
 ## 接入一个新的 coding-agent CLI
 
-接入一个新 agent（比如某个新 shop 的 `foo-coder` CLI）就是在 [`daemon/agents.js`](daemon/agents.js) 里加一项：
+接入一个新 agent（比如某个新 shop 的 `foo-coder` CLI）就是在 [`apps/daemon/agents.js`](apps/daemon/agents.js) 里加一项：
 
 ```javascript
 {
@@ -181,7 +181,7 @@ design-systems/your-brand/
 }
 ```
 
-完事 —— daemon 会在 `PATH` 上检测到它、picker 显示出来、对话路径就通了。如果这个 CLI 吐 **类型化事件**（像 Claude Code 的 `--output-format stream-json`），在 [`daemon/claude-stream.js`](daemon/claude-stream.js) 里写一个 parser，并把 `streamFormat` 设成 `'claude-stream-json'`。
+完事 —— daemon 会在 `PATH` 上检测到它、picker 显示出来、对话路径就通了。如果这个 CLI 吐 **类型化事件**（像 Claude Code 的 `--output-format stream-json`），在 [`apps/daemon/claude-stream.js`](apps/daemon/claude-stream.js) 里写一个 parser，并把 `streamFormat` 设成 `'claude-stream-json'`。
 
 合并硬线：
 
@@ -201,7 +201,7 @@ design-systems/your-brand/
 除此之外：
 
 - **不要写废话注释。** 不要 `// 引入这个模块`、不要 `// 遍历元素`。如果代码本身一眼能读，注释就是噪音。注释只用来说明非显而易见的意图、或者代码本身表达不出来的约束。
-- **`src/` 用 TypeScript。** Daemon (`daemon/`) 是纯 ESM JavaScript，类型重要的地方用 JSDoc —— 保持这样。
+- **`apps/web/src/` 用 TypeScript。** Daemon (`apps/daemon/`) 是纯 ESM JavaScript，类型重要的地方用 JSDoc —— 保持这样。
 - **不要随便加顶层依赖。** PR 描述里至少要有一段，说明引入它能换到什么、又新增了多少 bundle 字节。[`package.json`](package.json) 的依赖少是有意为之。
 - **推之前跑 `pnpm typecheck`。** CI 会跑；挂了会换来一句「请修一下」。
 

@@ -30,7 +30,7 @@ That's not "AI tries to design something". That's an AI that has been trained, b
 
 OD stands on four open-source shoulders:
 
-- [**`alchaincyf/huashu-design`**](https://github.com/alchaincyf/huashu-design) — the design-philosophy compass. Junior-Designer workflow, the 5-step brand-asset protocol, the anti-AI-slop checklist, the 5-dimensional self-critique, and the "5 schools × 20 design philosophies" idea behind our direction picker — all distilled into [`src/prompts/discovery.ts`](src/prompts/discovery.ts).
+- [**`alchaincyf/huashu-design`**](https://github.com/alchaincyf/huashu-design) — the design-philosophy compass. Junior-Designer workflow, the 5-step brand-asset protocol, the anti-AI-slop checklist, the 5-dimensional self-critique, and the "5 schools × 20 design philosophies" idea behind our direction picker — all distilled into [`apps/web/src/prompts/discovery.ts`](apps/web/src/prompts/discovery.ts).
 - [**`op7418/guizang-ppt-skill`**](https://github.com/op7418/guizang-ppt-skill) — the deck mode. Bundled verbatim under [`skills/guizang-ppt/`](skills/guizang-ppt/) with original LICENSE preserved; magazine-style layouts, WebGL hero, P0/P1/P2 checklists.
 - [**`OpenCoworkAI/open-codesign`**](https://github.com/OpenCoworkAI/open-codesign) — the UX north star and our closest peer. The first open-source Claude-Design alternative. We borrow its streaming-artifact loop, its sandboxed-iframe preview pattern (vendored React 18 + Babel), its live agent panel (todos + tool calls + interruptible generation), and its five-format export list (HTML / PDF / PPTX / ZIP / Markdown). We deliberately diverge on form factor — they are a desktop Electron app bundling [`pi-ai`][piai]; we are a web app + local daemon that delegates to your existing CLI.
 - [**`multica-ai/multica`**](https://github.com/multica-ai/multica) — the daemon-and-runtime architecture. PATH-scan agent detection, the local daemon as the only privileged process, the agent-as-teammate worldview.
@@ -214,7 +214,7 @@ DISCOVERY directives  (turn-1 form, turn-2 brand branch, TodoWrite, 5-dim critiq
   + (deck kind, no skill seed) DECK_FRAMEWORK_DIRECTIVE   (nav / counter / scroll / print)
 ```
 
-Every layer is composable. Every layer is a file you can edit. Read [`src/prompts/system.ts`](src/prompts/system.ts) and [`src/prompts/discovery.ts`](src/prompts/discovery.ts) to see the actual contract.
+Every layer is composable. Every layer is a file you can edit. Read [`apps/web/src/prompts/system.ts`](apps/web/src/prompts/system.ts) and [`apps/web/src/prompts/discovery.ts`](apps/web/src/prompts/discovery.ts) to see the actual contract.
 
 ## Architecture
 
@@ -453,11 +453,11 @@ When the user has no brand spec, the agent emits a second form with five curated
 | Brutalist | Raw, oversized type, no shadows, harsh accents | Bloomberg Businessweek · Achtung |
 | Soft warm | Generous, low contrast, peachy neutrals | Notion marketing · Apple Health |
 
-Full spec → [`src/prompts/directions.ts`](src/prompts/directions.ts).
+Full spec → [`apps/web/src/prompts/directions.ts`](apps/web/src/prompts/directions.ts).
 
 ## Anti-AI-slop machinery
 
-The whole machinery below is the [`huashu-design`](https://github.com/alchaincyf/huashu-design) playbook, ported into OD's prompt-stack and made enforceable per-skill via the side-file pre-flight. Read [`src/prompts/discovery.ts`](src/prompts/discovery.ts) for the live wording:
+The whole machinery below is the [`huashu-design`](https://github.com/alchaincyf/huashu-design) playbook, ported into OD's prompt-stack and made enforceable per-skill via the side-file pre-flight. Read [`apps/web/src/prompts/discovery.ts`](apps/web/src/prompts/discovery.ts) for the live wording:
 
 - **Question form first.** Turn 1 is `<question-form>` only — no thinking, no tools, no narration. The user chooses defaults at radio speed.
 - **Brand-spec extraction.** When the user attaches a screenshot or URL, the agent runs a five-step protocol (locate · download · grep hex · codify `brand-spec.md` · vocalise) before writing CSS. **Never guesses brand colors from memory.**
@@ -511,7 +511,7 @@ Auto-detected from `PATH` on daemon boot. No config required.
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | `copilot` | `--output-format json` (typed events) | `copilot -p <prompt> --allow-all-tools --output-format json` |
 | Anthropic API · BYOK | n/a | SSE direct | Browser fallback when no CLI is on PATH |
 
-Adding a new CLI is one entry in [`daemon/agents.js`](daemon/agents.js). Streaming format is one of `claude-stream-json` (typed events) or `plain` (raw text).
+Adding a new CLI is one entry in [`apps/daemon/agents.js`](apps/daemon/agents.js). Streaming format is one of `claude-stream-json` (typed events) or `plain` (raw text).
 
 ## References & lineage
 
@@ -520,7 +520,7 @@ Every external project this repo borrows from. Each link goes to the source so y
 | Project | Role here |
 |---|---|
 | [`Claude Design`][cd] | The closed-source product this repo is the open-source alternative to. |
-| [**`alchaincyf/huashu-design`**](https://github.com/alchaincyf/huashu-design) | The design-philosophy core. Junior-Designer workflow, the 5-step brand-asset protocol, anti-AI-slop checklist, 5-dimensional self-critique, and the "5 schools × 20 design philosophies" library behind our direction picker — all distilled into [`src/prompts/discovery.ts`](src/prompts/discovery.ts) and [`src/prompts/directions.ts`](src/prompts/directions.ts). |
+| [**`alchaincyf/huashu-design`**](https://github.com/alchaincyf/huashu-design) | The design-philosophy core. Junior-Designer workflow, the 5-step brand-asset protocol, anti-AI-slop checklist, 5-dimensional self-critique, and the "5 schools × 20 design philosophies" library behind our direction picker — all distilled into [`apps/web/src/prompts/discovery.ts`](apps/web/src/prompts/discovery.ts) and [`apps/web/src/prompts/directions.ts`](apps/web/src/prompts/directions.ts). |
 | [**`op7418/guizang-ppt-skill`**][guizang] | Magazine-web-PPT skill bundled verbatim under [`skills/guizang-ppt/`](skills/guizang-ppt/) with original LICENSE preserved. Default for deck mode. P0/P1/P2 checklist culture borrowed for every other skill. |
 | [**`multica-ai/multica`**](https://github.com/multica-ai/multica) | The daemon + adapter architecture. PATH-scan agent detection, local daemon as the only privileged process, agent-as-teammate worldview. We adopt the model; we do not vendor the code. |
 | [**`OpenCoworkAI/open-codesign`**][ocod] | The first open-source Claude-Design alternative and our closest peer. UX patterns adopted: streaming-artifact loop, sandboxed-iframe preview (vendored React 18 + Babel), live agent panel (todos + tool calls + interruptible), five-format export list (HTML/PDF/PPTX/ZIP/Markdown), local-first storage hub, `SKILL.md` taste-injection. UX patterns on our roadmap: comment-mode surgical edits, AI-emitted tweaks panel. **We deliberately do not vendor [`pi-ai`][piai]** — open-codesign bundles it as the agent runtime; we delegate to whichever CLI the user already has. |
@@ -562,7 +562,7 @@ Issues, PRs, new skills, and new design systems are all welcome. The highest-lev
 
 - **Add a skill** — drop a folder into [`skills/`](skills/) following the [`SKILL.md`][skill] convention.
 - **Add a design system** — drop a `DESIGN.md` into [`design-systems/<brand>/`](design-systems/) using the 9-section schema.
-- **Wire up a new coding-agent CLI** — one entry in [`daemon/agents.js`](daemon/agents.js).
+- **Wire up a new coding-agent CLI** — one entry in [`apps/daemon/agents.js`](apps/daemon/agents.js).
 
 Full walkthrough, bar-for-merging, code style, and what we don't accept → [`CONTRIBUTING.md`](CONTRIBUTING.md) ([简体中文](CONTRIBUTING.zh-CN.md)).
 

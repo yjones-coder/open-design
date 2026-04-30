@@ -175,7 +175,7 @@ function parseFrame(frame: string): ParsedFrame | null {
   }
 }
 
-// Translate a raw `agent` SSE payload (what daemon/claude-stream.js emits)
+// Translate a raw `agent` SSE payload (what apps/daemon/claude-stream.js emits)
 // into the UI's AgentEvent union. Keep this liberal — unknown types just
 // return null so the UI ignores them instead of rendering garbage.
 function translateAgentEvent(data: Record<string, unknown>): AgentEvent | null {
