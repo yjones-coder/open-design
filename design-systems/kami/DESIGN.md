@@ -1,11 +1,11 @@
-# Design System Inspired by kami (紙)
+# Design System Inspired by kami (紙 / 纸)
 
 > Category: Editorial & Print
-> Editorial paper system: warm parchment canvas, ink-blue accent, serif-led hierarchy. Built for resumes, one-pagers, white papers, portfolios, slide decks — anything that should feel like high-quality print rather than UI.
+> Editorial paper system: warm parchment canvas, ink-blue accent, serif-led hierarchy. Built for resumes, one-pagers, white papers, portfolios, slide decks — anything that should feel like high-quality print rather than UI. Multilingual by design (EN · zh-CN · ja).
 
 ## 1. Visual Theme & Atmosphere
 
-kami compresses into one sentence: **warm parchment canvas, ink-blue accent, serif carries hierarchy, no cool grays, no hard shadows.** It is not a UI framework — it is a constraint system for the page, designed to keep deliverables stable, clear, and unmistakably *printed*.
+kami compresses into one sentence: **warm parchment canvas, ink-blue accent, serif carries hierarchy, no cool grays, no hard shadows.** It is not a UI framework — it is a constraint system for the page, designed to keep deliverables stable, clear, and unmistakably *printed*. The name reads as **kami / 紙 / 纸** — the same word for "paper" across Japanese and Chinese — and the system is co-designed across English, Simplified Chinese, and Japanese typesetting from the ground up, not retrofitted.
 
 The page background is parchment (`#f5f4ed`), never pure white. Text sits on cream. The single chromatic move is ink-blue (`#1B365D`) — used on section numbers, primary CTAs, the left rule of a quote, the W500 weight in a metric. Everything else is a warm neutral with a yellow-brown undertone; cool blue-grays are absent on purpose.
 
@@ -92,7 +92,25 @@ kami is **gradient-free** by default. The only sanctioned gradient is the soft t
 --sans: var(--serif);
 ```
 
-### Hierarchy (screen, px — print uses pt × ~1.33)
+### When to swap the stack
+
+The three stacks above are **alternative values for `--serif`**, not three families layered together. When generating an artifact, set the primary stack on `:root` based on the dominant language of the content; let the browser's per-glyph fallback resolve mixed-script text inline. Concretely:
+
+- `<html lang="en">` (or English-dominant content) → leave `--serif` on the EN stack. CJK glyphs that appear inline will fall through to the system Han fallback.
+- `<html lang="zh-CN">` → override `--serif` to the CN stack on `:root` or on `html[lang="zh-CN"]`. Latin glyphs render via the Georgia tail of the stack.
+- `<html lang="ja">` → override `--serif` to the JA stack and apply the `--olive: #4d4c48` text-color override (YuMincho strokes are thinner; the standard olive looks anemic against parchment).
+- Multi-language artifacts (e.g. a deck with one Japanese chapter): set the dominant-language stack on `:root`, then scope the override on a wrapper element (`section[lang="ja"] { --serif: …; }`). Do **not** chain all three families inside a single `font-family` — that dilutes the visual character of every page.
+
+### Hierarchy (screen, px)
+
+The hierarchy table below is sized for **screen-rendered web pages** (resume, one-pager, portfolio shown at desktop width). For other surfaces, scale from the print pt baseline using these ratios — the same rules the kami `slides.py` template applies:
+
+| Surface | Macro tokens (font, padding) | Micro tokens (border, radius, tracking) |
+|---|---|---|
+| Page / web artifact (one-pager, resume, white paper) | print pt × ~1.33 | print pt × 1 |
+| Slide / 1920×1080 deck | print pt × ~1.6 | print pt × ~0.6 |
+
+Concretely: a 22pt H1 in print becomes ~29px on a web page and ~36px on a slide; an 8pt letter-spacing value that reads as confident in print drops to ~5px on a slide. Letter-spacing always uses the slide micro ratio — print tracking applied at slide scale falls apart.
 
 | Role | Family | Size | Weight | Line-height | Letter-spacing | Notes |
 |------|--------|------|--------|-------------|----------------|-------|
@@ -131,6 +149,22 @@ Forbidden: 1.6+ (web rhythm, floats off the page) and 1.0–1.05 (lines collide 
 - All-caps overlines and small labels (< 10pt): +0.5 to +1.2px is mandatory
 - Display CJK at 24px+: `0.2–1px` of optical breathing room
 - On slides, tracking is roughly **half** of print values — 8px tracking that reads as confident in a printed deck disintegrates at slide scale.
+
+### Tabular-nums contexts
+
+`font-variant-numeric: tabular-nums` is mandatory anywhere kami numbers stack vertically or sit alongside other numbers — uneven proportional digits read as a layout bug at print resolution. Apply it to:
+
+- Metric values (the big ink-blue number in `.metric-value`) and any side-by-side metric row
+- Slide footers and slide counters (`02 / 05`), page numbers, deck pagination
+- Section numbers in chapter heads (`01`, `02`, …) when they appear in a stacked TOC
+- Resume dates, employment ranges, and education years
+- Financial figures: revenue, ARR/MRR, valuations, tables of P&L line items
+- White-paper and equity-report data tables (every numeric column)
+- Stat-dashboard hero numbers and KPI grids
+- Changelog version numbers (`1.4.2 → 1.4.3`) and any inline release dates
+- Any inline numeric span inside a paragraph that compares values (`from 142 to 168`)
+
+Do **not** apply tabular-nums to running prose where a single number appears mid-sentence — proportional digits read better there. The rule is "stacks and tables, yes; sentences, no."
 
 ## 4. Component Stylings
 
@@ -179,6 +213,19 @@ transition: box-shadow 0.2s;
   letter-spacing: 0.4px;
 }
 .tag.standard { background: #E4ECF5; padding: 2px 8px; border-radius: 4px; }
+
+/* The single sanctioned gradient — see §2 "Gradient System".
+ * Use at most once per page on a "featured" or "new" tag. The gradient
+ * runs darkest-to-lightest left-to-right so the eye reads it as a
+ * watercolor wash, not a button highlight. */
+.tag.brush {
+  background: linear-gradient(to right, #D6E1EE, #E4ECF5 70%, #EEF2F7);
+}
+```
+
+```html
+<!-- Example: a single brush tag flagging the new chapter in a long doc -->
+<span class="tag brush">New · Edition 02</span>
 ```
 
 ### Quote
@@ -264,8 +311,7 @@ Rule: **denser = smaller margins, more formal = larger margins.**
 ### Slides (1920×1080)
 - Four-side padding baseline: `--slide-pad: 80px`.
 - Padding-top of a content slide: 72–80px (print is 96–120px; slides are more compact).
-- Macro scale (font, padding) ≈ print pt × 1.6 — so a 22pt H1 in print is ~36px on slide.
-- Micro scale (border, radius, tracking) ≈ print pt × 0.6 — slides need finer borders to read clean.
+- Sizing follows the surface ratios from §3 ("Hierarchy"): macro tokens × 1.6, micro tokens × 0.6 against the print pt baseline.
 - Cover and chapter slides may flip background to ink-blue (`#1B365D`) with ivory text; everything else stays on parchment.
 
 ## 6. Depth & Elevation

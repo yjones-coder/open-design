@@ -360,6 +360,11 @@
       background: var(--tag-bg);
       letter-spacing: 0.4px;
     }
+    /* Single sanctioned gradient — see DESIGN.md §2 "Gradient System".
+       Use at most once per page on a "featured" or "new" tag. */
+    .tag.brush {
+      background: linear-gradient(to right, #D6E1EE, #E4ECF5 70%, #EEF2F7);
+    }
 
     /* Closing slide — restrained, single ink-blue rule */
     .slide.closing {
@@ -459,6 +464,7 @@
         </blockquote>
       </div>
       <div class="tag-row">
+        <span class="tag brush">Edition 02 · New</span>
         <span class="tag">Parchment</span>
         <span class="tag">Ink Blue</span>
         <span class="tag">Serif 500</span>
