@@ -248,13 +248,13 @@ export function lintArtifact(rawHtml) {
   // ── P1-0: ALL-CAPS without letter-spacing ─────────────────────────
   // Refero's typography rules: any `text-transform: uppercase` rule
   // must pair with `letter-spacing: >= 0.06em` (or an absolute px
-  // equivalent). We scan the <style> block for an uppercase declaration
-  // inside any selector and check whether the SAME selector body
-  // declares a sufficient letter-spacing. The check is intentionally
-  // conservative — only fires when the rule body is missing
-  // letter-spacing entirely OR sets it visibly too low.
-  const styleBlock = /<style[^>]*>([\s\S]*?)<\/style>/i.exec(html);
-  if (styleBlock) {
+  // equivalent). Iterate every <style> block (artifacts often emit
+  // a reset block followed by a tokens/components block) and scan
+  // each CSS body for an uppercase declaration whose selector body
+  // is missing letter-spacing or sets it visibly too low.
+  outer: for (const styleBlock of html.matchAll(
+    /<style[^>]*>([\s\S]*?)<\/style>/gi,
+  )) {
     const css = styleBlock[1] ?? '';
     // Match a CSS rule body containing text-transform: uppercase.
     // Capture the selector + body so we can inspect tracking.
@@ -282,7 +282,7 @@ export function lintArtifact(rawHtml) {
           fix: 'Add `letter-spacing: 0.08em` (typical) to the same rule. ALL CAPS without tracking looks cramped — Refero\'s typography rules call this out as a top-tier amateur tell.',
           snippet: clip(`${selector} { ${body.trim()} }`),
         });
-        break;
+        break outer;
       }
     }
   }
@@ -457,17 +457,20 @@ function escapeRe(s) {
 // selector capture include leading text like `<style>`, which then
 // fails the `:root` selector test.
 //
-// A rule is treated as a token block when:
-//   1. its selector list contains `:root` (with optional attribute
-//      selector) — covers `:root { ... }`, `:root[data-theme="dark"]
-//      { ... }`, and lists like `:root, [data-theme="light"] { ... }`.
-//   2. its body declares only CSS custom properties (`--name: value`)
-//      AND every selector in the list is a global theme-scope
-//      selector (`html`, `html[data-theme="..."]`, bare
-//      `[data-theme="..."]`, `body[data-theme="..."]`). Component
-//      selectors like `.cta { --cta-bg: #6366f1 }` are NOT exempted,
-//      so indigo laundered through a local custom property still
-//      trips the lint.
+// A rule is treated as a token block only when BOTH conditions hold:
+//   1. every selector in the list is a global theme-scope selector
+//      (`:root`, `:root[data-theme="..."]`, `html`, `body`, or a bare
+//      `[data-theme="..."]`). Selector lists that mix in a component
+//      selector — e.g. `:root, .cta { --cta-bg: #6366f1 }` — fail
+//      this test, so indigo laundered through a local var or rule
+//      still trips the lint.
+//   2. its body is token-shaped: only CSS custom properties
+//      (`--name: value`), with a small allowlist for global-theme
+//      metadata such as `color-scheme` that legitimately accompanies
+//      tokens in `:root` and cannot smuggle a visible color.
+//      A non-token declaration on `:root` (e.g.
+//      `:root { background: #6366f1 }`) keeps the rule in scope so
+//      the indigo check fires.
 function stripTokenBlocks(input) {
   return input.replace(
     /(<style[^>]*>)([\s\S]*?)(<\/style>)/gi,
@@ -478,22 +481,26 @@ function stripTokenBlocks(input) {
 function stripTokenBlocksFromCss(css) {
   return css.replace(/([^{}]*)\{([^}]*)\}/g, (full, selector, body) => {
     const sel = (selector || '').trim();
-    if (selectorListContainsRoot(sel)) return '';
+    if (!selectorListIsGlobalThemeScope(sel)) return full;
     const decls = (body || '')
       .split(';')
       .map((d) => d.trim())
       .filter(Boolean);
-    const customOnly =
-      decls.length > 0 && decls.every((d) => /^--[\w-]+\s*:/.test(d));
-    if (customOnly && selectorListIsGlobalThemeScope(sel)) return '';
-    return full;
+    if (decls.length === 0) return full;
+    const tokenShaped = decls.every(isTokenShapedDeclaration);
+    if (!tokenShaped) return full;
+    return '';
   });
 }
 
-function selectorListContainsRoot(selector) {
-  return selector
-    .split(',')
-    .some((s) => /^\s*:root(?:\[[^\]]*\])?\s*$/.test(s));
+function isTokenShapedDeclaration(decl) {
+  // CSS custom property — the canonical token shape.
+  if (/^--[\w-]+\s*:/.test(decl)) return true;
+  // Global-theme metadata that legitimately accompanies tokens in
+  // `:root` / `html` / `[data-theme="..."]` and whose values are
+  // keywords, so they cannot smuggle a hardcoded color.
+  if (/^color-scheme\s*:/i.test(decl)) return true;
+  return false;
 }
 
 function selectorListIsGlobalThemeScope(selector) {

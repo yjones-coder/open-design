@@ -153,6 +153,37 @@ describe('ai-default-indigo', () => {
     expect(findings.find((f) => f.id === 'ai-default-indigo')).toBeDefined();
   });
 
+  it('still flags a non-token :root declaration containing #6366f1', () => {
+    // Regression: the `:root` exemption used to be unconditional, so
+    // a rule whose body wasn't actually a token definition (e.g.
+    // `:root { background: #6366f1 }`) was stripped before the indigo
+    // scan and the P0 silently disappeared. The exemption now requires
+    // a token-shaped body, so a non-token `:root` declaration keeps
+    // its hex in scope and the lint still fires.
+    const html = `
+      <style>
+        :root { background: #6366f1; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'ai-default-indigo')).toBeDefined();
+  });
+
+  it('still flags indigo when :root sits in a list with a component selector', () => {
+    // Regression: `:root, .cta { --cta-bg: #6366f1 }` used to be
+    // exempted because the selector list contained `:root`, even
+    // though `.cta` is a component selector. The exemption now
+    // requires every selector in the list to be a global theme
+    // scope, so this mixed list is preserved and the P0 still fires.
+    const html = `
+      <style>
+        :root, .cta { --cta-bg: #6366f1; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'ai-default-indigo')).toBeDefined();
+  });
+
 });
 
 describe('all-caps-no-tracking', () => {
@@ -203,5 +234,22 @@ describe('all-caps-no-tracking', () => {
     const html = `<style>.x { color: red; }</style>`;
     const findings = lintArtifact(html);
     expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('flags an uppercase rule in a SECOND <style> block', () => {
+    // Regression: the scan used to call `exec` once on a non-global
+    // regex, so only the first <style> block was inspected. Artifacts
+    // commonly emit a reset/normalize block before the components
+    // block; the offending uppercase rule sat in block #2 and slipped
+    // past. The scan now iterates every <style> block.
+    const html = `
+      <style>.reset { box-sizing: border-box; }</style>
+      <style>.eyebrow { text-transform: uppercase; font-size: 12px; }</style>
+      <span class="eyebrow">New</span>
+    `;
+    const findings = lintArtifact(html);
+    const hit = findings.find((f) => f.id === 'all-caps-no-tracking');
+    expect(hit).toBeDefined();
+    expect(hit.severity).toBe('P1');
   });
 });
