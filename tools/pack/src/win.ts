@@ -338,9 +338,14 @@ async function ensureNsisPersianLanguageAlias(config: ToolPackConfig): Promise<b
         await cp(farsiNlf, persianNlf);
         updated = true;
       }
-      if ((await pathExists(farsiNsh)) && !(await pathExists(persianNsh))) {
-        await cp(farsiNsh, persianNsh);
-        updated = true;
+      if (await pathExists(farsiNsh)) {
+        const farsiMessages = await readFile(farsiNsh, "utf8");
+        const persianMessages = farsiMessages.replace('LANGFILE "Farsi"', 'LANGFILE "Persian"');
+        const existingPersianMessages = await readFile(persianNsh, "utf8").catch(() => null);
+        if (existingPersianMessages !== persianMessages) {
+          await writeFile(persianNsh, persianMessages, "utf8");
+          updated = true;
+        }
       }
     }
   }
