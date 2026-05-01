@@ -2595,7 +2595,17 @@ code {
   text-align: right;
 }
 .connector-actions { gap: 8px; }
-button.connector-action { padding: 5px 10px; font-size: 12px; }
+button.connector-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+button.connector-action.is-loading {
+  cursor: wait;
+}
 
 /* Connector gate — masks the grid when the Composio API key is missing. */
 .connector-grid-wrap {

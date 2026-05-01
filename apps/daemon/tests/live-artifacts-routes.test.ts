@@ -11,7 +11,9 @@ import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from '..
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, '../../..');
-const serverRuntimeDataRoot = path.join(projectRoot, 'apps', '.od');
+const serverRuntimeDataRoot = process.env.OD_DATA_DIR
+  ? path.resolve(projectRoot, process.env.OD_DATA_DIR)
+  : path.join(projectRoot, '.od');
 
 let server;
 let baseUrl;
@@ -32,10 +34,9 @@ afterEach(async () => {
   toolTokenRegistry.clear();
   const cleanupProjectIds = projectIds.splice(0);
   await Promise.all(
-    cleanupProjectIds.flatMap((projectId) => [
-      rm(path.join(projectRoot, '.od', 'projects', projectId), { recursive: true, force: true }),
+    cleanupProjectIds.map((projectId) =>
       rm(path.join(serverRuntimeDataRoot, 'projects', projectId), { recursive: true, force: true }),
-    ]),
+    ),
   );
 });
 
@@ -101,10 +102,7 @@ async function rawHttpJsonFetch(url, { headers = {} } = {}) {
 }
 
 async function writeProjectJson(projectId, name, value) {
-  const candidates = [
-    path.join(projectRoot, '.od', 'projects', projectId),
-    path.join(serverRuntimeDataRoot, 'projects', projectId),
-  ];
+  const candidates = [path.join(serverRuntimeDataRoot, 'projects', projectId)];
   let lastError;
   let wrote = false;
   for (const dir of candidates) {
@@ -342,17 +340,10 @@ describe('live artifact tool routes', () => {
     expect(create.status).toBe(200);
     const diskDataJson = { title: 'Disk API Title', owner: 'data.json owner' };
     await writeFile(
-      path.join(projectRoot, '.od', 'projects', projectId, '.live-artifacts', create.body.artifact.id, 'data.json'),
+      path.join(serverRuntimeDataRoot, 'projects', projectId, '.live-artifacts', create.body.artifact.id, 'data.json'),
       `${JSON.stringify(diskDataJson, null, 2)}\n`,
       'utf8',
-    ).catch(async (error) => {
-      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') throw error;
-      await writeFile(
-        path.join(serverRuntimeDataRoot, 'projects', projectId, '.live-artifacts', create.body.artifact.id, 'data.json'),
-        `${JSON.stringify(diskDataJson, null, 2)}\n`,
-        'utf8',
-      );
-    });
+    );
 
     const detail = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`);
     const preview = await textFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/preview?projectId=${encodeURIComponent(projectId)}`);

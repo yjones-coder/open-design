@@ -11,6 +11,7 @@ let server;
 let baseUrl;
 let originalComposioConfig;
 const originalFetch = globalThis.fetch;
+let lastComposioLinkRequest;
 
 function composioJson(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -20,7 +21,10 @@ function composioJson(body, status = 200) {
 }
 
 function mockComposioFetch(options = {}) {
-  const { authConfigs = [{ id: 'ac_github', status: 'ENABLED', toolkit: { slug: 'github' } }] } = options;
+  const {
+    authConfigs = [{ id: 'ac_github', status: 'ENABLED', toolkit: { slug: 'github' } }],
+    linkResponse = { connected_account_id: 'ca_github', status: 'ACTIVE', account_label: 'octocat@example.com' },
+  } = options;
   vi.stubGlobal('fetch', async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith('http://127.0.0.1:') || url.startsWith('http://localhost:')) {
@@ -37,7 +41,8 @@ function mockComposioFetch(options = {}) {
       return composioJson({ items: [{ slug: 'GITHUB_SEARCH_REPOSITORIES', name: 'Search repositories', description: 'Search public and private repositories', toolkit: { slug: 'github' }, input_parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }, tags: ['read'] }] });
     }
     if (parsed.pathname === '/api/v3.1/connected_accounts/link') {
-      return composioJson({ connected_account_id: 'ca_github', status: 'ACTIVE', account_label: 'octocat@example.com' });
+      lastComposioLinkRequest = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      return composioJson(linkResponse);
     }
     if (parsed.pathname === '/api/v3/connected_accounts/ca_github') {
       return composioJson({ connected_account_id: 'ca_github', status: 'ACTIVE', account_label: 'octocat@example.com', toolkit: { slug: 'github' }, auth_config: { id: 'ac_github' } });
@@ -54,6 +59,7 @@ function mockComposioFetch(options = {}) {
 
 beforeEach(async () => {
   originalComposioConfig = readComposioConfig();
+  lastComposioLinkRequest = undefined;
   mockComposioFetch();
   const started = await startServer({ port: 0, returnServer: true });
   server = started.server;
@@ -169,6 +175,45 @@ describe('connector routes', () => {
     const disconnect = await jsonFetch(`${baseUrl}/api/connectors/github/connection`, { method: 'DELETE' });
     expect(disconnect.status).toBe(200);
     expect(disconnect.body.connector).toMatchObject({ id: 'github', status: 'available' });
+  });
+
+  it('returns branded callback HTML that notifies the opener', async () => {
+    await new Promise((resolve, reject) => {
+      if (!server) return resolve(undefined);
+      server.close((error) => (error ? reject(error) : resolve(undefined)));
+    });
+    mockComposioFetch({
+      linkResponse: {
+        connected_account_id: 'ca_github',
+        status: 'INITIATED',
+        redirect_url: 'https://example.com/oauth',
+      },
+    });
+    const started = await startServer({ port: 0, returnServer: true });
+    server = started.server;
+    baseUrl = started.url;
+    await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'cmp_test' }),
+    });
+
+    const connect = await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
+    expect(connect.status).toBe(200);
+    expect(connect.body.auth).toMatchObject({ kind: 'redirect_required' });
+    const callbackUrl = new URL(lastComposioLinkRequest.callback_url);
+
+    const response = await fetch(
+      `${baseUrl}/api/connectors/oauth/callback/github?state=${encodeURIComponent(callbackUrl.searchParams.get('state'))}&status=success&connected_account_id=ca_github`,
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('<main aria-labelledby="callback-title">');
+    expect(html).toContain('GitHub connected');
+    expect(html).toContain('Open Design');
+    expect(html).toContain('open-design:connector-connected');
+    expect(html).not.toContain('<p>Connector connected. You can close this window.</p>');
   });
 
   it('lists connected Composio tools through run-scoped tool auth', async () => {

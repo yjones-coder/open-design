@@ -56,6 +56,19 @@ const SIDEBAR_MIN = 320;
 const SIDEBAR_MAX = 560;
 const SIDEBAR_DEFAULT = 380;
 const SIDEBAR_STORAGE_KEY = 'od-entry-sidebar-width';
+const CONNECTOR_CALLBACK_MESSAGE_TYPE = 'open-design:connector-connected';
+
+export function isTrustedConnectorCallbackOrigin(origin: string, currentOrigin?: string): boolean {
+  const expectedOrigin = currentOrigin ?? (typeof window === 'undefined' ? '' : window.location.origin);
+  if (origin === expectedOrigin) return true;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
+  } catch {
+    return false;
+  }
+}
 
 function loadSidebarWidth(): number {
   try {
@@ -199,9 +212,9 @@ export function EntryView({
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return;
       const data = event.data;
-      if (!data || typeof data !== 'object' || (data as { type?: unknown }).type !== 'open-design:connector-connected') return;
+      if (!data || typeof data !== 'object' || (data as { type?: unknown }).type !== CONNECTOR_CALLBACK_MESSAGE_TYPE) return;
+      if (!isTrustedConnectorCallbackOrigin(event.origin)) return;
       void reloadConnectors({ showLoading: false });
     }
     window.addEventListener('message', onMessage);
@@ -384,6 +397,10 @@ function ConnectorsTab({
   onDisconnect: (connectorId: string) => Promise<void> | void;
 }) {
   const t = useT();
+  const [pendingConnectorAction, setPendingConnectorAction] = useState<{
+    connectorId: string;
+    action: 'connect' | 'disconnect';
+  } | null>(null);
 
   // Mask the grid whenever no Composio-backed connector has its auth
   // configured. We also honor the local config.composio flag so the mask
@@ -396,6 +413,20 @@ function ConnectorsTab({
     [connectors],
   );
   const needsComposioKey = !composioConfigured && !anyComposioAuthConfigured;
+
+  async function runConnectorAction(connectorId: string, action: 'connect' | 'disconnect') {
+    if (pendingConnectorAction) return;
+    setPendingConnectorAction({ connectorId, action });
+    try {
+      if (action === 'connect') {
+        await onConnect(connectorId);
+      } else {
+        await onDisconnect(connectorId);
+      }
+    } finally {
+      setPendingConnectorAction(null);
+    }
+  }
 
   return (
     <div className="tab-panel connectors-panel">
@@ -423,8 +454,13 @@ function ConnectorsTab({
                 key={connector.id}
                 connector={connector}
                 disabled={needsComposioKey}
-                onConnect={onConnect}
-                onDisconnect={onDisconnect}
+                pendingAction={
+                  pendingConnectorAction?.connectorId === connector.id
+                    ? pendingConnectorAction.action
+                    : null
+                }
+                onConnect={(connectorId) => runConnectorAction(connectorId, 'connect')}
+                onDisconnect={(connectorId) => runConnectorAction(connectorId, 'disconnect')}
               />
             ))}
           </div>
@@ -461,17 +497,22 @@ function ConnectorsTab({
 function ConnectorCard({
   connector,
   disabled = false,
+  pendingAction,
   onConnect,
   onDisconnect,
 }: {
   connector: ConnectorDetail;
   disabled?: boolean;
+  pendingAction: 'connect' | 'disconnect' | null;
   onConnect: (connectorId: string) => Promise<void> | void;
   onDisconnect: (connectorId: string) => Promise<void> | void;
 }) {
   const t = useT();
-  const canConnect = !disabled && connector.status === 'available';
-  const canDisconnect = !disabled && connector.status === 'connected';
+  const isConnecting = pendingAction === 'connect';
+  const isDisconnecting = pendingAction === 'disconnect';
+  const isPending = pendingAction !== null;
+  const canConnect = !disabled && !isPending && connector.status === 'available';
+  const canDisconnect = !disabled && !isPending && connector.status === 'connected';
 
   return (
     <article className={`connector-card status-${connector.status}${disabled ? ' is-locked' : ''}`}>
@@ -504,21 +545,25 @@ function ConnectorCard({
       <div className="connector-actions">
         <button
           type="button"
-          className="primary connector-action"
+          className={`primary connector-action${isConnecting ? ' is-loading' : ''}`}
           disabled={!canConnect}
+          aria-busy={isConnecting || undefined}
           tabIndex={disabled ? -1 : undefined}
           onClick={() => onConnect(connector.id)}
         >
-          {canConnect ? t('connectors.connect') : statusLabel(connector.status, t)}
+          {isConnecting ? <Icon name="spinner" size={12} /> : null}
+          <span>{isConnecting || connector.status === 'available' ? t('connectors.connect') : statusLabel(connector.status, t)}</span>
         </button>
         <button
           type="button"
-          className="ghost connector-action"
+          className={`ghost connector-action${isDisconnecting ? ' is-loading' : ''}`}
           disabled={!canDisconnect}
+          aria-busy={isDisconnecting || undefined}
           tabIndex={disabled ? -1 : undefined}
           onClick={() => onDisconnect(connector.id)}
         >
-          {t('connectors.disconnect')}
+          {isDisconnecting ? <Icon name="spinner" size={12} /> : null}
+          <span>{t('connectors.disconnect')}</span>
         </button>
       </div>
     </article>
