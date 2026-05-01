@@ -38,6 +38,27 @@ const PURPLE_HEXES = [
   '#818cf8', '#a5b4fc', '#c7d2fe', '#e0e7ff', '#eef2ff',
 ];
 
+// Blue / cyan stops used in the documented "blue→cyan two-stop trust
+// gradient" cardinal sin. The purple-gradient rule above only catches
+// gradients that contain a violet/indigo hex or the literal
+// `purple`/`violet` keyword, so an artifact emitting
+// `linear-gradient(90deg, #3b82f6, #06b6d4)` (or the keyword form
+// `linear-gradient(90deg, blue, cyan)`) slipped past P0 even though
+// `craft/anti-ai-slop.md` explicitly flags it. The `trust-gradient`
+// rule below pairs these against each other to close the gap.
+const TRUST_GRADIENT_BLUE_HEXES = [
+  // Tailwind blue 500–900 + 400/300/200.
+  '#3b82f6', '#2563eb', '#1d4ed8', '#1e40af', '#1e3a8a',
+  '#60a5fa', '#93c5fd', '#bfdbfe',
+  // Tailwind sky 400–700 — the same blue→cyan ramp under a different name.
+  '#0ea5e9', '#0284c7', '#0369a1', '#38bdf8', '#7dd3fc',
+];
+const TRUST_GRADIENT_CYAN_HEXES = [
+  // Tailwind cyan 500–900 + 400/300/200.
+  '#06b6d4', '#0891b2', '#0e7490', '#155e75', '#164e63',
+  '#22d3ee', '#67e8f9', '#a5f3fc',
+];
+
 // Subset of PURPLE_HEXES that constitute the canonical "default LLM
 // accent" — even a single solid use is a tell. The DESIGN.md provides
 // `var(--accent)`; if a brief truly needs indigo, the design system
@@ -127,6 +148,29 @@ export function lintArtifact(rawHtml) {
         message: `Found a "${m[1]}" keyword inside a gradient — anti-slop.`,
         fix: 'Remove the gradient or swap to a single solid color from the active design tokens.',
         snippet: clip(m[0]),
+      });
+    }
+  }
+
+  // ── P0-1c: blue→cyan "trust" two-stop gradient ─────────────────────
+  // craft/anti-ai-slop.md documents three flavours of the two-stop
+  // "trust" gradient — purple→blue, blue→cyan, indigo→pink. The first
+  // and third are caught by `purple-gradient` above because the
+  // relevant indigo/violet hex appears in PURPLE_HEXES, but a pure
+  // blue→cyan gradient has no overlap with that list and slipped
+  // past unflagged. Detect a `linear-gradient(...)` whose stop list
+  // contains both a blue token (hex or keyword) and a cyan token
+  // (hex or keyword). Skip if the purple-gradient rule already fired
+  // so we emit a single corrective signal per artifact.
+  if (out.find((f) => f.id === 'purple-gradient') === undefined) {
+    const tg = detectBlueCyanTrustGradient(html);
+    if (tg) {
+      out.push({
+        severity: 'P0',
+        id: 'trust-gradient',
+        message: `Found a blue→cyan two-stop "trust" gradient — anti-slop list says no.`,
+        fix: 'Replace the gradient with a flat surface (var(--bg) or var(--surface)) or use a single design-token color. Two-stop blue→cyan trust gradients are a SaaS hero cliché.',
+        snippet: clip(tg),
       });
     }
   }
@@ -486,6 +530,28 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Scan every `linear-gradient(...)` body for a blue→cyan two-stop
+// trust gradient. Returns the first matching gradient text or `null`.
+// The check accepts either Tailwind blue/sky/cyan hex stops or the
+// literal `blue`/`cyan` keywords, so both
+// `linear-gradient(90deg, #3b82f6, #06b6d4)` and
+// `linear-gradient(90deg, blue, cyan)` fire P0.
+function detectBlueCyanTrustGradient(html) {
+  const re = /linear-gradient\([^)]*\)/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const grad = m[0].toLowerCase();
+    const hasBlue =
+      TRUST_GRADIENT_BLUE_HEXES.some((h) => grad.includes(h.toLowerCase())) ||
+      /\bblue\b/.test(grad);
+    const hasCyan =
+      TRUST_GRADIENT_CYAN_HEXES.some((h) => grad.includes(h.toLowerCase())) ||
+      /\bcyan\b/.test(grad);
+    if (hasBlue && hasCyan) return m[0];
+  }
+  return null;
+}
+
 // True when the declaration body has letter-spacing satisfying the
 // craft rule: `letter-spacing >= 0.06em` of the element's own font.
 //
@@ -521,26 +587,56 @@ function escapeRe(s) {
 //      (1px / 14px ≈ 0.071em, 1px / 12px ≈ 0.083em).
 //
 // `tokens` (optional) is a map of CSS custom properties harvested from
-// global theme scopes elsewhere in the artifact. When provided, simple
-// `var(--name)` (and `var(--name, fallback)`) references in the body
-// are expanded to their literal token values before the regexes run,
-// so a tokenized rule such as `letter-spacing: var(--caps-tracking)`
+// global theme scopes elsewhere in the artifact, keyed by token name to
+// the array of distinct values seen across scopes. When provided,
+// simple `var(--name)` (and `var(--name, fallback)`) references in the
+// body are expanded to their literal token values before the regexes
+// run, so a tokenized rule such as `letter-spacing: var(--caps-tracking)`
 // with `:root { --caps-tracking: 0.08em }` is judged by 0.08em rather
 // than reported as missing tracking. References without a matching
 // token but with an inline fallback (`var(--x, 0.08em)`) resolve to
 // the fallback; unresolved references with no fallback stay in place
 // so the existing "no numeric value" path returns false.
+//
+// When the same token name resolves to multiple distinct values
+// (e.g. `:root { --caps-tracking: 0.02em }` overridden by
+// `[data-theme="dark"] { --caps-tracking: 0.08em }`), the helper is
+// conservative: it enumerates every applicable value combination and
+// returns true only if EVERY resolution satisfies the 0.06em floor.
+// A theme-scoped override that lifts the value above the floor must
+// not silently rescue a default value that renders below it.
 const ROOT_FONT_PX = 16;
 function hasAdequateUppercaseTracking(body, tokens) {
-  const resolved = tokens ? resolveCssVars(body, tokens) : body;
-  // Parse the declaration list and match exact property names so that
-  // CSS custom-property declarations (`--letter-spacing: 0.08em`,
-  // `--display-font-size: 48px`) — which are token definitions with no
-  // rendered effect — cannot satisfy the rule. The previous substring
-  // regex would mistake `--letter-spacing` for `letter-spacing` and
-  // let real violations bypass the P1 lint.
-  const decls = parseDeclarations(resolved);
-  const ls = decls.find((d) => d.prop === 'letter-spacing');
+  const tokensMap = tokens ?? new Map();
+  // Restrict the cartesian to tokens reachable from the body, so a
+  // brand with many unrelated multi-valued tokens does not blow up
+  // the combination count.
+  const relevant = collectRelevantTokens(body, tokensMap);
+  if (relevant.size === 0) {
+    // No global tokens reach the body — but body may still contain
+    // `var(--name, fallback)` refs whose fallback should resolve;
+    // pass through the resolver with an empty token map so fallbacks
+    // collapse to literal values before the regexes run.
+    return isResolvedTrackingAdequate(resolveCssVars(body, new Map()));
+  }
+  const combos = enumerateTokenCombos(relevant);
+  for (const combo of combos) {
+    const resolved = resolveCssVars(body, combo);
+    if (!isResolvedTrackingAdequate(resolved)) return false;
+  }
+  return true;
+}
+
+// Single-resolution tracking check. Parses the declaration list with
+// exact property names (so token-name declarations such as
+// `--letter-spacing: 0.08em` cannot satisfy the rule) and selects the
+// LAST matching `letter-spacing` and `font-size` declarations to model
+// CSS source-order cascade — `.eyebrow { letter-spacing: 0.08em;
+// letter-spacing: 0.02em }` renders the noncompliant `0.02em` value,
+// so the lint must judge against the last declaration, not the first.
+function isResolvedTrackingAdequate(body) {
+  const decls = parseDeclarations(body);
+  const ls = findLastDecl(decls, 'letter-spacing');
   if (!ls) return false;
   const lsMatch = /^(-?\d*\.?\d+)\s*(em|px|rem)\b/i.exec(ls.value);
   if (!lsMatch) return false;
@@ -554,6 +650,62 @@ function hasAdequateUppercaseTracking(body, tokens) {
   }
   if (decls.some((d) => d.prop === 'font-size')) return false;
   return trackingPx >= 1;
+}
+
+// Walk the body's `var(--name)` references transitively through token
+// values, collecting only the tokens that can actually affect the
+// resolved body. Returns a Map<name, string[]> of distinct values.
+function collectRelevantTokens(body, tokens) {
+  const out = new Map();
+  const queue = [];
+  const seen = new Set();
+  for (const m of body.matchAll(/var\(\s*(--[\w-]+)/g)) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      queue.push(m[1]);
+    }
+  }
+  while (queue.length > 0) {
+    const name = queue.shift();
+    const values = tokens.get(name);
+    if (!values || values.length === 0) continue;
+    out.set(name, values);
+    for (const value of values) {
+      for (const m of value.matchAll(/var\(\s*(--[\w-]+)/g)) {
+        if (!seen.has(m[1])) {
+          seen.add(m[1]);
+          queue.push(m[1]);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// Cartesian product over the relevant tokens. Yields one
+// `Map<name, value>` per combination so the existing single-value
+// resolver can be reused unchanged.
+function enumerateTokenCombos(relevant) {
+  let combos = [new Map()];
+  for (const [name, values] of relevant.entries()) {
+    const next = [];
+    for (const c of combos) {
+      for (const v of values) {
+        const copy = new Map(c);
+        copy.set(name, v);
+        next.push(copy);
+      }
+    }
+    combos = next;
+  }
+  return combos;
+}
+
+function findLastDecl(decls, prop) {
+  for (let i = decls.length - 1; i >= 0; i--) {
+    if (decls[i].prop === prop) return decls[i];
+  }
+  return undefined;
 }
 
 // Split a CSS declaration body into `{ prop, value }` entries, lowercasing
@@ -581,8 +733,14 @@ function parseDeclarations(body) {
 // (`em`, `%`, `calc(...)`, an unresolved `var(--...)`). The caller
 // distinguishes those two `null` cases by re-checking the parsed
 // declarations for an exact `font-size` property.
+//
+// Selects the LAST `font-size` declaration in source order so that a
+// rule like `.display { font-size: 48px; font-size: 1em }` is judged
+// against the noncompliant `1em` the browser actually renders, not the
+// stale earlier `48px`. CSS cascade is last-write-wins on conflicting
+// declarations within a single rule body.
 function resolveFontSizePx(decls) {
-  const fs = decls.find((d) => d.prop === 'font-size');
+  const fs = findLastDecl(decls, 'font-size');
   if (!fs) return null;
   const m = /^(-?\d*\.?\d+)\s*(px|rem)\b/i.exec(fs.value);
   if (!m) return null;
@@ -597,10 +755,20 @@ function resolveFontSizePx(decls) {
 // selectors are intentionally ignored: the lint must still catch
 // indigo / under-tracking laundered through a local var, and the
 // tracking helper resolves only the global-scope tokens artifacts use
-// to express design intent. Last-write-wins when the same name is
-// declared in multiple scopes — the canonical artifact pattern is a
-// single :root block per token, so collisions are rare and the rule
-// stays a conservative lint signal regardless.
+// to express design intent.
+//
+// Returns a `Map<name, string[]>` of distinct values seen across
+// scopes — preserving every conflicting value rather than collapsing
+// to last-write-wins. A scoped override that bumps the token above the
+// 0.06em floor must not silently rescue the default-theme value that
+// renders below it: e.g.
+// `:root { --caps-tracking: 0.02em }` paired with
+// `[data-theme="dark"] { --caps-tracking: 0.08em }` is two distinct
+// values, and the tracking helper enumerates both before deciding the
+// rule passes (it must satisfy the floor under EVERY applicable
+// theme). The canonical single-`:root`-per-token artifact pattern still
+// produces a single-element array, so the existing tests are
+// unaffected.
 function extractCssTokens(html) {
   const tokens = new Map();
   for (const styleBlock of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
@@ -613,7 +781,12 @@ function extractCssTokens(html) {
       const body = m[2] ?? '';
       for (const decl of body.split(';').map((d) => d.trim()).filter(Boolean)) {
         const dm = /^(--[\w-]+)\s*:\s*(.+)$/.exec(decl);
-        if (dm) tokens.set(dm[1], dm[2].trim());
+        if (dm) {
+          const value = dm[2].trim();
+          const arr = tokens.get(dm[1]) ?? [];
+          if (!arr.includes(value)) arr.push(value);
+          tokens.set(dm[1], arr);
+        }
       }
     }
   }

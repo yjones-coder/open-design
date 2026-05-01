@@ -940,4 +940,174 @@ describe('all-caps-no-tracking', () => {
     const findings = lintArtifact(html);
     expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
   });
+
+  it('flags an uppercase rule whose compliant letter-spacing is overridden by a later noncompliant one', () => {
+    // Regression: the helper used to pick the FIRST matching
+    // letter-spacing declaration in the rule, but CSS applies the LAST
+    // effective declaration in source order. So
+    // `.eyebrow { letter-spacing: 0.08em; letter-spacing: 0.02em }`
+    // renders the noncompliant 0.02em — the lint must judge against the
+    // last declaration, not the first.
+    const html = `
+      <style>
+        .eyebrow { text-transform: uppercase; letter-spacing: 0.08em; letter-spacing: 0.02em; }
+      </style>
+      <span class="eyebrow">New</span>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('flags an inline uppercase whose compliant letter-spacing is overridden by a later noncompliant one', () => {
+    const html = `<span style="text-transform: uppercase; letter-spacing: 0.08em; letter-spacing: 0.02em">NEW</span>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('flags a 14px label whose 1px tracking would pass but a later font-size: 100px shifts the floor', () => {
+    // Regression: `resolveFontSizePx` used to pick the FIRST matching
+    // font-size declaration; the cascade resolves to the LAST. With
+    // `font-size: 14px; font-size: 100px`, the rendered floor is
+    // `100 * 0.06 = 6px`, so 1px tracking is well below the rule and
+    // must flag — even though the stale 14px would have accepted it
+    // (14 * 0.06 = 0.84px floor).
+    const html = `
+      <style>
+        .badge { font-size: 14px; font-size: 100px; text-transform: uppercase; letter-spacing: 1px; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('passes when the compliant letter-spacing is the LAST declaration (override of an earlier noncompliant one)', () => {
+    // Sanity check: the cascade fix must not regress the inverse case.
+    // An author intentionally restoring the floor with a later override
+    // — `letter-spacing: 0.02em; letter-spacing: 0.08em` — renders 0.08em
+    // and must not fire the lint.
+    const html = `
+      <style>
+        .eyebrow { text-transform: uppercase; letter-spacing: 0.02em; letter-spacing: 0.08em; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('flags an uppercase rule when conflicting :root and [data-theme] tokens disagree on the floor', () => {
+    // Regression: `extractCssTokens` used to flatten all global theme-
+    // scope tokens to one map with last-write-wins, regardless of the
+    // selector that scoped each value. A scoped override that lifted
+    // the token above the floor could rescue a default-theme value
+    // that rendered below it, just because the second declaration
+    // happened to be parsed last. The helper now enumerates every
+    // applicable value and only passes if all resolutions satisfy the
+    // 0.06em floor — so the default-theme 0.02em still trips the lint.
+    const html = `
+      <style>
+        :root { --caps-tracking: 0.02em; }
+        [data-theme="dark"] { --caps-tracking: 0.08em; }
+        .eyebrow { text-transform: uppercase; letter-spacing: var(--caps-tracking); }
+      </style>
+      <span class="eyebrow">New</span>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('flags an uppercase rule even when the conflicting :root override comes second', () => {
+    // Same regression but with declaration order swapped — the previous
+    // last-write-wins behaviour was order-dependent, so both orderings
+    // must fail when ANY resolution is below the floor.
+    const html = `
+      <style>
+        [data-theme="dark"] { --caps-tracking: 0.08em; }
+        :root { --caps-tracking: 0.02em; }
+        .eyebrow { text-transform: uppercase; letter-spacing: var(--caps-tracking); }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('passes when every conflicting scoped token value clears the floor', () => {
+    // The conservative cascade must not over-fire: when ALL theme
+    // variants of a token satisfy the 0.06em rule, the artifact is
+    // compliant under every applicable theme and the lint must not
+    // fire.
+    const html = `
+      <style>
+        :root { --caps-tracking: 0.08em; }
+        [data-theme="dark"] { --caps-tracking: 0.10em; }
+        .eyebrow { text-transform: uppercase; letter-spacing: var(--caps-tracking); }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+});
+
+describe('trust-gradient', () => {
+  it('flags a blue→cyan two-stop gradient with hex stops', () => {
+    // Regression: `craft/anti-ai-slop.md` documents blue→cyan as a
+    // P0 cardinal-sin trust gradient, but the existing purple-gradient
+    // rule only matches violet/indigo hex stops or the literal
+    // `purple`/`violet` keywords. A pure blue→cyan gradient slipped
+    // past unflagged. The new `trust-gradient` rule closes that gap.
+    const html = `<div style="background: linear-gradient(90deg, #3b82f6, #06b6d4)">Hi</div>`;
+    const findings = lintArtifact(html);
+    const hit = findings.find((f) => f.id === 'trust-gradient');
+    expect(hit).toBeDefined();
+    expect(hit.severity).toBe('P0');
+  });
+
+  it('flags a blue→cyan two-stop gradient with keyword stops', () => {
+    const html = `<div style="background: linear-gradient(90deg, blue, cyan)">Hi</div>`;
+    const findings = lintArtifact(html);
+    const hit = findings.find((f) => f.id === 'trust-gradient');
+    expect(hit).toBeDefined();
+    expect(hit.severity).toBe('P0');
+  });
+
+  it('flags a sky→cyan gradient (sky shares the blue ramp under another name)', () => {
+    const html = `<div style="background: linear-gradient(135deg, #0ea5e9, #22d3ee)">Hi</div>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'trust-gradient')).toBeDefined();
+  });
+
+  it('does not double-fire when purple-gradient already caught a purple→blue/cyan stop list', () => {
+    // A gradient that mixes purple/indigo with blue/cyan triggers
+    // purple-gradient first. The trust-gradient rule must skip in that
+    // case so the agent gets a single corrective signal.
+    const html = `<div style="background: linear-gradient(90deg, #6366f1, #06b6d4)">Hi</div>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'purple-gradient')).toBeDefined();
+    expect(findings.find((f) => f.id === 'trust-gradient')).toBeUndefined();
+  });
+
+  it('does not flag a blue-only gradient (no cyan stop)', () => {
+    // A single-color gradient (blue→darker-blue) is a different
+    // pattern; only the documented two-color blue→cyan trust ramp
+    // is the AI tell.
+    const html = `<div style="background: linear-gradient(90deg, #3b82f6, #1e40af)">Hi</div>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'trust-gradient')).toBeUndefined();
+  });
+
+  it('does not flag a gradient with only cyan stops', () => {
+    const html = `<div style="background: linear-gradient(90deg, #06b6d4, #0891b2)">Hi</div>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'trust-gradient')).toBeUndefined();
+  });
+
+  it('flags a blue→cyan gradient declared inside a <style> block', () => {
+    const html = `
+      <style>
+        .hero { background: linear-gradient(90deg, #3b82f6, #06b6d4); }
+      </style>
+      <div class="hero">Welcome</div>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'trust-gradient')).toBeDefined();
+  });
 });
