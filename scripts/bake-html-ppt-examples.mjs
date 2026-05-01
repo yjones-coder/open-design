@@ -38,14 +38,17 @@ const sharedAnimations = await readMaybe(
 );
 
 // Without runtime.js, no slide gets `.is-active`, so the deck would render
-// blank. For a static preview we surface the first slide and stack the rest
-// underneath in print-style flow so themes that rely on a hero cover read
-// correctly at thumbnail size.
+// blank. For a static preview we surface every slide and stack them in
+// print-style flow: each slide is 100vh, so the gallery thumbnail iframe
+// (fixed viewport) naturally lands on slide 1, while the modal/export and
+// print-to-PDF flows scroll/page through the full deck. We deliberately do
+// not hide later slides — this artifact is also served via
+// `/api/skills/:id/example` and reused by share/export, where dropping
+// everything past slide 1 would silently truncate the deck.
 const STATIC_FALLBACK_CSS = `
-/* Static-preview fallback (Examples gallery only — runtime.js is absent) */
+/* Static-preview fallback (runtime.js is absent — keep every slide visible) */
 .deck{height:auto;min-height:100vh;overflow:visible}
 .slide{position:relative;inset:auto;opacity:1;pointer-events:auto;transform:none;height:100vh;page-break-after:always}
-.slide+.slide{display:none}
 .deck-header,.deck-footer,.slide-number,.progress-bar,.notes-overlay,.overview{pointer-events:none}
 .notes{display:none!important}
 `;
