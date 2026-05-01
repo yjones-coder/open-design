@@ -130,10 +130,12 @@ export function lintArtifact(rawHtml) {
   // check didn't already, since they overlap in spirit. Strip
   // token-definition blocks first: a brief whose accent is
   // intentionally indigo declares it as `--accent: #6366f1` inside
-  // a selector list containing `:root` (or any selector whose body
-  // is custom-property-only — common for theme-variant blocks) and
-  // uses var(--accent) downstream. That is the design system
-  // speaking, not the model defaulting, and must not fire.
+  // a selector list containing `:root` (or another global token
+  // scope like `html` / bare `[data-theme="..."]`) and uses
+  // var(--accent) downstream. That is the design system speaking,
+  // not the model defaulting, and must not fire. Component-local
+  // variables (e.g. `.cta { --cta-bg: #6366f1; }`) stay in scope so
+  // the lint still catches indigo laundered through a local var.
   if (out.find((f) => f.id === 'purple-gradient') === undefined) {
     const htmlForIndigo = stripTokenBlocks(html);
     for (const hex of AI_DEFAULT_INDIGO) {
@@ -449,25 +451,41 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Remove CSS rule blocks that look like design-token definitions:
-//   1. selector list contains `:root` (with optional attribute selector)
-//      — covers `:root { ... }`, `:root[data-theme="dark"] { ... }`, and
-//      lists like `:root, [data-theme="light"] { ... }`.
-//   2. body declares only CSS custom properties (`--name: value`),
-//      regardless of selector — covers theme-variant blocks like
-//      `[data-theme="dark"] { --accent: ... }` that omit `:root`.
-// Real component rules (any declaration that isn't a custom property)
-// are preserved verbatim so hardcoded indigo still trips the lint.
+// Remove CSS rule blocks that look like design-token definitions.
+// Operates only on CSS extracted from <style> blocks — running the
+// rule-shaped regex against the full HTML string makes the first
+// selector capture include leading text like `<style>`, which then
+// fails the `:root` selector test.
+//
+// A rule is treated as a token block when:
+//   1. its selector list contains `:root` (with optional attribute
+//      selector) — covers `:root { ... }`, `:root[data-theme="dark"]
+//      { ... }`, and lists like `:root, [data-theme="light"] { ... }`.
+//   2. its body declares only CSS custom properties (`--name: value`)
+//      AND every selector in the list is a global theme-scope
+//      selector (`html`, `html[data-theme="..."]`, bare
+//      `[data-theme="..."]`, `body[data-theme="..."]`). Component
+//      selectors like `.cta { --cta-bg: #6366f1 }` are NOT exempted,
+//      so indigo laundered through a local custom property still
+//      trips the lint.
 function stripTokenBlocks(input) {
-  return input.replace(/([^{}]*)\{([^}]*)\}/g, (full, selector, body) => {
-    if (selectorListContainsRoot(selector || '')) return '';
+  return input.replace(
+    /(<style[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    (_m, open, css, close) => `${open}${stripTokenBlocksFromCss(css)}${close}`,
+  );
+}
+
+function stripTokenBlocksFromCss(css) {
+  return css.replace(/([^{}]*)\{([^}]*)\}/g, (full, selector, body) => {
+    const sel = (selector || '').trim();
+    if (selectorListContainsRoot(sel)) return '';
     const decls = (body || '')
       .split(';')
       .map((d) => d.trim())
       .filter(Boolean);
-    if (decls.length > 0 && decls.every((d) => /^--[\w-]+\s*:/.test(d))) {
-      return '';
-    }
+    const customOnly =
+      decls.length > 0 && decls.every((d) => /^--[\w-]+\s*:/.test(d));
+    if (customOnly && selectorListIsGlobalThemeScope(sel)) return '';
     return full;
   });
 }
@@ -476,4 +494,22 @@ function selectorListContainsRoot(selector) {
   return selector
     .split(',')
     .some((s) => /^\s*:root(?:\[[^\]]*\])?\s*$/.test(s));
+}
+
+function selectorListIsGlobalThemeScope(selector) {
+  const parts = selector.split(',').map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return false;
+  return parts.every(isGlobalThemeScopeSelector);
+}
+
+function isGlobalThemeScopeSelector(s) {
+  // :root, :root[data-theme="dark"]
+  if (/^:root(?:\[[^\]]*\])?$/.test(s)) return true;
+  // html, html[data-theme="dark"]
+  if (/^html(?:\[[^\]]*\])?$/.test(s)) return true;
+  // body, body[data-theme="dark"]
+  if (/^body(?:\[[^\]]*\])?$/.test(s)) return true;
+  // bare attribute selector: [data-theme="dark"], [data-color-scheme="..."]
+  if (/^\[[a-zA-Z-]+(?:[*^$|~]?=[^\]]*)?\]$/.test(s)) return true;
+  return false;
 }

@@ -1,9 +1,12 @@
 # Anti-AI-slop rules
 
 Concrete, checkable rules that distinguish "designed by a human who has
-shipped product" from "default LLM output." Every rule below is also
-enforced by the daemon's `lint-artifact` linter — failing one is not
-a style preference, it is a regression.
+shipped product" from "default LLM output." Several rules below are
+auto-enforced by the daemon's `lint-artifact` linter — failing an
+enforced rule is not a style preference, it is a regression. The
+rest are guidance for agents and reviewers and are flagged inline as
+"(guidance, not auto-checked)" so the contract with the linter stays
+honest.
 
 > Adapted from [refero_skill](https://github.com/referodesign/refero_skill)
 > (MIT), tightened to match Open Design's lint surface.
@@ -38,9 +41,10 @@ These are the patterns the linter blocks at P0 (must-fix):
 ## Soft tells (P1 — should fix)
 
 - **Standard "Hero → Features → Pricing → FAQ → CTA" sequence with no
-  variation.** This is the AI-template skeleton; introduce at least one
-  unconventional section (testimonial wall as full-bleed quote, pricing
-  as comparison-against-status-quo, an inline mini-product-demo).
+  variation** *(guidance, not auto-checked)*. This is the AI-template
+  skeleton; introduce at least one unconventional section (testimonial
+  wall as full-bleed quote, pricing as comparison-against-status-quo,
+  an inline mini-product-demo).
 - **External placeholder image CDNs** (`unsplash.com`, `placehold.co`,
   `placekitten.com`, `picsum.photos`). Fragile and obvious. Use the
   shipped `.ph-img` placeholder class.
@@ -52,10 +56,11 @@ These are the patterns the linter blocks at P0 (must-fix):
 ## Polish tells (P2 — nice to fix)
 
 - **Sections without `data-od-id`** — comment mode can't target them.
-- **Decorative blob / wave SVG backgrounds** — meaningless geometry.
-- **Perfect symmetric layout with no visual tension** — alternating
-  density (one tight section, one breathing section) reads as
-  intentional.
+- **Decorative blob / wave SVG backgrounds** *(guidance, not
+  auto-checked)* — meaningless geometry.
+- **Perfect symmetric layout with no visual tension** *(guidance, not
+  auto-checked)* — alternating density (one tight section, one
+  breathing section) reads as intentional.
 
 ## How to add soul without breaking the rules
 

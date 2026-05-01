@@ -122,6 +122,37 @@ describe('ai-default-indigo', () => {
     expect(findings.find((f) => f.id === 'ai-default-indigo')).toBeUndefined();
   });
 
+  it('does not flag a :root token block that also declares non-custom properties like color-scheme', () => {
+    // Regression: the strip pass used to run its rule-shaped regex
+    // against the full HTML string, so the first selector capture
+    // included the leading `<style>` text and the `:root` test
+    // failed. A common token block such as
+    // `:root { color-scheme: light; --accent: #6366f1; }` should be
+    // recognized as a token definition even when the body mixes
+    // CSS variables with non-custom declarations.
+    const html = `<style>:root { color-scheme: light; --accent: #6366f1; }</style>
+      <button class="cta" style="background: var(--accent)">Get started</button>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'ai-default-indigo')).toBeUndefined();
+  });
+
+  it('still flags indigo laundered through a component-local custom property', () => {
+    // Regression: the custom-property-only exemption used to apply
+    // to *any* selector, so an agent could hide #6366f1 in a local
+    // var (e.g. `.cta { --cta-bg: #6366f1 }`) and the linter would
+    // strip the rule and miss the P0. The exemption is now scoped
+    // to global theme selectors (:root, html, [data-theme=...], …).
+    const html = `
+      <style>
+        .cta { --cta-bg: #6366f1; }
+        .cta { background: var(--cta-bg); color: white; }
+      </style>
+      <button class="cta">Get started</button>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'ai-default-indigo')).toBeDefined();
+  });
+
 });
 
 describe('all-caps-no-tracking', () => {
