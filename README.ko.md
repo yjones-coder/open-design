@@ -645,6 +645,12 @@ Open Design을 앞으로 나아가게 도와준 모든 분께 감사드립니다
 
 곡선이 위로 휘면 — 그것이 우리가 찾는 신호입니다. ★를 눌러 위로 밀어주세요.
 
+## 크레딧 / Credits
+
+마스터 [`skills/html-ppt/`](skills/html-ppt/) skill과 [`skills/html-ppt-*/`](skills/) 아래의 15개 per-template wrapper(15개 full-deck 템플릿, 36개 테마, 31개 single-page 레이아웃, 27개 CSS 애니메이션 + 20개 canvas FX, 키보드 runtime, 자석식 카드 presenter mode 포함)는 오픈소스 프로젝트 [`lewislulu/html-ppt-skill`](https://github.com/lewislulu/html-ppt-skill)(MIT)에서 통합되었습니다. 원본 LICENSE는 [`skills/html-ppt/LICENSE`](skills/html-ppt/LICENSE)에 보존되어 있고 저작권 표시는 [@lewislulu](https://github.com/lewislulu)에게 있습니다. 각 per-template Examples 카드(`html-ppt-pitch-deck`, `html-ppt-tech-sharing`, `html-ppt-presenter-mode`, `html-ppt-xhs-post` …)는 authoring 가이드를 마스터 skill에 위임하므로, **Use this prompt** 클릭 시 업스트림과 동일한 prompt → 출력 동작이 그대로 보존됩니다.
+
+[`skills/guizang-ppt/`](skills/guizang-ppt/) 매거진/가로 스와이프 deck flow는 [`op7418/guizang-ppt-skill`](https://github.com/op7418/guizang-ppt-skill)(MIT)에서 통합되었으며, 저작권 표시는 [@op7418](https://github.com/op7418)에게 있습니다.
+
 ## 라이선스
 
-Apache-2.0. 번들된 `skills/guizang-ppt/`는 원래 [LICENSE](skills/guizang-ppt/LICENSE)(MIT)와 [op7418](https://github.com/op7418)에 대한 저작권 표시를 유지합니다.
+Apache-2.0. 번들된 `skills/guizang-ppt/`는 원래 [LICENSE](skills/guizang-ppt/LICENSE)(MIT)와 [op7418](https://github.com/op7418)에 대한 저작권 표시를 유지합니다. 번들된 `skills/html-ppt/`는 원래 [LICENSE](skills/html-ppt/LICENSE)(MIT)와 [lewislulu](https://github.com/lewislulu)에 대한 저작권 표시를 유지합니다.
