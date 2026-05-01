@@ -275,18 +275,7 @@ export function lintArtifact(rawHtml) {
     while ((m = upperRe.exec(css)) !== null) {
       const selector = (m[1] ?? '').trim();
       const body = m[2] ?? '';
-      const lsMatch =
-        /letter-spacing\s*:\s*(-?\d*\.?\d+)\s*(em|px|rem)/i.exec(body);
-      let ok = false;
-      if (lsMatch) {
-        const v = parseFloat(lsMatch[1]);
-        const unit = lsMatch[2].toLowerCase();
-        // 0.06em is the floor; in px, ~1px on a 16px line is borderline,
-        // 1.5px+ comfortably passes for typical heading sizes.
-        if (unit === 'em' || unit === 'rem') ok = v >= 0.06;
-        else if (unit === 'px') ok = v >= 1.5;
-      }
-      if (!ok) {
+      if (!hasAdequateUppercaseTracking(body)) {
         out.push({
           severity: 'P1',
           id: 'all-caps-no-tracking',
@@ -303,26 +292,18 @@ export function lintArtifact(rawHtml) {
   // The <style>-block scan above misses inline declarations such as
   // `<span style="text-transform: uppercase">NEW</span>`, which the
   // browser still renders ALL CAPS. craft/typography.md treats the
-  // tracking floor as having no exceptions, so the inline form needs
-  // the same ≥0.06em / ≥1.5px check. Only fire if the <style>-block
-  // scan above didn't already produce this id, so the agent gets a
-  // single corrective signal per artifact.
+  // tracking floor as having no exceptions, so the inline form runs
+  // through the same `hasAdequateUppercaseTracking` check used by the
+  // <style>-block branch — no separate threshold. Only fire if the
+  // <style>-block scan above didn't already produce this id, so the
+  // agent gets a single corrective signal per artifact.
   if (out.find((f) => f.id === 'all-caps-no-tracking') === undefined) {
     const inlineStyleRe = /(?:^|\s)style\s*=\s*(["'])([\s\S]*?)\1/gi;
     let im;
     while ((im = inlineStyleRe.exec(html)) !== null) {
       const decl = im[2] ?? '';
       if (!/text-transform\s*:\s*uppercase/i.test(decl)) continue;
-      const lsMatch =
-        /letter-spacing\s*:\s*(-?\d*\.?\d+)\s*(em|px|rem)/i.exec(decl);
-      let ok = false;
-      if (lsMatch) {
-        const v = parseFloat(lsMatch[1]);
-        const unit = lsMatch[2].toLowerCase();
-        if (unit === 'em' || unit === 'rem') ok = v >= 0.06;
-        else if (unit === 'px') ok = v >= 1.5;
-      }
-      if (!ok) {
+      if (!hasAdequateUppercaseTracking(decl)) {
         out.push({
           severity: 'P1',
           id: 'all-caps-no-tracking',
@@ -498,6 +479,39 @@ function clip(s) {
 
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// True when the declaration body has letter-spacing satisfying the
+// craft rule: `letter-spacing >= 0.06em` of the element's own font.
+//
+// em/rem values map directly to the 0.06 floor.
+//
+// px is the tricky case. A naive absolute floor (e.g. >= 1.5px) is
+// stricter than the rule and rejects compliant small-label CSS — the
+// common `font-size: 12px; letter-spacing: 1px` pair is `0.083em`
+// (above the 0.06em rule) but a 1.5px floor would reject it. Two-step
+// resolution keeps the px branch faithful to the em rule:
+//   1. If the same rule body declares `font-size: <n>px`, compare px
+//      tracking against `n * 0.06` — exact translation of the em rule.
+//   2. Otherwise (font-size inherited or in a different unit), use a
+//      conservative `>= 1px` absolute fallback. That stays correct for
+//      the typical body-text default of 16px (1px / 16px ≈ 0.0625em,
+//      just over the floor) and for any smaller label (1px / 14px ≈
+//      0.071em, 1px / 12px ≈ 0.083em).
+function hasAdequateUppercaseTracking(body) {
+  const lsMatch =
+    /letter-spacing\s*:\s*(-?\d*\.?\d+)\s*(em|px|rem)/i.exec(body);
+  if (!lsMatch) return false;
+  const v = parseFloat(lsMatch[1]);
+  const unit = lsMatch[2].toLowerCase();
+  if (unit === 'em' || unit === 'rem') return v >= 0.06;
+  // unit === 'px'
+  const fsMatch = /font-size\s*:\s*(-?\d*\.?\d+)\s*px/i.exec(body);
+  if (fsMatch) {
+    const fs = parseFloat(fsMatch[1]);
+    return fs > 0 && v >= fs * 0.06;
+  }
+  return v >= 1;
 }
 
 // Remove CSS rule blocks that look like design-token definitions.

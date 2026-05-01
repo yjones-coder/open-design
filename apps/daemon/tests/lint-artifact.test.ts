@@ -543,4 +543,67 @@ describe('all-caps-no-tracking', () => {
     const hits = findings.filter((f) => f.id === 'all-caps-no-tracking');
     expect(hits.length).toBe(1);
   });
+
+  it('passes a 12px label with 1px tracking (resolves 0.06em via same-rule font-size)', () => {
+    // Regression: the previous absolute-fallback floor of >=1.5px was
+    // stricter than the craft rule. `font-size: 12px; letter-spacing: 1px`
+    // is `1 / 12 = 0.083em` — well above the 0.06em rule — and must pass.
+    const html = `
+      <style>
+        .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('passes a 14px label with 1px tracking (resolves 0.06em via same-rule font-size)', () => {
+    // 14px * 0.06 = 0.84px floor, so 1px tracking satisfies the rule.
+    const html = `
+      <style>
+        .badge { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('flags a 14px label with 0.5px tracking (below same-rule 0.06em floor)', () => {
+    // 14px * 0.06 = 0.84px floor; 0.5px is below the rule and must flag.
+    const html = `
+      <style>
+        .badge { font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('passes inline 12px label with 1px tracking', () => {
+    // Same regression as the <style>-block case but in the inline branch.
+    const html = `<span style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px">NEW</span>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('passes inline 14px label with 1px tracking', () => {
+    const html = `<span style="font-size: 14px; text-transform: uppercase; letter-spacing: 1px">NEW</span>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('flags inline 14px label with 0.5px tracking', () => {
+    const html = `<span style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px">NEW</span>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('passes inline 1px tracking even without a font-size (16px default fallback)', () => {
+    // When the same rule does not declare font-size, the conservative
+    // absolute fallback of >=1px keeps default-16px-body labels passing
+    // (1 / 16 ≈ 0.0625em, just over the 0.06em rule).
+    const html = `<span style="text-transform: uppercase; letter-spacing: 1px">NEW</span>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
 });
