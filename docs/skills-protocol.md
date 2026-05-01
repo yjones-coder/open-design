@@ -237,7 +237,7 @@ od:
 Resolution at compose time:
 
 1. `apps/daemon/src/skills.ts` reads `od.craft.requires` from front-matter and surfaces it on the skill record.
-2. `apps/daemon/src/craft.ts` reads each `<slug>.md` from `CRAFT_DIR`. Missing files are dropped silently — a skill can forward-reference `craft/motion.md` before we ship it.
+2. `apps/daemon/src/craft.ts` reads each `<slug>.md` from `CRAFT_DIR`. Missing files are dropped silently — a skill can forward-reference `craft/motion.md` before we ship it. See [`craft/README.md`](../craft/README.md) for the canonical slug list and the rationale behind the silent-fallback choice.
 3. `apps/daemon/src/prompts/system.ts` injects the concatenated craft body **between** the active DESIGN.md and the skill body. Brand tokens in DESIGN.md win on conflict; craft rules cover everything DESIGN.md does not override.
 
 The split keeps DESIGN.md authors free of universal-craft duplication and keeps craft authors free of brand-specific drift.

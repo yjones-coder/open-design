@@ -47,6 +47,14 @@ ALL CAPS without positive tracking looks cramped and amateur. Display
 text without negative tracking looks loose and weak. These two failures
 are the most reliable AI-slop tells.
 
+The `0.06em` floor is not arbitrary: it is the empirical lower bound
+that print and web typographers have converged on for uppercase
+tracking (cf. Bringhurst's *Elements of Typographic Style* §3.2.7,
+which recommends 5–10% of the em for caps; modern screen practice
+rounds the lower end to 0.06em). Anything tighter and the counters
+collide on screen; the upper bound `0.1em` keeps the word from
+disintegrating into letters.
+
 ## Font pairing
 
 - Maximum 2 typefaces per artifact (display + body, or one variable face

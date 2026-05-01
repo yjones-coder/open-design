@@ -32,6 +32,16 @@ od:
 Allowed values match the file names in this directory minus the `.md`
 extension. Unknown values are silently ignored (forward-compatible).
 
+### Why silent fallback instead of fail-fast?
+
+A skeptical reader will ask: "If a skill requests `motion` and we don't
+ship `motion.md` yet, shouldn't we warn the user?" We chose
+forward-compatibility over fail-fast: a skill authored today can list
+`motion` and start benefiting the moment we vendor `craft/motion.md` in
+a follow-up PR, with no skill edit needed. The cost of a missed
+reference is a missing paragraph in the system prompt, not a broken
+skill — so the loud failure mode is not worth the friction.
+
 ## Files
 
 | File | Section name | When to require |
