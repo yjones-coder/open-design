@@ -1045,6 +1045,28 @@ describe('all-caps-no-tracking', () => {
     const findings = lintArtifact(html);
     expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
   });
+
+  it('passes when a single :root block redeclares the token with a compliant value last', () => {
+    // Regression: `extractCssTokens` used to record every distinct
+    // value seen for a custom property, even when the duplicates lived
+    // in the SAME cascade scope. CSS source-order cascade collapses
+    // `:root { --caps-tracking: 0.02em; --caps-tracking: 0.08em; }`
+    // to the second declaration — the first is dead weight, never
+    // reaches any element. Treating both as theme alternatives fed the
+    // stale 0.02em into `hasAdequateUppercaseTracking` and emitted a
+    // spurious P1 on what is normal CSS overriding. The fix collapses
+    // duplicate declarations within a single rule body to the last
+    // value before merging into the cross-scope token map.
+    const html = `
+      <style>
+        :root { --caps-tracking: 0.02em; --caps-tracking: 0.08em; }
+        .eyebrow { text-transform: uppercase; letter-spacing: var(--caps-tracking); }
+      </style>
+      <span class="eyebrow">New</span>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
 });
 
 describe('trust-gradient', () => {

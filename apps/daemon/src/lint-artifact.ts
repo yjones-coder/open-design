@@ -769,6 +769,16 @@ function resolveFontSizePx(decls) {
 // theme). The canonical single-`:root`-per-token artifact pattern still
 // produces a single-element array, so the existing tests are
 // unaffected.
+//
+// Within a single rule body, CSS cascade is last-write-wins: a block
+// like `:root { --caps-tracking: 0.02em; --caps-tracking: 0.08em; }`
+// renders the second value, and the first never reaches any element.
+// Treating both as simultaneous theme alternatives would feed the
+// stale 0.02em into the tracking helper and emit a spurious P1 on
+// what is normal CSS source-order overriding. So per-scope, we keep
+// only the LAST value declared for each token name; only after that
+// per-scope cascade do we merge into the cross-scope distinct-value
+// map.
 function extractCssTokens(html) {
   const tokens = new Map();
   for (const styleBlock of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
@@ -779,14 +789,17 @@ function extractCssTokens(html) {
       const sel = (m[1] ?? '').trim();
       if (!selectorListIsGlobalThemeScope(sel)) continue;
       const body = m[2] ?? '';
+      const perScope = new Map();
       for (const decl of body.split(';').map((d) => d.trim()).filter(Boolean)) {
         const dm = /^(--[\w-]+)\s*:\s*(.+)$/.exec(decl);
         if (dm) {
-          const value = dm[2].trim();
-          const arr = tokens.get(dm[1]) ?? [];
-          if (!arr.includes(value)) arr.push(value);
-          tokens.set(dm[1], arr);
+          perScope.set(dm[1], dm[2].trim());
         }
+      }
+      for (const [name, value] of perScope.entries()) {
+        const arr = tokens.get(name) ?? [];
+        if (!arr.includes(value)) arr.push(value);
+        tokens.set(name, arr);
       }
     }
   }
