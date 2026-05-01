@@ -20,7 +20,7 @@ First public release of Open Design — a local-first, open-source alternative t
 - App version awareness shared across daemon and web. ([#204])
 
 #### Skills, design systems & prompt templates
-- 71 brand-grade design systems including Xiaohongshu and Replit Deck (8 themes). ([#24], [#74])
+- 72 brand-grade design systems and 31 composable skills, including Xiaohongshu and Replit Deck (8 themes). ([#24], [#74])
 - 57 DESIGN.md specs imported from awesome-design-skills. ([#92])
 - Dance storyboard and ancient-China MMO HUD prompt templates. ([#187])
 
