@@ -606,4 +606,56 @@ describe('all-caps-no-tracking', () => {
     const findings = lintArtifact(html);
     expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
   });
+
+  it('flags a 48px heading with 0.06rem tracking (rem ignores element font-size)', () => {
+    // Regression: `rem` was previously folded into the same branch as
+    // `em` and accepted at the 0.06 threshold. But `rem` is relative
+    // to the root font-size (16px default), not the element's own
+    // font-size, so on a 48px heading `0.06rem` resolves to 0.96px —
+    // about 0.02em of the element, well below the 0.06em rule.
+    const html = `
+      <style>
+        .display { font-size: 48px; text-transform: uppercase; letter-spacing: 0.06rem; }
+      </style>
+      <h1 class="display">Headline</h1>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('passes a 16px label with 0.06rem tracking (rem ≈ 1px ≈ 0.06em on 16px)', () => {
+    // 0.06rem * 16px/rem = 0.96px; on a 16px element that is 0.06em —
+    // exactly at the floor. The rem branch must accept it.
+    const html = `
+      <style>
+        .eyebrow { font-size: 16px; text-transform: uppercase; letter-spacing: 0.06rem; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('passes a 48px heading with 0.18rem tracking (rem converted, meets element 0.06em)', () => {
+    // 0.18rem * 16px/rem = 2.88px; 48px * 0.06 = 2.88px floor — the
+    // converted rem matches the per-element em floor exactly.
+    const html = `
+      <style>
+        .display { font-size: 48px; text-transform: uppercase; letter-spacing: 0.18rem; }
+      </style>
+    `;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
+
+  it('flags inline 48px heading with 0.06rem tracking', () => {
+    const html = `<h1 style="font-size: 48px; text-transform: uppercase; letter-spacing: 0.06rem">Headline</h1>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeDefined();
+  });
+
+  it('passes inline 16px label with 0.06rem tracking (rem ≈ 0.06em on 16px)', () => {
+    const html = `<span style="font-size: 16px; text-transform: uppercase; letter-spacing: 0.06rem">NEW</span>`;
+    const findings = lintArtifact(html);
+    expect(findings.find((f) => f.id === 'all-caps-no-tracking')).toBeUndefined();
+  });
 });

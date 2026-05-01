@@ -484,13 +484,18 @@ function escapeRe(s) {
 // True when the declaration body has letter-spacing satisfying the
 // craft rule: `letter-spacing >= 0.06em` of the element's own font.
 //
-// em/rem values map directly to the 0.06 floor.
+// `em` maps directly to the 0.06 floor — it is relative to the
+// element's own font-size, which is what the rule measures against.
 //
-// px is the tricky case. A naive absolute floor (e.g. >= 1.5px) is
-// stricter than the rule and rejects compliant small-label CSS — the
-// common `font-size: 12px; letter-spacing: 1px` pair is `0.083em`
-// (above the 0.06em rule) but a 1.5px floor would reject it. Two-step
-// resolution keeps the px branch faithful to the em rule:
+// `rem` and `px` are absolute relative to the element: `rem` resolves
+// against the root font-size (assumed 16px — the browser default and
+// the value all OD seed templates use), so `0.06rem` on a 48px heading
+// is `0.96px`, only `0.02em` of the element. Treating `rem` like `em`
+// (the previous behaviour) accepts that as compliant when the rule
+// it enforces is the per-element em floor; convert `rem` to absolute
+// px and reuse the same px-vs-element-font-size resolution.
+//
+// px (and the converted-rem path) resolve in two steps:
 //   1. If the same rule body declares `font-size: <n>px`, compare px
 //      tracking against `n * 0.06` — exact translation of the em rule.
 //   2. Otherwise (font-size inherited or in a different unit), use a
@@ -498,20 +503,21 @@ function escapeRe(s) {
 //      the typical body-text default of 16px (1px / 16px ≈ 0.0625em,
 //      just over the floor) and for any smaller label (1px / 14px ≈
 //      0.071em, 1px / 12px ≈ 0.083em).
+const ROOT_FONT_PX = 16;
 function hasAdequateUppercaseTracking(body) {
   const lsMatch =
     /letter-spacing\s*:\s*(-?\d*\.?\d+)\s*(em|px|rem)/i.exec(body);
   if (!lsMatch) return false;
   const v = parseFloat(lsMatch[1]);
   const unit = lsMatch[2].toLowerCase();
-  if (unit === 'em' || unit === 'rem') return v >= 0.06;
-  // unit === 'px'
+  if (unit === 'em') return v >= 0.06;
+  const trackingPx = unit === 'rem' ? v * ROOT_FONT_PX : v;
   const fsMatch = /font-size\s*:\s*(-?\d*\.?\d+)\s*px/i.exec(body);
   if (fsMatch) {
     const fs = parseFloat(fsMatch[1]);
-    return fs > 0 && v >= fs * 0.06;
+    return fs > 0 && trackingPx >= fs * 0.06;
   }
-  return v >= 1;
+  return trackingPx >= 1;
 }
 
 // Remove CSS rule blocks that look like design-token definitions.
