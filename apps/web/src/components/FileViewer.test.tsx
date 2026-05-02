@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { FileViewer, SvgViewer } from './FileViewer';
-import type { ProjectFile } from '../types';
+import { FileViewer, LiveArtifactRefreshHistoryPanel, SvgViewer } from './FileViewer';
+import type { LiveArtifact, ProjectFile } from '../types';
 
 function baseFile(overrides: Partial<ProjectFile>): ProjectFile {
   return {
@@ -100,5 +100,130 @@ describe('FileViewer SVG artifacts', () => {
     expect(markup).not.toContain('<script>');
     expect(markup).not.toContain('<![CDATA[');
     expect(markup).not.toContain('dangerouslySetInnerHTML');
+  });
+});
+
+function baseLiveArtifact(overrides: Partial<LiveArtifact> = {}): LiveArtifact {
+  return {
+    schemaVersion: 1,
+    id: 'la_1',
+    projectId: 'proj_1',
+    title: 'Launch Metrics',
+    slug: 'launch-metrics',
+    status: 'active',
+    pinned: false,
+    preview: { type: 'html', entry: 'index.html' },
+    refreshStatus: 'idle',
+    createdAt: '2026-04-29T12:00:00.000Z',
+    updatedAt: '2026-04-29T12:00:00.000Z',
+    tiles: [],
+    ...overrides,
+  };
+}
+
+describe('LiveArtifactRefreshHistoryPanel', () => {
+  it('renders a human-readable status instead of raw JSON when no history exists', () => {
+    const markup = renderToStaticMarkup(
+      <LiveArtifactRefreshHistoryPanel
+        liveArtifact={baseLiveArtifact({ refreshStatus: 'never' })}
+        fallbackRefreshStatus="never"
+        isRunning={false}
+        sessionEvents={[]}
+      />,
+    );
+
+    // Status badge with tone, not JSON
+    expect(markup).toContain('live-artifact-refresh-panel');
+    expect(markup).toContain('data-testid="live-artifact-refresh-status-badge"');
+    expect(markup).toContain('Not refreshable');
+    expect(markup).toContain('Last refreshed');
+    expect(markup).toContain('Never');
+    expect(markup).toContain('No refresh activity yet in this session');
+    // Raw JSON is available but tucked inside a collapsed <details>, not exposed as the primary view.
+    expect(markup).toContain('<details');
+    expect(markup).toContain('Raw payload');
+    const detailsIndex = markup.indexOf('<details');
+    const rawJsonIndex = markup.search(/<pre class="viewer-source">\s*\{/);
+    expect(detailsIndex).toBeGreaterThanOrEqual(0);
+    expect(rawJsonIndex).toBeGreaterThan(detailsIndex);
+  });
+
+  it('surfaces running state and a session timeline with duration + source counts', () => {
+    const now = Date.now();
+    const markup = renderToStaticMarkup(
+      <LiveArtifactRefreshHistoryPanel
+        liveArtifact={baseLiveArtifact({
+          refreshStatus: 'succeeded',
+          lastRefreshedAt: new Date(now - 45_000).toISOString(),
+        })}
+        fallbackRefreshStatus="succeeded"
+        isRunning
+        sessionEvents={[
+          { id: 1, phase: 'started', at: now - 5_000 },
+          {
+            id: 2,
+            phase: 'succeeded',
+            at: now - 1_200,
+            durationMs: 3_800,
+            refreshedSourceCount: 2,
+          },
+        ]}
+      />,
+    );
+
+    // isRunning wins over persisted `succeeded`
+    expect(markup).toContain('Refreshing');
+    // Both timeline rows are present
+    expect(markup).toContain('Started');
+    expect(markup).toContain('Succeeded');
+    // Source count + duration are humanized (3.8s), not raw ms
+    expect(markup).toContain('2 sources updated');
+    expect(markup).toContain('3.8s');
+  });
+
+  it('shows per-tile refresh status and surfaces tile errors', () => {
+    const markup = renderToStaticMarkup(
+      <LiveArtifactRefreshHistoryPanel
+        liveArtifact={baseLiveArtifact({
+          refreshStatus: 'failed',
+          tiles: [
+            {
+              id: 'tile_a',
+              kind: 'metric',
+              title: 'Signups',
+              renderJson: { type: 'metric', label: 'Signups', value: 10 },
+              provenanceJson: {
+                generatedAt: '2026-04-29T12:00:00.000Z',
+                generatedBy: 'refresh_runner',
+                sources: [],
+              },
+              refreshStatus: 'failed',
+              lastError: 'Connector returned HTTP 500',
+            },
+            {
+              id: 'tile_b',
+              kind: 'markdown',
+              title: 'Notes',
+              renderJson: { type: 'markdown', markdown: 'hi' },
+              provenanceJson: {
+                generatedAt: '2026-04-29T12:00:00.000Z',
+                generatedBy: 'agent',
+                sources: [],
+              },
+              refreshStatus: 'not_refreshable',
+            },
+          ],
+        })}
+        fallbackRefreshStatus="failed"
+        isRunning={false}
+        sessionEvents={[]}
+      />,
+    );
+
+    expect(markup).toContain('Refresh failed');
+    expect(markup).toContain('Signups');
+    expect(markup).toContain('Connector returned HTTP 500');
+    expect(markup).toContain('1 of 2 refreshable');
+    expect(markup).toContain('Not refreshable');
   });
 });

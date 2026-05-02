@@ -121,10 +121,12 @@ export function LiveArtifactViewer({
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshSuccess, setRefreshSuccess] = useState<string | null>(null);
+  const [refreshEvents, setRefreshEvents] = useState<LiveArtifactRefreshEvent[]>([]);
 
   useEffect(() => {
     setRefreshError(null);
     setRefreshSuccess(null);
+    setRefreshEvents([]);
   }, [projectId, liveArtifact.artifactId]);
 
   useEffect(() => {
@@ -161,12 +163,19 @@ export function LiveArtifactViewer({
       setRefreshing(true);
       setRefreshError(null);
       setRefreshSuccess(null);
+      setRefreshEvents((prev) => appendRefreshEvent(prev, { phase: 'started' }));
       return;
     }
 
     if (liveArtifactEvent.phase === 'failed') {
       setRefreshing(false);
       setRefreshError(liveArtifactEvent.error ?? t('liveArtifact.refresh.genericFailure'));
+      setRefreshEvents((prev) =>
+        appendRefreshEvent(prev, {
+          phase: 'failed',
+          error: liveArtifactEvent.error ?? undefined,
+        }),
+      );
       void fetchLiveArtifact(projectId, liveArtifact.artifactId).then((next) => {
         if (next) setDetail(next);
       });
@@ -175,6 +184,12 @@ export function LiveArtifactViewer({
 
     setRefreshing(false);
     setRefreshError(null);
+    setRefreshEvents((prev) =>
+      appendRefreshEvent(prev, {
+        phase: 'succeeded',
+        refreshedSourceCount: liveArtifactEvent.refreshedSourceCount ?? 0,
+      }),
+    );
     if ((liveArtifactEvent.refreshedSourceCount ?? 0) > 0) {
       setRefreshSuccess(t('liveArtifact.refresh.successOne'));
     } else {
@@ -215,10 +230,17 @@ export function LiveArtifactViewer({
     setRefreshing(true);
     setRefreshError(null);
     setRefreshSuccess(null);
+    setRefreshEvents((prev) => appendRefreshEvent(prev, { phase: 'started' }));
     try {
       const result = await refreshLiveArtifact(projectId, liveArtifact.artifactId);
       setDetail(result.artifact);
       setReloadKey((n) => n + 1);
+      setRefreshEvents((prev) =>
+        appendRefreshEvent(prev, {
+          phase: 'succeeded',
+          refreshedSourceCount: result.refresh.refreshedSourceCount,
+        }),
+      );
       if (result.refresh.refreshedSourceCount > 0) {
         setRefreshSuccess(t('liveArtifact.refresh.successOne'));
       } else {
@@ -226,7 +248,9 @@ export function LiveArtifactViewer({
       }
       await onRefreshArtifacts?.();
     } catch (error) {
-      setRefreshError(refreshErrorMessage(error, t));
+      const message = refreshErrorMessage(error, t);
+      setRefreshError(message);
+      setRefreshEvents((prev) => appendRefreshEvent(prev, { phase: 'failed', error: message }));
     } finally {
       setRefreshing(false);
     }
@@ -235,7 +259,6 @@ export function LiveArtifactViewer({
   const sourcePayload = detail ? liveArtifactSourcePayload(detail) : null;
   const dataPayload = detail?.document?.dataJson ?? null;
   const provenancePayload = detail ? liveArtifactProvenancePayload(detail) : null;
-  const refreshPayload = detail ? liveArtifactRefreshPayload(detail) : null;
   const currentRefreshStatus = detail?.refreshStatus ?? liveArtifact.refreshStatus;
   const isRunning = refreshing || currentRefreshStatus === 'running';
 
@@ -254,9 +277,69 @@ export function LiveArtifactViewer({
           </button>
         </div>
         <div className="viewer-toolbar-actions">
+          <div className="viewer-tabs">
+            {LIVE_ARTIFACT_VIEWER_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`viewer-tab ${mode === tab.id ? 'active' : ''}`}
+                onClick={() => setMode(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div
+            className="viewer-preview-controls"
+            data-active={mode === 'preview' ? 'true' : 'false'}
+            aria-hidden={mode === 'preview' ? undefined : true}
+          >
+            <span className="viewer-divider" aria-hidden />
+            <button
+              type="button"
+              className="icon-only"
+              onClick={() => bumpZoom(-25)}
+              title={t('fileViewer.zoomOut')}
+              aria-label={t('fileViewer.zoomOut')}
+              tabIndex={mode === 'preview' ? 0 : -1}
+            >
+              <Icon name="minus" size={14} />
+            </button>
+            <button
+              type="button"
+              className="viewer-action viewer-zoom-level"
+              onClick={() => setZoom(100)}
+              title={t('fileViewer.resetZoom')}
+              tabIndex={mode === 'preview' ? 0 : -1}
+            >
+              <span style={{ fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
+            </button>
+            <button
+              type="button"
+              className="icon-only"
+              onClick={() => bumpZoom(25)}
+              title={t('fileViewer.zoomIn')}
+              aria-label={t('fileViewer.zoomIn')}
+              tabIndex={mode === 'preview' ? 0 : -1}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            <span className="viewer-divider" aria-hidden />
+            <a
+              className="ghost-link"
+              href={liveArtifactPreviewUrl(projectId, liveArtifact.artifactId)}
+              target="_blank"
+              rel="noreferrer noopener"
+              tabIndex={mode === 'preview' ? 0 : -1}
+            >
+              {t('fileViewer.open')}
+            </a>
+          </div>
+          <span className="viewer-divider" aria-hidden />
           <button
             type="button"
             className="viewer-action primary"
+            data-running={isRunning ? 'true' : 'false'}
             onClick={() => void handleRefresh()}
             disabled={isRunning}
             aria-busy={isRunning}
@@ -270,60 +353,6 @@ export function LiveArtifactViewer({
             <Icon name={isRunning ? 'spinner' : 'reload'} size={13} />
             <span>{isRunning ? t('liveArtifact.refresh.running') : t('liveArtifact.refresh.button')}</span>
           </button>
-          <span className="viewer-divider" aria-hidden />
-          <div className="viewer-tabs">
-            {LIVE_ARTIFACT_VIEWER_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`viewer-tab ${mode === tab.id ? 'active' : ''}`}
-                onClick={() => setMode(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <span className="viewer-divider" aria-hidden />
-          {mode === 'preview' ? (
-            <>
-              <button
-                type="button"
-                className="icon-only"
-                onClick={() => bumpZoom(-25)}
-                title={t('fileViewer.zoomOut')}
-                aria-label={t('fileViewer.zoomOut')}
-              >
-                <Icon name="minus" size={14} />
-              </button>
-              <button
-                type="button"
-                className="viewer-action"
-                onClick={() => setZoom(100)}
-                title={t('fileViewer.resetZoom')}
-                style={{ minWidth: 60 }}
-              >
-                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
-              </button>
-              <button
-                type="button"
-                className="icon-only"
-                onClick={() => bumpZoom(25)}
-                title={t('fileViewer.zoomIn')}
-                aria-label={t('fileViewer.zoomIn')}
-              >
-                <Icon name="plus" size={14} />
-              </button>
-              <span className="viewer-divider" aria-hidden />
-              <a
-                className="ghost-link"
-                href={liveArtifactPreviewUrl(projectId, liveArtifact.artifactId)}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                {t('fileViewer.open')}
-              </a>
-            </>
-          ) : null}
         </div>
       </div>
       <div className="viewer-body">
@@ -382,7 +411,13 @@ export function LiveArtifactViewer({
         ) : mode === 'provenance' ? (
           <JsonPanel value={provenancePayload} emptyLabel="No provenance available." />
         ) : (
-          <JsonPanel value={refreshPayload} emptyLabel="No refresh history available yet." />
+          <LiveArtifactRefreshHistoryPanel
+            liveArtifact={detail}
+            fallbackRefreshStatus={liveArtifact.refreshStatus}
+            fallbackLastRefreshedAt={liveArtifact.lastRefreshedAt}
+            isRunning={isRunning}
+            sessionEvents={refreshEvents}
+          />
         )}
       </div>
     </div>
@@ -499,6 +534,420 @@ function liveArtifactRefreshPayload(liveArtifact: LiveArtifact): unknown {
     refreshStatus: liveArtifact.refreshStatus,
     lastRefreshedAt: liveArtifact.lastRefreshedAt ?? null,
   };
+}
+
+type LiveArtifactRefreshStatus = LiveArtifact['refreshStatus'];
+type LiveArtifactTileEntry = LiveArtifact['tiles'][number];
+
+interface LiveArtifactRefreshEvent {
+  id: number;
+  phase: 'started' | 'succeeded' | 'failed';
+  at: number;
+  durationMs?: number;
+  refreshedSourceCount?: number;
+  error?: string;
+}
+
+let refreshEventSequence = 0;
+
+function appendRefreshEvent(
+  prev: LiveArtifactRefreshEvent[],
+  next: Omit<LiveArtifactRefreshEvent, 'id' | 'at' | 'durationMs'>,
+): LiveArtifactRefreshEvent[] {
+  const at = Date.now();
+  refreshEventSequence += 1;
+  const event: LiveArtifactRefreshEvent = { ...next, id: refreshEventSequence, at };
+  if (next.phase !== 'started') {
+    // Pair with the most recent 'started' to compute duration.
+    for (let i = prev.length - 1; i >= 0; i -= 1) {
+      const candidate = prev[i];
+      if (candidate && candidate.phase === 'started') {
+        event.durationMs = Math.max(0, at - candidate.at);
+        break;
+      }
+    }
+  }
+  // Cap at 25 entries to keep the panel lightweight.
+  const MAX = 25;
+  const combined = [...prev, event];
+  return combined.length > MAX ? combined.slice(combined.length - MAX) : combined;
+}
+
+function formatAbsoluteDateTime(iso: string | number | undefined): string | null {
+  if (iso === undefined || iso === null) return null;
+  const date = typeof iso === 'number' ? new Date(iso) : new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  try {
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return date.toISOString();
+  }
+}
+
+function formatRelativeTime(iso: string | number | undefined, now = Date.now()): string | null {
+  if (iso === undefined || iso === null) return null;
+  const ms = typeof iso === 'number' ? iso : new Date(iso).getTime();
+  if (Number.isNaN(ms)) return null;
+  const deltaSec = Math.round((ms - now) / 1000);
+  const abs = Math.abs(deltaSec);
+  const suffix = deltaSec <= 0 ? ' ago' : ' from now';
+  if (abs < 5) return 'just now';
+  if (abs < 60) return `${abs}s${suffix}`;
+  if (abs < 3600) return `${Math.round(abs / 60)}m${suffix}`;
+  if (abs < 86400) return `${Math.round(abs / 3600)}h${suffix}`;
+  if (abs < 86400 * 30) return `${Math.round(abs / 86400)}d${suffix}`;
+  if (abs < 86400 * 365) return `${Math.round(abs / (86400 * 30))}mo${suffix}`;
+  return `${Math.round(abs / (86400 * 365))}y${suffix}`;
+}
+
+function formatDurationMs(ms: number | undefined): string | null {
+  if (ms === undefined || ms === null || Number.isNaN(ms)) return null;
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
+interface RefreshStatusDescriptor {
+  label: string;
+  tone: 'neutral' | 'running' | 'success' | 'warning' | 'error';
+  description: string;
+}
+
+function describeRefreshStatus(status: LiveArtifactRefreshStatus): RefreshStatusDescriptor {
+  switch (status) {
+    case 'running':
+      return {
+        label: 'Refreshing',
+        tone: 'running',
+        description: 'A refresh run is currently in progress.',
+      };
+    case 'succeeded':
+      return {
+        label: 'Up to date',
+        tone: 'success',
+        description: 'The last refresh finished successfully.',
+      };
+    case 'failed':
+      return {
+        label: 'Refresh failed',
+        tone: 'error',
+        description: 'The last refresh attempt did not complete successfully.',
+      };
+    case 'idle':
+      return {
+        label: 'Ready to refresh',
+        tone: 'neutral',
+        description: 'Refreshable sources are configured but no run is in progress.',
+      };
+    case 'never':
+    default:
+      return {
+        label: 'Not refreshable',
+        tone: 'warning',
+        description: 'This live artifact has no approved read-only refresh source yet.',
+      };
+  }
+}
+
+function describeEventPhase(
+  event: LiveArtifactRefreshEvent,
+): { label: string; tone: 'running' | 'success' | 'error' } {
+  if (event.phase === 'started') return { label: 'Started', tone: 'running' };
+  if (event.phase === 'succeeded') return { label: 'Succeeded', tone: 'success' };
+  return { label: 'Failed', tone: 'error' };
+}
+
+export function LiveArtifactRefreshHistoryPanel({
+  liveArtifact,
+  fallbackRefreshStatus,
+  fallbackLastRefreshedAt,
+  isRunning,
+  sessionEvents,
+}: {
+  liveArtifact: LiveArtifact | null;
+  fallbackRefreshStatus: LiveArtifactRefreshStatus;
+  fallbackLastRefreshedAt?: string;
+  isRunning: boolean;
+  sessionEvents: LiveArtifactRefreshEvent[];
+}) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    // Keep relative timestamps fresh; 30s cadence is enough for "x minutes ago" feel.
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const status: LiveArtifactRefreshStatus = isRunning
+    ? 'running'
+    : liveArtifact?.refreshStatus ?? fallbackRefreshStatus;
+  const descriptor = describeRefreshStatus(status);
+  const lastRefreshedAt = liveArtifact?.lastRefreshedAt ?? fallbackLastRefreshedAt;
+  const createdAt = liveArtifact?.createdAt;
+  const updatedAt = liveArtifact?.updatedAt;
+  const tiles = liveArtifact?.tiles ?? [];
+  const refreshableTiles = tiles.filter(
+    (tile) => tile.refreshStatus !== 'not_refreshable',
+  );
+  const documentSource = liveArtifact?.document?.sourceJson ?? null;
+  const reversedEvents = [...sessionEvents].reverse();
+  const rawPayload = liveArtifact ? liveArtifactRefreshPayload(liveArtifact) : null;
+
+  return (
+    <div className="live-artifact-refresh-panel">
+      <section className="live-artifact-refresh-hero">
+        <div className="live-artifact-refresh-hero-main">
+          <span
+            className={`live-artifact-badge refresh-status tone-${descriptor.tone}`}
+            data-testid="live-artifact-refresh-status-badge"
+          >
+            {descriptor.label}
+          </span>
+          <p className="live-artifact-refresh-hero-desc">{descriptor.description}</p>
+        </div>
+        <div className="live-artifact-refresh-hero-meta">
+          <div className="live-artifact-refresh-hero-metric">
+            <span className="live-artifact-refresh-label">Last refreshed</span>
+            {lastRefreshedAt ? (
+              <>
+                <span className="live-artifact-refresh-value">
+                  {formatRelativeTime(lastRefreshedAt, now) ?? '—'}
+                </span>
+                <span
+                  className="live-artifact-refresh-sub"
+                  title={formatAbsoluteDateTime(lastRefreshedAt) ?? undefined}
+                >
+                  {formatAbsoluteDateTime(lastRefreshedAt) ?? ''}
+                </span>
+              </>
+            ) : (
+              <span className="live-artifact-refresh-value muted">Never</span>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="live-artifact-refresh-facts">
+        <LiveArtifactRefreshFact
+          label="Created"
+          iso={createdAt}
+          emptyLabel="Unknown"
+          now={now}
+        />
+        <LiveArtifactRefreshFact
+          label="Last updated"
+          iso={updatedAt}
+          emptyLabel="Unknown"
+          now={now}
+        />
+        <LiveArtifactRefreshFact
+          label="Refreshable tiles"
+          value={
+            tiles.length === 0
+              ? '—'
+              : `${refreshableTiles.length} of ${tiles.length}`
+          }
+          helper={tiles.length === 0 ? 'No tiles' : undefined}
+        />
+      </section>
+
+      <section className="live-artifact-refresh-section">
+        <header className="live-artifact-refresh-section-header">
+          <h4>Session activity</h4>
+          <span className="live-artifact-refresh-hint">
+            Events observed while this tab is open
+          </span>
+        </header>
+        {reversedEvents.length === 0 ? (
+          <div className="live-artifact-refresh-empty">
+            No refresh activity yet in this session. Trigger
+            {' '}<em>Refresh</em>{' '}to record a timeline, or wait for automated runs.
+          </div>
+        ) : (
+          <ol className="live-artifact-refresh-timeline">
+            {reversedEvents.map((event) => {
+              const phase = describeEventPhase(event);
+              const duration = formatDurationMs(event.durationMs);
+              return (
+                <li key={event.id} className={`live-artifact-refresh-event tone-${phase.tone}`}>
+                  <span className="live-artifact-refresh-event-dot" aria-hidden />
+                  <div className="live-artifact-refresh-event-body">
+                    <div className="live-artifact-refresh-event-row">
+                      <span
+                        className={`live-artifact-badge refresh-status tone-${phase.tone}`}
+                      >
+                        {phase.label}
+                      </span>
+                      <span
+                        className="live-artifact-refresh-event-time"
+                        title={formatAbsoluteDateTime(event.at) ?? undefined}
+                      >
+                        {formatRelativeTime(event.at, now) ?? ''}
+                      </span>
+                    </div>
+                    <div className="live-artifact-refresh-event-detail">
+                      {event.phase === 'succeeded' ? (
+                        <span>
+                          {`${event.refreshedSourceCount ?? 0} source${
+                            (event.refreshedSourceCount ?? 0) === 1 ? '' : 's'
+                          } updated`}
+                          {duration ? ` · ${duration}` : ''}
+                        </span>
+                      ) : event.phase === 'failed' ? (
+                        <span>
+                          {event.error ?? 'Refresh failed.'}
+                          {duration ? ` · ${duration}` : ''}
+                        </span>
+                      ) : (
+                        <span>Refresh started…</span>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </section>
+
+      <section className="live-artifact-refresh-section">
+        <header className="live-artifact-refresh-section-header">
+          <h4>Tile refresh status</h4>
+          <span className="live-artifact-refresh-hint">
+            {tiles.length === 0
+              ? 'No tiles attached to this artifact.'
+              : `${refreshableTiles.length} of ${tiles.length} refreshable`}
+          </span>
+        </header>
+        {tiles.length === 0 ? (
+          <div className="live-artifact-refresh-empty">No tiles to report on yet.</div>
+        ) : (
+          <ul className="live-artifact-refresh-tiles">
+            {tiles.map((tile) => (
+              <LiveArtifactTileRefreshRow key={tile.id} tile={tile} />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {documentSource ? (
+        <section className="live-artifact-refresh-section">
+          <header className="live-artifact-refresh-section-header">
+            <h4>Document source</h4>
+            <span className="live-artifact-refresh-hint">
+              {documentSource.refreshPermission === 'manual_refresh_granted_for_read_only'
+                ? 'Manual read-only refresh approved'
+                : 'Refresh not permitted'}
+            </span>
+          </header>
+          <dl className="live-artifact-refresh-kv">
+            <div>
+              <dt>Type</dt>
+              <dd>{documentSource.type}</dd>
+            </div>
+            {documentSource.toolName ? (
+              <div>
+                <dt>Tool</dt>
+                <dd>
+                  <code>{documentSource.toolName}</code>
+                </dd>
+              </div>
+            ) : null}
+            {documentSource.connector ? (
+              <div>
+                <dt>Connector</dt>
+                <dd>
+                  {documentSource.connector.accountLabel ??
+                    documentSource.connector.connectorId}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        </section>
+      ) : null}
+
+      {rawPayload != null ? (
+        <details className="live-artifact-refresh-raw">
+          <summary>Raw payload</summary>
+          <pre className="viewer-source">{JSON.stringify(rawPayload, null, 2)}</pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function LiveArtifactRefreshFact({
+  label,
+  iso,
+  value,
+  helper,
+  emptyLabel,
+  now,
+}: {
+  label: string;
+  iso?: string;
+  value?: string;
+  helper?: string;
+  emptyLabel?: string;
+  now?: number;
+}) {
+  const relative = iso !== undefined ? formatRelativeTime(iso, now) : null;
+  const absolute = iso !== undefined ? formatAbsoluteDateTime(iso) : null;
+  const resolved = value ?? relative ?? emptyLabel ?? '—';
+  const sub = helper ?? (iso !== undefined ? absolute ?? '' : '');
+  return (
+    <div className="live-artifact-refresh-fact">
+      <span className="live-artifact-refresh-label">{label}</span>
+      <span className="live-artifact-refresh-value" title={absolute ?? undefined}>
+        {resolved}
+      </span>
+      {sub ? <span className="live-artifact-refresh-sub">{sub}</span> : null}
+    </div>
+  );
+}
+
+function LiveArtifactTileRefreshRow({ tile }: { tile: LiveArtifactTileEntry }) {
+  const toneByStatus: Record<LiveArtifactTileEntry['refreshStatus'], string> = {
+    not_refreshable: 'neutral',
+    idle: 'neutral',
+    running: 'running',
+    succeeded: 'success',
+    failed: 'error',
+  };
+  const labelByStatus: Record<LiveArtifactTileEntry['refreshStatus'], string> = {
+    not_refreshable: 'Not refreshable',
+    idle: 'Idle',
+    running: 'Running',
+    succeeded: 'Succeeded',
+    failed: 'Failed',
+  };
+  const tone = toneByStatus[tile.refreshStatus];
+  const label = labelByStatus[tile.refreshStatus];
+  return (
+    <li className="live-artifact-refresh-tile">
+      <div className="live-artifact-refresh-tile-main">
+        <span className="live-artifact-refresh-tile-title">{tile.title}</span>
+        <span className="live-artifact-refresh-tile-meta">
+          <code>{tile.kind}</code>
+        </span>
+      </div>
+      <div className="live-artifact-refresh-tile-side">
+        <span className={`live-artifact-badge refresh-status tone-${tone}`}>{label}</span>
+      </div>
+      {tile.lastError ? (
+        <div className="live-artifact-refresh-tile-error">{tile.lastError}</div>
+      ) : null}
+    </li>
+  );
 }
 
 function FileActions({
