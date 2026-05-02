@@ -556,12 +556,38 @@ code {
   word-wrap: break-word;
 }
 .msg .role {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   font-size: 12.5px;
   text-transform: none;
   color: var(--text-strong);
   margin-bottom: 4px;
   letter-spacing: 0;
   font-weight: 600;
+}
+.msg-time {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chat-day-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  margin: 4px 0 0;
+}
+.chat-day-separator::before,
+.chat-day-separator::after {
+  content: '';
+  height: 1px;
+  background: var(--border);
+  flex: 1;
 }
 .msg.user .role::before { content: ''; }
 .msg.user .user-text { white-space: pre-wrap; color: var(--text); }

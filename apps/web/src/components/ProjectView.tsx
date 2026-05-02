@@ -579,6 +579,7 @@ export function ProjectView({
         id: crypto.randomUUID(),
         role: 'user',
         content: prompt,
+        createdAt: startedAt,
         attachments: attachments.length > 0 ? attachments : undefined,
       };
       const selectedAgent =
@@ -599,6 +600,7 @@ export function ProjectView({
         agentId: assistantAgentId,
         agentName: assistantAgentName,
         events: [],
+        createdAt: startedAt,
         runStatus: config.mode === 'daemon' ? 'running' : undefined,
         startedAt,
       };
