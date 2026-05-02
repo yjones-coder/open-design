@@ -20,7 +20,7 @@ export interface LiveArtifactRefreshSsePayload {
   artifactId: string;
   refreshId?: string;
   title?: string;
-  refreshedTileCount?: number;
+  refreshedSourceCount?: number;
   error?: string;
 }
 

@@ -46,6 +46,25 @@ export interface ConnectorListResponse {
   connectors: ConnectorDetail[];
 }
 
+export interface ConnectorStatusSummary {
+  status: ConnectorStatus;
+  accountLabel?: string;
+  lastError?: string;
+}
+
+export interface ConnectorStatusResponse {
+  statuses: Record<string, ConnectorStatusSummary>;
+}
+
+export interface ConnectorDiscoveryMeta {
+  provider: 'composio';
+  refreshRequested?: boolean;
+}
+
+export interface ConnectorDiscoveryResponse extends ConnectorListResponse {
+  meta?: ConnectorDiscoveryMeta;
+}
+
 export interface ConnectorDetailResponse {
   connector: ConnectorDetail;
 }

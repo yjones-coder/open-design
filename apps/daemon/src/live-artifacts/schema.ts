@@ -617,6 +617,12 @@ function validateSource(value: unknown, path: string, issues: LiveArtifactValida
   }
 
   const refreshPermission = validateEnum(value.refreshPermission, REFRESH_PERMISSIONS, `${path}.refreshPermission`, issues);
+  if (type === 'connector_tool' && connector === undefined) {
+    issues.push({ path: `${path}.connector`, message: `${path}.connector is required for connector_tool sources` });
+  }
+  if (type === 'connector_tool' && toolName !== undefined && connector !== undefined && toolName !== connector.toolName) {
+    issues.push({ path: `${path}.toolName`, message: `${path}.toolName must match ${path}.connector.toolName` });
+  }
   if (type === undefined || !inputResult.ok || refreshPermission === undefined) return undefined;
   const source: LiveArtifactTileSource = { type, input: inputResult.value, refreshPermission };
   if (toolName !== undefined) source.toolName = toolName;

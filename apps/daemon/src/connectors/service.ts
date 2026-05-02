@@ -13,7 +13,7 @@ import {
   type ConnectorToolSafety,
   type ConnectorStatus,
 } from './catalog.js';
-import { composioConnectorProvider, type ComposioConnectionStart } from './composio.js';
+import { composioConnectorProvider, getStaticComposioCatalogDefinitions, type ComposioConnectionStart } from './composio.js';
 
 export interface ConnectorExecuteRequest {
   connectorId: string;
@@ -81,6 +81,14 @@ export interface ConnectorConnectionStatus {
 
 export interface ConnectorConnectionRecord extends ConnectorConnectionStatus {
   updatedAt: string;
+}
+
+export interface ConnectorDiscoveryResult {
+  connectors: ConnectorDetail[];
+  meta?: {
+    provider: 'composio';
+    refreshRequested?: boolean;
+  };
 }
 
 export type ConnectorCredentialMaterial = Record<string, unknown>;
@@ -506,6 +514,10 @@ export class ConnectorService {
     return composioConnectorProvider.listDefinitions(signal);
   }
 
+  listFastDefinitions(): ConnectorCatalogDefinition[] {
+    return getStaticComposioCatalogDefinitions();
+  }
+
   async getDefinition(connectorId: string, signal?: AbortSignal): Promise<ConnectorCatalogDefinition | undefined> {
     return composioConnectorProvider.getDefinition(connectorId, signal);
   }
@@ -519,7 +531,22 @@ export class ConnectorService {
   }
 
   async listConnectors(signal?: AbortSignal): Promise<ConnectorDetail[]> {
-    return (await this.listDefinitions(signal)).map((definition) => this.toDetail(definition));
+    return this.listFastDefinitions().map((definition) => this.toDetail(definition));
+  }
+
+  listConnectorStatuses(): Record<string, ConnectorConnectionStatus> {
+    return Object.fromEntries(this.listFastDefinitions().map((definition) => [definition.id, this.getStatus(definition)]));
+  }
+
+  async listConnectorDiscovery(options: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<ConnectorDiscoveryResult> {
+    if (options.refresh) composioConnectorProvider.clearDiscoveryCache();
+    return {
+      connectors: (await this.listDefinitions(options.signal)).map((definition) => this.toDetail(definition)),
+      meta: {
+        provider: 'composio',
+        ...(options.refresh ? { refreshRequested: true } : {}),
+      },
+    };
   }
 
   async getConnector(connectorId: string, signal?: AbortSignal): Promise<ConnectorDetail> {

@@ -77,7 +77,7 @@ export type PersistedAgentEvent =
       artifactId: string;
       refreshId?: string;
       title?: string;
-      refreshedTileCount?: number;
+      refreshedSourceCount?: number;
       error?: string;
     }
   | { kind: 'tool_use'; id: string; name: string; input: unknown }

@@ -54,14 +54,6 @@ export function SettingsDialog({
   const [languageMenuRect, setLanguageMenuRect] = useState<DOMRect | null>(null);
   const languageRef = useRef<HTMLDivElement | null>(null);
 
-  // If the daemon goes offline mid-edit, force API mode so the UI doesn't
-  // pretend Local CLI is selectable.
-  useEffect(() => {
-    if (!daemonLive && cfg.mode === 'daemon') {
-      setCfg((c) => ({ ...c, mode: 'api' }));
-    }
-  }, [daemonLive, cfg.mode]);
-
   useEffect(() => {
     setActiveSection(initialSection);
   }, [initialSection]);

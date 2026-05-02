@@ -213,7 +213,6 @@ export type LiveArtifactUpdateInput = LiveArtifactRejectDaemonOwnedInputFields &
 };
 
 export type LiveArtifactSummary = Omit<LiveArtifact, 'document' | 'tiles'> & {
-  tileCount: number;
   hasDocument: boolean;
 };
 
@@ -223,4 +222,13 @@ export interface LiveArtifactListResponse {
 
 export interface LiveArtifactDetailResponse {
   liveArtifact: LiveArtifact;
+}
+
+export interface LiveArtifactRefreshResponse {
+  artifact: LiveArtifact;
+  refresh: {
+    id: string;
+    status: 'succeeded';
+    refreshedSourceCount: number;
+  };
 }

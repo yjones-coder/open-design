@@ -76,7 +76,6 @@ export interface LiveArtifactWorkspaceEntry {
   refreshStatus: LiveArtifactRefreshStatus;
   pinned: boolean;
   preview: LiveArtifactPreview;
-  tileCount: number;
   hasDocument: boolean;
   updatedAt: string;
   lastRefreshedAt?: string;
@@ -98,7 +97,6 @@ export function liveArtifactSummaryToWorkspaceEntry(
     refreshStatus: liveArtifact.refreshStatus,
     pinned: liveArtifact.pinned,
     preview: liveArtifact.preview,
-    tileCount: liveArtifact.tileCount,
     hasDocument: liveArtifact.hasDocument,
     updatedAt: liveArtifact.updatedAt,
   };

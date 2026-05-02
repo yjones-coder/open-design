@@ -9,6 +9,7 @@ const DEFAULT_COMPOSIO_BASE_URL = 'https://backend.composio.dev';
 const DEFAULT_COMPOSIO_TIMEOUT_MS = 30_000;
 const DEFAULT_COMPOSIO_USER_ID = 'open-design-local-user';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const DISCOVERY_CACHE_TTL_MS = 60_000;
 
 const STATIC_COMPOSIO_CATALOG: ConnectorCatalogDefinition[] = [
   {
@@ -198,6 +199,8 @@ export interface ComposioConnectionCompletion {
 
 export class ComposioConnectorProvider {
   private discoveredAuthConfigIds: Record<string, string> | undefined;
+  private definitionsCache: { definitions: ConnectorCatalogDefinition[]; expiresAtMs: number } | undefined;
+  private definitionsPromise: Promise<ConnectorCatalogDefinition[]> | undefined;
   private readonly pendingConnections = new Map<string, ComposioPendingConnection>();
 
   isConfigured(definition: ConnectorCatalogDefinition): boolean {
@@ -206,9 +209,30 @@ export class ComposioConnectorProvider {
 
   clearDiscoveryCache(): void {
     this.discoveredAuthConfigIds = undefined;
+    this.definitionsCache = undefined;
+    this.definitionsPromise = undefined;
   }
 
   async listDefinitions(signal?: AbortSignal): Promise<ConnectorCatalogDefinition[]> {
+    const now = Date.now();
+    if (this.definitionsCache && this.definitionsCache.expiresAtMs > now) {
+      return this.definitionsCache.definitions;
+    }
+    if (this.definitionsPromise) return this.definitionsPromise;
+
+    const promise = this.fetchDefinitions(signal)
+      .then((definitions) => {
+        this.definitionsCache = { definitions, expiresAtMs: Date.now() + DISCOVERY_CACHE_TTL_MS };
+        return definitions;
+      })
+      .finally(() => {
+        if (this.definitionsPromise === promise) this.definitionsPromise = undefined;
+      });
+    this.definitionsPromise = promise;
+    return promise;
+  }
+
+  private async fetchDefinitions(signal?: AbortSignal): Promise<ConnectorCatalogDefinition[]> {
     const apiKey = this.getApiKey();
     const authConfigs = apiKey ? await this.listAuthConfigsSafe(signal) : [];
     const configuredByConnectorId = new Map<string, { authConfigId: string; toolkitSlug: string }>();
@@ -545,6 +569,25 @@ function mergeToolDefinition(staticTool: ConnectorCatalogToolDefinition, liveToo
 }
 
 export const composioConnectorProvider = new ComposioConnectorProvider();
+
+export function getStaticComposioCatalogDefinitions(): ConnectorCatalogDefinition[] {
+  return STATIC_COMPOSIO_CATALOG.map((definition) => ({
+    ...definition,
+    tools: definition.tools.map((tool) => ({
+      name: tool.name,
+      title: tool.title,
+      ...(tool.description === undefined ? {} : { description: tool.description }),
+      ...(tool.inputSchemaJson === undefined ? {} : { inputSchemaJson: toBoundedJsonObject(tool.inputSchemaJson)! }),
+      ...(tool.outputSchemaJson === undefined ? {} : { outputSchemaJson: toBoundedJsonObject(tool.outputSchemaJson)! }),
+      safety: { ...tool.safety },
+      refreshEligible: tool.refreshEligible,
+      requiredScopes: [...tool.requiredScopes],
+      ...(tool.providerToolId === undefined ? {} : { providerToolId: tool.providerToolId }),
+    })),
+    allowedToolNames: [...definition.allowedToolNames],
+    ...(definition.featuredToolNames === undefined ? {} : { featuredToolNames: [...definition.featuredToolNames] }),
+  }));
+}
 
 function getString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;

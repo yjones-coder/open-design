@@ -12,6 +12,7 @@ let baseUrl;
 let originalComposioConfig;
 const originalFetch = globalThis.fetch;
 let lastComposioLinkRequest;
+let composioDiscoveryRequestCounts;
 
 function composioJson(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -25,6 +26,7 @@ function mockComposioFetch(options = {}) {
     authConfigs = [{ id: 'ac_github', status: 'ENABLED', toolkit: { slug: 'github' } }],
     linkResponse = { connected_account_id: 'ca_github', status: 'ACTIVE', account_label: 'octocat@example.com' },
   } = options;
+  composioDiscoveryRequestCounts = { authConfigs: 0, toolkits: 0, tools: 0 };
   vi.stubGlobal('fetch', async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith('http://127.0.0.1:') || url.startsWith('http://localhost:')) {
@@ -32,12 +34,15 @@ function mockComposioFetch(options = {}) {
     }
     const parsed = new URL(url);
     if (parsed.pathname === '/api/v3/auth_configs') {
+      composioDiscoveryRequestCounts.authConfigs += 1;
       return composioJson({ items: authConfigs });
     }
     if (parsed.pathname === '/api/v3.1/toolkits') {
+      composioDiscoveryRequestCounts.toolkits += 1;
       return composioJson({ items: [{ slug: 'github', name: 'GitHub', description: 'GitHub toolkit', categories: [{ name: 'Developer' }] }] });
     }
     if (parsed.pathname === '/api/v3.1/tools' && parsed.searchParams.get('toolkit_slug') === 'github') {
+      composioDiscoveryRequestCounts.tools += 1;
       return composioJson({ items: [{ slug: 'GITHUB_SEARCH_REPOSITORIES', name: 'Search repositories', description: 'Search public and private repositories', toolkit: { slug: 'github' }, input_parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }, tags: ['read'] }] });
     }
     if (parsed.pathname === '/api/v3.1/connected_accounts/link') {
@@ -100,7 +105,7 @@ function mintConnectorToolToken(projectId = 'connector-route-project', runId = '
 }
 
 describe('connector routes', () => {
-  it('lists catalog connectors and marks configured connectors from Composio auth configs', async () => {
+  it('lists catalog connectors without hitting Composio discovery endpoints', async () => {
     const response = await jsonFetch(`${baseUrl}/api/connectors`);
 
     expect(response.status).toBe(200);
@@ -110,7 +115,7 @@ describe('connector routes', () => {
       id: 'github',
       name: 'GitHub',
       provider: 'composio',
-      auth: { provider: 'composio', configured: true },
+      auth: { provider: 'composio', configured: false },
     });
     expect(github.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'github.github_search_repositories' })]));
     expect(response.body.connectors.find((connector) => connector.id === 'google_drive')).toMatchObject({
@@ -121,6 +126,30 @@ describe('connector routes', () => {
       id: 'notion',
       auth: { provider: 'composio', configured: false },
     });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 0, toolkits: 0, tools: 0 });
+  });
+
+  it('reuses Composio discovery results across consecutive discovery requests', async () => {
+    const first = await jsonFetch(`${baseUrl}/api/connectors/discovery`);
+    const second = await jsonFetch(`${baseUrl}/api/connectors/discovery`);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.body.connectors.map((connector) => connector.id)).toEqual(['github', 'notion', 'google_drive']);
+    expect(second.body.connectors.map((connector) => connector.id)).toEqual(['github', 'notion', 'google_drive']);
+    expect(first.body.meta).toMatchObject({ provider: 'composio' });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, toolkits: 1, tools: 1 });
+  });
+
+  it('returns connector statuses by connectorId', async () => {
+    await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
+
+    const response = await jsonFetch(`${baseUrl}/api/connectors/status`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.statuses.github).toMatchObject({ status: 'connected', accountLabel: 'octocat@example.com' });
+    expect(response.body.statuses.notion).toMatchObject({ status: 'available' });
+    expect(response.body.statuses.google_drive).toMatchObject({ status: 'available' });
   });
 
   it('returns static catalog connectors even when Composio auth configs are empty', async () => {

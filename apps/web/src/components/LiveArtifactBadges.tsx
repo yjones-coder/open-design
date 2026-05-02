@@ -17,9 +17,7 @@ export function LiveArtifactBadges({
   const t = useT();
   const badges = [
     { key: 'live', label: t('designs.badgeLive') },
-    refreshStatus !== 'never'
-      ? { key: 'refreshable', label: t('designs.badgeRefreshable') }
-      : null,
+    { key: 'refreshable', label: t('designs.badgeRefreshable') },
     refreshStatus === 'running'
       ? { key: 'refreshing', label: t('designs.statusRefreshing') }
       : null,

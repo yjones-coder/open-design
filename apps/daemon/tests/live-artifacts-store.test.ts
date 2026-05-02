@@ -93,6 +93,7 @@ function validCreateInput() {
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -257,7 +258,7 @@ describe('live artifact store layout', () => {
       status: 'archived',
       pinned: true,
       preview: input.preview,
-      refreshStatus: 'never',
+      refreshStatus: 'idle',
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
       tiles: input.tiles,
@@ -313,12 +314,10 @@ describe('live artifact store layout', () => {
       id: newer.artifact.id,
       projectId: 'project-1',
       title: 'Current Health',
-      tileCount: 0,
       hasDocument: false,
     });
     expect(summaries[1]).toMatchObject({
       id: older.artifact.id,
-      tileCount: 1,
       hasDocument: true,
     });
     expect(summaries[0]).not.toHaveProperty('document');
@@ -676,82 +675,33 @@ describe('live artifact store layout', () => {
     await releaseLiveArtifactRefreshLock(thirdLock);
   });
 
-  it('commits refresh candidates only after all refreshable tiles validate', async () => {
+  it('commits document refresh candidates without tile refresh state', async () => {
     const projectsRoot = await makeProjectsRoot();
     const input: any = validCreateInput();
-    input.tiles[0] = {
-      ...input.tiles[0],
-      renderJson: { type: 'metric' as const, label: 'Revenue', value: 42 },
-      refreshStatus: 'idle' as const,
-      sourceJson: {
-        type: 'daemon_tool' as const,
-        toolName: 'project_files.read_json',
-        input: { path: 'metrics.json' },
-        outputMapping: {
-          dataPaths: [{ from: 'json.revenue', to: 'value' }],
-          transform: 'identity' as const,
-        },
-        refreshPermission: 'manual_refresh_granted_for_read_only' as const,
-      },
-    };
     input.document!.dataJson = { title: 'Revenue', revenue: 42 };
+    input.document!.sourceJson = {
+      type: 'daemon_tool' as const,
+      toolName: 'project_files.read_json',
+      input: { path: 'metrics.json' },
+      outputMapping: {
+        dataPaths: [{ from: 'json.revenue', to: 'value' }],
+        transform: 'identity' as const,
+      },
+      refreshPermission: 'manual_refresh_granted_for_read_only' as const,
+    };
     const created = await createLiveArtifact({
       projectsRoot,
       projectId: 'project-1',
       input,
       templateHtml: '<h1>{{data.title}}</h1><p>{{data.value}}</p>',
     });
-    const approvedArtifact = {
-      ...created.artifact,
-      tiles: [
-        {
-          ...created.artifact.tiles[0]!,
-          sourceJson: {
-            ...created.artifact.tiles[0]!.sourceJson!,
-            refreshPermission: 'manual_refresh_granted_for_read_only' as const,
-          },
-        },
-      ],
-    };
-    const previousData = await readFile(created.paths.dataJsonPath, 'utf8');
-    const previousPreview = await readFile(created.paths.generatedPreviewHtmlPath, 'utf8');
     const previousTile = await readFile(liveArtifactTilePath(created.paths, 'tile-1'), 'utf8');
-
-    const failedLock = await acquireLiveArtifactRefreshLock({ projectsRoot, projectId: 'project-1', artifactId: created.artifact.id });
-    await expect(() => buildLiveArtifactRefreshCandidate({
-      artifact: approvedArtifact,
-      currentDataJson: approvedArtifact.document!.dataJson,
-      tileOutputs: [{ tileId: 'tile-1', output: { json: { revenue: { nested: true } } } }],
-      now: new Date('2026-04-30T11:00:00.000Z'),
-    })).toThrow(/metric refresh output/);
-    await appendLiveArtifactRefreshLogEntry({
-      projectsRoot,
-      projectId: 'project-1',
-      artifactId: created.artifact.id,
-      refreshId: failedLock.metadata.refreshId,
-      sequence: 0,
-      step: 'refresh:commit',
-      status: 'failed',
-      startedAt: '2026-04-30T11:00:00.000Z',
-      finishedAt: '2026-04-30T11:00:01.000Z',
-      error: { code: 'REFRESH_VALIDATION_FAILED', message: 'metric refresh output must include string or number value' },
-    });
-    await releaseLiveArtifactRefreshLock(failedLock);
-
-    await expect(readFile(created.paths.dataJsonPath, 'utf8')).resolves.toBe(previousData);
-    await expect(readFile(created.paths.generatedPreviewHtmlPath, 'utf8')).resolves.toBe(previousPreview);
-    await expect(readFile(liveArtifactTilePath(created.paths, 'tile-1'), 'utf8')).resolves.toBe(previousTile);
-    await expect(stat(path.join(created.paths.snapshotsDir, failedLock.metadata.refreshId))).rejects.toMatchObject({ code: 'ENOENT' });
-    const failedLogEntries = await listLiveArtifactRefreshLogEntries({ projectsRoot, projectId: 'project-1', artifactId: created.artifact.id });
-    expect(failedLogEntries).toEqual([
-      expect.objectContaining({ refreshId: failedLock.metadata.refreshId, status: 'failed', step: 'refresh:commit' }),
-    ]);
 
     const successLock = await acquireLiveArtifactRefreshLock({ projectsRoot, projectId: 'project-1', artifactId: created.artifact.id });
     const candidate = buildLiveArtifactRefreshCandidate({
-      artifact: approvedArtifact,
-      currentDataJson: approvedArtifact.document!.dataJson,
-      tileOutputs: [{ tileId: 'tile-1', output: { json: { revenue: 99 } } }],
+      artifact: created.artifact,
+      currentDataJson: created.artifact.document!.dataJson,
+      documentOutput: { output: { json: { revenue: 99 } } },
       now: new Date('2026-04-30T11:01:00.000Z'),
     });
     const committed = await commitLiveArtifactRefreshCandidate({
@@ -767,16 +717,16 @@ describe('live artifact store layout', () => {
 
     expect(committed.artifact.refreshStatus).toBe('succeeded');
     expect(committed.artifact.lastRefreshedAt).toBe('2026-04-30T11:01:00.000Z');
-    expect(committed.artifact.tiles[0]?.renderJson).toMatchObject({ type: 'metric', value: 99 });
+    expect(committed.artifact.tiles[0]?.renderJson).toMatchObject({ type: 'metric', value: '$42K' });
     await expect(readFile(created.paths.dataJsonPath, 'utf8')).resolves.toContain('"value": 99');
     await expect(readFile(created.paths.generatedPreviewHtmlPath, 'utf8')).resolves.toContain('<p>99</p>');
-    await expect(readFile(liveArtifactTilePath(created.paths, 'tile-1'), 'utf8')).resolves.toContain('"value": 99');
+    await expect(readFile(liveArtifactTilePath(created.paths, 'tile-1'), 'utf8')).resolves.toBe(previousTile);
     const snapshotDir = path.join(created.paths.snapshotsDir, successLock.metadata.refreshId);
     await expect(readFile(path.join(snapshotDir, 'artifact.json'), 'utf8')).resolves.toContain('"lastRefreshedAt": "2026-04-30T11:01:00.000Z"');
     await expect(readFile(path.join(snapshotDir, 'data.json'), 'utf8')).resolves.toContain('"value": 99');
     await expect(readFile(path.join(snapshotDir, 'index.html'), 'utf8')).resolves.toContain('<p>99</p>');
     await expect(readFile(path.join(snapshotDir, 'template.html'), 'utf8')).resolves.toContain('{{data.value}}');
-    await expect(readFile(path.join(snapshotDir, 'tiles', 'tile-1.json'), 'utf8')).resolves.toContain('"value": 99');
+    await expect(readFile(path.join(snapshotDir, 'tiles', 'tile-1.json'), 'utf8')).resolves.toBe(previousTile);
     expect(await readdir(created.paths.snapshotsDir)).toEqual([successLock.metadata.refreshId]);
     await expect(
       markLiveArtifactRefreshCommitted({
@@ -1125,7 +1075,7 @@ describe('live artifact store layout', () => {
       slug: 'updated-dashboard',
       pinned: false,
       status: 'active',
-      refreshStatus: 'never',
+      refreshStatus: 'idle',
       createdAt: '2026-04-30T10:11:12.345Z',
       updatedAt: '2026-04-30T10:12:12.345Z',
       tiles: [updatedTile],

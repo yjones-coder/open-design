@@ -10,7 +10,6 @@ import type { BoundedJsonObject, LiveArtifact, LiveArtifactCreateInput, LiveArti
 import { validateBoundedJsonObject, validateLiveArtifactCreateInput, validateLiveArtifactRefreshLogEntry, validateLiveArtifactUpdateInput, validatePersistedLiveArtifact } from './schema.js';
 
 export type LiveArtifactSummary = Omit<LiveArtifact, 'document' | 'tiles'> & {
-  tileCount: number;
   hasDocument: boolean;
 };
 
@@ -374,10 +373,9 @@ function defaultProvenance(nowIso: string): LiveArtifactProvenance {
 }
 
 function toSummary(artifact: LiveArtifact): LiveArtifactSummary {
-  const { document: _document, tiles, ...summary } = artifact;
+  const { document: _document, tiles: _tiles, ...summary } = artifact;
   return {
     ...summary,
-    tileCount: tiles.length,
     hasDocument: _document !== undefined,
   };
 }
@@ -606,7 +604,7 @@ function artifactWithInitialRefreshPermission(artifact: LiveArtifact): LiveArtif
         ...tile,
         sourceJson: {
           ...tile.sourceJson,
-          refreshPermission: 'none',
+          refreshPermission: 'manual_refresh_granted_for_read_only',
         },
       };
     }),
@@ -618,7 +616,7 @@ function artifactWithInitialRefreshPermission(artifact: LiveArtifact): LiveArtif
           ...artifact.document,
           sourceJson: {
             ...artifact.document.sourceJson,
-            refreshPermission: 'none',
+            refreshPermission: 'manual_refresh_granted_for_read_only',
           },
         };
   }
@@ -714,7 +712,7 @@ export async function createLiveArtifact(options: CreateLiveArtifactOptions): Pr
     status: input.status ?? 'active',
     pinned: input.pinned ?? false,
     preview: input.preview,
-    refreshStatus: 'never',
+    refreshStatus: 'idle',
     createdAt: nowIso,
     updatedAt: nowIso,
     tiles: input.tiles ?? [],

@@ -1,8 +1,10 @@
 import type {
   ConnectorDetail,
   ConnectorConnectResponse,
+  ConnectorDiscoveryResponse,
   ConnectorDetailResponse,
   ConnectorListResponse,
+  ConnectorStatusResponse,
 } from '@open-design/contracts';
 import type {
   AgentInfo,
@@ -119,6 +121,29 @@ export async function fetchConnectors(): Promise<ConnectorDetail[]> {
     const resp = await fetch('/api/connectors');
     if (!resp.ok) return [];
     const json = (await resp.json()) as ConnectorListResponse;
+    return json.connectors ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchConnectorStatuses(): Promise<ConnectorStatusResponse['statuses']> {
+  try {
+    const resp = await fetch('/api/connectors/status');
+    if (!resp.ok) return {};
+    const json = (await resp.json()) as ConnectorStatusResponse;
+    return json.statuses ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export async function fetchConnectorDiscovery(options: { refresh?: boolean } = {}): Promise<ConnectorDetail[]> {
+  try {
+    const params = options.refresh ? '?refresh=true' : '';
+    const resp = await fetch(`/api/connectors/discovery${params}`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as ConnectorDiscoveryResponse;
     return json.connectors ?? [];
   } catch {
     return [];
@@ -322,7 +347,7 @@ export interface LiveArtifactRefreshResult {
   refresh: {
     id: string;
     status: 'succeeded';
-    refreshedTileCount: number;
+    refreshedSourceCount: number;
   };
 }
 
@@ -365,7 +390,7 @@ export async function refreshLiveArtifact(
 export async function updateLiveArtifact(
   projectId: string,
   artifactId: string,
-  input: Pick<LiveArtifact, 'title' | 'status' | 'pinned' | 'preview' | 'tiles'> & {
+  input: Pick<LiveArtifact, 'title' | 'status' | 'pinned' | 'preview'> & {
     slug?: string;
     document?: LiveArtifact['document'];
   },

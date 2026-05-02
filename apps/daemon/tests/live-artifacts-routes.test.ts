@@ -4,9 +4,10 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startServer } from '../src/server.js';
+import { connectorService } from '../src/connectors/service.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from '../src/tool-tokens.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +27,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await new Promise((resolve, reject) => {
     if (!server) return resolve(undefined);
     server.close((error) => (error ? reject(error) : resolve(undefined)));
@@ -152,7 +154,7 @@ describe('live artifact tool routes', () => {
       projectId,
       title: 'Tool Route Live Artifact',
       createdByRunId: runId,
-      refreshStatus: 'never',
+      refreshStatus: 'idle',
     });
 
     const list = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/list`, {
@@ -166,7 +168,6 @@ describe('live artifact tool routes', () => {
       projectId,
       title: 'Tool Route Live Artifact',
       hasDocument: true,
-      tileCount: 0,
     });
     expect(list.body.artifacts[0].document).toBeUndefined();
     expect(list.body.artifacts[0].tiles).toBeUndefined();
@@ -175,7 +176,21 @@ describe('live artifact tool routes', () => {
   it('refreshes live artifacts through tool and UI routes', async () => {
     const projectId = uniqueProjectId();
     const token = mintToolToken(projectId, 'run-route-test-refresh');
-    await writeProjectJson(projectId, 'metrics.json', { label: 'Open bugs', value: 7 });
+    const executeConnector = vi.spyOn(connectorService, 'execute')
+      .mockResolvedValueOnce({
+        ok: true,
+        connectorId: 'monet',
+        toolName: 'monet.metrics',
+        safety: { sideEffect: 'read', approval: 'auto' },
+        output: { title: 'Open bugs', owner: '7' },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        connectorId: 'monet',
+        toolName: 'monet.metrics',
+        safety: { sideEffect: 'read', approval: 'auto' },
+        output: { title: 'Open bugs', owner: '8' },
+      });
 
     const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
       method: 'POST',
@@ -183,38 +198,26 @@ describe('live artifact tool routes', () => {
       body: JSON.stringify({
         input: {
           ...validCreateInput('Refresh Route Artifact'),
-          tiles: [
-            {
-              id: 'bugs',
-              kind: 'metric',
-              title: 'Open bugs',
-              renderJson: { type: 'metric', label: 'Open bugs', value: 0 },
-              sourceJson: {
-                type: 'daemon_tool',
-                toolName: 'project_files.read_json',
-                input: { path: 'metrics.json' },
-                outputMapping: {
-                  dataPaths: [
-                    { from: '$.json.label', to: 'label' },
-                    { from: '$.json.value', to: 'value' },
-                  ],
-                  transform: 'identity',
-                },
-                refreshPermission: 'manual_refresh_granted_for_read_only',
+          document: {
+            ...validCreateInput('Refresh Route Artifact').document,
+            sourceJson: {
+              type: 'connector_tool',
+              toolName: 'monet.metrics',
+              input: { report: 'bugs' },
+              connector: {
+                connectorId: 'monet',
+                toolName: 'monet.metrics',
+                approvalPolicy: 'read_only_auto',
               },
-              provenanceJson: {
-                generatedAt: '2026-04-30T00:00:00.000Z',
-                generatedBy: 'agent',
-                sources: [{ label: 'metrics.json', type: 'local_file', ref: 'metrics.json' }],
-              },
-              refreshStatus: 'idle',
+              refreshPermission: 'manual_refresh_granted_for_read_only',
             },
-          ],
+          },
         },
       }),
     });
     expect(create.status).toBe(200);
-    expect(create.body.artifact.tiles[0].sourceJson.refreshPermission).toBe('none');
+    expect(create.body.artifact.tiles).toEqual([]);
+    expect(create.body.artifact.document.sourceJson.refreshPermission).toBe('manual_refresh_granted_for_read_only');
 
     const toolRefresh = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/refresh`, {
       method: 'POST',
@@ -222,77 +225,18 @@ describe('live artifact tool routes', () => {
       body: JSON.stringify({ artifactId: create.body.artifact.id }),
     });
     expect(toolRefresh.status).toBe(200);
-    expect(toolRefresh.body.refresh).toMatchObject({ id: 'refresh-000001', status: 'succeeded', refreshedTileCount: 0 });
+    expect(toolRefresh.body.refresh).toMatchObject({ id: 'refresh-000001', status: 'succeeded', refreshedSourceCount: 1 });
+    expect(toolRefresh.body.artifact).toMatchObject({ refreshStatus: 'succeeded', lastRefreshedAt: expect.any(String) });
+    expect(toolRefresh.body.artifact.document.dataJson).toMatchObject({ title: 'Open bugs', owner: '7' });
+    expect(executeConnector).toHaveBeenCalledTimes(1);
 
-    const approvedInput = {
-      title: create.body.artifact.title,
-      slug: create.body.artifact.slug,
-      status: create.body.artifact.status,
-      pinned: create.body.artifact.pinned,
-      preview: create.body.artifact.preview,
-      tiles: [
-        {
-          ...create.body.artifact.tiles[0],
-          sourceJson: {
-            ...create.body.artifact.tiles[0].sourceJson,
-            refreshPermission: 'manual_refresh_granted_for_read_only',
-          },
-        },
-      ],
-      document: create.body.artifact.document,
-    };
-    const approve = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(approvedInput),
-    });
-    expect(approve.status).toBe(200);
-    expect(approve.body.artifact.tiles[0].sourceJson.refreshPermission).toBe('manual_refresh_granted_for_read_only');
-
-    const approvedRefresh = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ artifactId: create.body.artifact.id }),
-    });
-    expect(approvedRefresh.status).toBe(200);
-    expect(approvedRefresh.body.refresh).toMatchObject({ id: 'refresh-000002', status: 'succeeded', refreshedTileCount: 1 });
-    expect(approvedRefresh.body.artifact).toMatchObject({ refreshStatus: 'succeeded', lastRefreshedAt: expect.any(String) });
-    expect(approvedRefresh.body.artifact.tiles[0].renderJson).toMatchObject({ type: 'metric', label: 'Open bugs', value: 7 });
-
-    const revokeInput = {
-      ...approvedInput,
-      tiles: [
-        {
-          ...approvedInput.tiles[0],
-          sourceJson: {
-            ...approvedInput.tiles[0].sourceJson,
-            refreshPermission: 'none',
-          },
-        },
-      ],
-    };
-    const revoke = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(revokeInput),
-    });
-    expect(revoke.status).toBe(200);
-    expect(revoke.body.artifact.tiles[0].sourceJson.refreshPermission).toBe('none');
-
-    const reapprove = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(approvedInput),
-    });
-    expect(reapprove.status).toBe(200);
-
-    await writeProjectJson(projectId, 'metrics.json', { label: 'Open bugs', value: 8 });
     const uiRefresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
       method: 'POST',
     });
     expect(uiRefresh.status).toBe(200);
-    expect(uiRefresh.body.refresh).toMatchObject({ id: 'refresh-000003', status: 'succeeded', refreshedTileCount: 1 });
-    expect(uiRefresh.body.artifact.tiles[0].renderJson).toMatchObject({ type: 'metric', label: 'Open bugs', value: 8 });
+    expect(uiRefresh.body.refresh).toMatchObject({ id: 'refresh-000002', status: 'succeeded', refreshedSourceCount: 1 });
+    expect(uiRefresh.body.artifact.document.dataJson).toMatchObject({ title: 'Open bugs', owner: '8' });
+    expect(executeConnector).toHaveBeenCalledTimes(2);
   });
 
   it('serves live artifact previews with restrictive iframe headers', async () => {

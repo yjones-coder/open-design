@@ -14,7 +14,7 @@ import {
   withLiveArtifactRefreshSourceTimeout,
 } from './refresh.js';
 import { connectorService } from '../connectors/service.js';
-import type { BoundedJsonObject, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshSourceMetadata, LiveArtifactTile, LiveArtifactTileSource } from './schema.js';
+import type { BoundedJsonObject, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshSourceMetadata, LiveArtifactTileSource } from './schema.js';
 
 export interface RefreshLiveArtifactOptions {
   projectsRoot: string;
@@ -28,7 +28,7 @@ export interface RefreshLiveArtifactResult {
   refresh: {
     id: string;
     status: 'succeeded';
-    refreshedTileCount: number;
+    refreshedSourceCount: number;
   };
 }
 
@@ -49,14 +49,47 @@ function toRefreshErrorRecord(error: unknown): LiveArtifactRefreshErrorRecord {
   return { message: String(error) };
 }
 
-function tileSourceMetadata(tile: LiveArtifactTile, source: LiveArtifactTileSource): LiveArtifactRefreshSourceMetadata {
-  const metadata: LiveArtifactRefreshSourceMetadata = {
-    sourceType: 'tile',
-    tileId: tile.id,
-  };
+function documentSourceMetadata(source: LiveArtifactTileSource): LiveArtifactRefreshSourceMetadata {
+  const metadata: LiveArtifactRefreshSourceMetadata = { sourceType: 'document' };
   if (source.toolName !== undefined) metadata.toolName = source.toolName;
   if (source.connector !== undefined) metadata.connector = source.connector;
   return metadata;
+}
+
+function isSupportedSource(source: LiveArtifactTileSource | undefined): source is LiveArtifactTileSource {
+  if (source?.refreshPermission !== 'manual_refresh_granted_for_read_only') return false;
+  return source.type === 'daemon_tool' || source.type === 'connector_tool';
+}
+
+async function executeRefreshSource(options: {
+  projectsRoot: string;
+  projectId: string;
+  source: LiveArtifactTileSource;
+  signal: AbortSignal;
+}): Promise<BoundedJsonObject> {
+  const { projectsRoot, projectId, source, signal } = options;
+  if (source.type === 'connector_tool') {
+    const connector = source.connector;
+    if (connector === undefined) throw new Error('connector refresh source requires connector metadata');
+    const result = await connectorService.execute(
+      {
+        connectorId: connector.connectorId,
+        toolName: connector.toolName,
+        input: source.input,
+        ...(connector.accountLabel === undefined ? {} : { expectedAccountLabel: connector.accountLabel }),
+        expectedApprovalPolicy: 'auto',
+      },
+      { projectsRoot, projectId, purpose: 'artifact_refresh', signal },
+    );
+    if (result.output === null || typeof result.output !== 'object' || Array.isArray(result.output)) {
+      throw new Error('connector refresh output must be a JSON object');
+    }
+    return result.output;
+  }
+  if (source.type !== 'daemon_tool') {
+    throw new Error(`refresh source ${source.type} is not supported yet`);
+  }
+  return executeLocalDaemonRefreshSource({ projectsRoot, projectId, source, signal });
 }
 
 export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): Promise<RefreshLiveArtifactResult> {
@@ -96,7 +129,8 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
       const record = await getLiveArtifact(options);
       const artifact = record.artifact;
       const currentDataJson = artifact.document?.dataJson ?? {};
-      const refreshableTiles = artifact.tiles.filter((tile) => tile.sourceJson?.refreshPermission === 'manual_refresh_granted_for_read_only');
+      const documentSource = artifact.document?.sourceJson;
+      const hasDocumentSource = isSupportedSource(documentSource);
       const timeouts = normalizeLiveArtifactRefreshTimeouts();
 
       const candidate = await withLiveArtifactRefreshRun(
@@ -109,57 +143,42 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
           now: refreshStartedAt,
         },
         async (run) => {
-          const tileOutputs: Array<{ tileId: string; output: BoundedJsonObject }> = [];
-          for (const tile of refreshableTiles) {
-            const source = tile.sourceJson;
-            if (source === undefined) continue;
-            const step = `tile:${tile.id}`;
-            const sourceMetadata = tileSourceMetadata(tile, source);
-            const tileStartedAt = nowDate();
-            await appendLog({ step, status: 'running', startedAt: tileStartedAt, source: sourceMetadata });
+          let documentOutput: { output: BoundedJsonObject } | undefined;
+          if (hasDocumentSource) {
+            const step = 'document';
+            const sourceMetadata = documentSourceMetadata(documentSource);
+            const documentStartedAt = nowDate();
+            await appendLog({ step, status: 'running', startedAt: documentStartedAt, source: sourceMetadata });
             try {
               const output = await withLiveArtifactRefreshSourceTimeout(
                 run,
                 { step, source: sourceMetadata, sourceTimeoutMs: timeouts.sourceTimeoutMs },
-                async (signal) => {
-                  if (source.type === 'connector_tool') {
-                    const connector = source.connector;
-                    if (connector === undefined) throw new Error('connector refresh source requires connector metadata');
-                    if (connector.toolName !== source.toolName) throw new Error('connector refresh source tool metadata drifted');
-                    if (connector.approvalPolicy !== 'manual_refresh_granted_for_read_only') throw new Error('connector refresh source is no longer refresh-eligible');
-                    const result = await connectorService.execute(
-                      {
-                        connectorId: connector.connectorId,
-                        toolName: connector.toolName,
-                        input: source.input,
-                        ...(connector.accountLabel === undefined ? {} : { expectedAccountLabel: connector.accountLabel }),
-                        expectedApprovalPolicy: 'auto',
-                      },
-                      { projectsRoot: options.projectsRoot, projectId: options.projectId, purpose: 'artifact_refresh', signal },
-                    );
-                    if (result.output === null || typeof result.output !== 'object' || Array.isArray(result.output)) {
-                      throw new Error('connector refresh output must be a JSON object');
-                    }
-                    return result.output;
-                  }
-                  if (source.type !== 'daemon_tool') {
-                    throw new Error(`refresh source ${source.type} is not supported yet`);
-                  }
-                  return executeLocalDaemonRefreshSource({ projectsRoot: options.projectsRoot, projectId: options.projectId, source, signal });
-                },
+                async (signal) => executeRefreshSource({
+                  projectsRoot: options.projectsRoot,
+                  projectId: options.projectId,
+                  source: documentSource,
+                  signal,
+                }),
               );
-              const tileFinishedAt = nowDate();
-              await appendLog({ step, status: 'succeeded', startedAt: tileStartedAt, finishedAt: tileFinishedAt, source: sourceMetadata });
-              tileOutputs.push({ tileId: tile.id, output });
+              const documentFinishedAt = nowDate();
+              await appendLog({ step, status: 'succeeded', startedAt: documentStartedAt, finishedAt: documentFinishedAt, source: sourceMetadata });
+              documentOutput = { output };
             } catch (error) {
-              const tileFinishedAt = nowDate();
-              await appendLog({ step, status: 'failed', startedAt: tileStartedAt, finishedAt: tileFinishedAt, source: sourceMetadata, error });
+              const documentFinishedAt = nowDate();
+              await appendLog({ step, status: 'failed', startedAt: documentStartedAt, finishedAt: documentFinishedAt, source: sourceMetadata, error });
               throw error;
             }
           }
-          return buildLiveArtifactRefreshCandidate({ artifact, currentDataJson, tileOutputs, now: nowDate() });
+          return buildLiveArtifactRefreshCandidate({
+            artifact,
+            currentDataJson,
+            ...(documentOutput === undefined ? {} : { documentOutput }),
+            now: nowDate(),
+          });
         },
       );
+
+      const refreshedSourceCount = hasDocumentSource ? 1 : 0;
 
       const committed = await commitLiveArtifactRefreshCandidate({
         projectsRoot: options.projectsRoot,
@@ -177,12 +196,12 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
         status: 'succeeded',
         startedAt: refreshStartedAt,
         finishedAt: refreshFinishedAt,
-        metadata: { refreshedTileCount: refreshableTiles.length },
+        metadata: { refreshedSourceCount },
       });
 
       return {
         artifact: committed.artifact,
-        refresh: { id: refreshId, status: 'succeeded', refreshedTileCount: refreshableTiles.length },
+        refresh: { id: refreshId, status: 'succeeded', refreshedSourceCount },
       };
     } catch (error) {
       const refreshFinishedAt = nowDate();

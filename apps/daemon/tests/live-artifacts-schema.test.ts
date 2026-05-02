@@ -211,6 +211,55 @@ describe('live artifact schema validation', () => {
     }
   });
 
+  it('requires connector metadata for connector_tool sources', () => {
+    const result = validateLiveArtifactCreateInput({
+      ...validCreateInput(),
+      document: {
+        ...validCreateInput().document,
+        sourceJson: {
+          type: 'connector_tool',
+          toolName: 'docs.search',
+          input: { query: 'launch' },
+          refreshPermission: 'manual_refresh_granted_for_read_only',
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'input.document.sourceJson.connector' }),
+      ]));
+    }
+  });
+
+  it('requires connector source tool name to match connector metadata', () => {
+    const result = validateLiveArtifactCreateInput({
+      ...validCreateInput(),
+      document: {
+        ...validCreateInput().document,
+        sourceJson: {
+          type: 'connector_tool',
+          toolName: 'docs.search',
+          input: { query: 'launch' },
+          connector: {
+            connectorId: 'docs',
+            toolName: 'docs.lookup',
+            approvalPolicy: 'read_only_auto',
+          },
+          refreshPermission: 'manual_refresh_granted_for_read_only',
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'input.document.sourceJson.toolName' }),
+      ]));
+    }
+  });
+
   it('rejects oversized bounded JSON payloads', () => {
     const oversized = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`field${index}`, 'x'.repeat(3_000)]));
     const result = validateBoundedJsonObject(oversized, 'data');

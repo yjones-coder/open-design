@@ -382,7 +382,7 @@ function translateAgentEvent(data: DaemonAgentPayload): AgentEvent | null {
       artifactId: data.artifactId,
       refreshId: data.refreshId,
       title: data.title,
-      refreshedTileCount: data.refreshedTileCount,
+      refreshedSourceCount: data.refreshedSourceCount,
       error: data.error,
     };
   }

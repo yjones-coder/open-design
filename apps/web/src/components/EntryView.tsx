@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ConnectorDetail } from '@open-design/contracts';
+import type { ConnectorDetail, ConnectorStatusResponse } from '@open-design/contracts';
 import { useT } from '../i18n';
 import {
   DEFAULT_AUDIO_MODEL,
@@ -26,7 +26,13 @@ import { Icon } from './Icon';
 import { LanguageMenu } from './LanguageMenu';
 import { CenteredLoader } from './Loading';
 import { NewProjectPanel, type CreateInput } from './NewProjectPanel';
-import { connectConnector, disconnectConnector, fetchConnectors } from '../providers/registry';
+import {
+  connectConnector,
+  disconnectConnector,
+  fetchConnectorDiscovery,
+  fetchConnectors,
+  fetchConnectorStatuses,
+} from '../providers/registry';
 
 import { PromptTemplatePreviewModal } from './PromptTemplatePreviewModal';
 import { PromptTemplatesTab } from './PromptTemplatesTab';
@@ -80,6 +86,35 @@ function loadSidebarWidth(): number {
   } catch {
     return SIDEBAR_DEFAULT;
   }
+}
+
+function mergeConnectors(current: ConnectorDetail[], incoming: ConnectorDetail[]): ConnectorDetail[] {
+  if (!incoming.length) return current;
+  const incomingById = new Map(incoming.map((connector) => [connector.id, connector]));
+  const merged = current.map((connector) => incomingById.get(connector.id) ?? connector);
+  const currentIds = new Set(current.map((connector) => connector.id));
+  for (const connector of incoming) {
+    if (!currentIds.has(connector.id)) merged.push(connector);
+  }
+  return merged;
+}
+
+function applyConnectorStatuses(
+  current: ConnectorDetail[],
+  statuses: ConnectorStatusResponse['statuses'],
+): ConnectorDetail[] {
+  if (!Object.keys(statuses).length) return current;
+  return current.map((connector) => {
+    const next = statuses[connector.id];
+    if (!next) return connector;
+    const { accountLabel: _accountLabel, lastError: _lastError, ...base } = connector;
+    return {
+      ...base,
+      status: next.status,
+      ...(next.accountLabel === undefined ? {} : { accountLabel: next.accountLabel }),
+      ...(next.lastError === undefined ? {} : { lastError: next.lastError }),
+    };
+  });
 }
 
 export function EntryView({
@@ -195,15 +230,37 @@ export function EntryView({
     setConnectorsLoading(false);
   }, []);
 
+  const reloadConnectorStatuses = useCallback(async () => {
+    const statuses = await fetchConnectorStatuses();
+    setConnectors((curr) => applyConnectorStatuses(curr, statuses));
+  }, []);
+
   useEffect(() => {
-    if (topTab !== 'connectors') return;
     let cancelled = false;
+    // Fetch connectors on mount so the New project panel can show
+    // already-configured connectors on the live-artifact tab without
+    // waiting for the user to open the Connectors tab.
     setConnectorsLoading(true);
     (async () => {
       const next = await fetchConnectors();
       if (cancelled) return;
       setConnectors(next);
       setConnectorsLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (topTab !== 'connectors') return;
+    let cancelled = false;
+    // Slow Composio discovery is only needed for enriched toolkit metadata
+    // and auth configuration. Keep the initial catalog/status path fast.
+    (async () => {
+      const next = await fetchConnectorDiscovery();
+      if (cancelled) return;
+      setConnectors((curr) => mergeConnectors(curr, next));
     })();
     return () => {
       cancelled = true;
@@ -215,11 +272,11 @@ export function EntryView({
       const data = event.data;
       if (!data || typeof data !== 'object' || (data as { type?: unknown }).type !== CONNECTOR_CALLBACK_MESSAGE_TYPE) return;
       if (!isTrustedConnectorCallbackOrigin(event.origin)) return;
-      void reloadConnectors({ showLoading: false });
+      void reloadConnectorStatuses();
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [reloadConnectors]);
+  }, [reloadConnectorStatuses]);
 
   function updateConnector(next: ConnectorDetail | null) {
     if (!next) return;
@@ -250,6 +307,9 @@ export function EntryView({
             onCreate={handleCreate}
             onImportClaudeDesign={onImportClaudeDesign}
             mediaProviders={config.mediaProviders}
+            connectors={connectors}
+            connectorsLoading={connectorsLoading}
+            onOpenConnectorsTab={() => setTopTab('connectors')}
             loading={loading}
           />
           <div className="entry-side-foot">
@@ -513,6 +573,7 @@ function ConnectorCard({
   const isPending = pendingAction !== null;
   const canConnect = !disabled && !isPending && connector.status === 'available';
   const canDisconnect = !disabled && !isPending && connector.status === 'connected';
+  const accountLabel = getDisplayableConnectorAccountLabel(connector);
 
   return (
     <article className={`connector-card status-${connector.status}${disabled ? ' is-locked' : ''}`}>
@@ -533,10 +594,12 @@ function ConnectorCard({
       </div>
       {connector.description ? <p className="connector-description">{connector.description}</p> : null}
       <dl className="connector-details">
-        <div>
-          <dt>{t('connectors.account')}</dt>
-          <dd>{connector.accountLabel ?? t('connectors.noAccount')}</dd>
-        </div>
+        {accountLabel ? (
+          <div>
+            <dt>{t('connectors.account')}</dt>
+            <dd>{accountLabel}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>{t('connectors.tools')}</dt>
           <dd>{connector.tools.length ? String(connector.tools.length) : t('common.none')}</dd>
@@ -581,6 +644,13 @@ function statusLabel(status: ConnectorDetail['status'], t: ReturnType<typeof use
     case 'disabled':
       return t('connectors.statusDisabled');
   }
+}
+
+function getDisplayableConnectorAccountLabel(connector: ConnectorDetail): string | undefined {
+  if (!connector.accountLabel) return undefined;
+  const provider = connector.auth?.provider ?? connector.provider.toLowerCase();
+  if (provider === 'composio') return undefined;
+  return connector.accountLabel;
 }
 
 function TopTabButton({

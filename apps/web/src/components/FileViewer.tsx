@@ -16,7 +16,6 @@ import {
   projectRawUrl,
   LiveArtifactRefreshError,
   refreshLiveArtifact,
-  updateLiveArtifact,
   updateDeployConfig,
 } from '../providers/registry';
 import type { ProjectFilePreview } from '../providers/registry';
@@ -176,11 +175,7 @@ export function LiveArtifactViewer({
 
     setRefreshing(false);
     setRefreshError(null);
-    setRefreshSuccess(
-      liveArtifactEvent.refreshedTileCount === 1
-        ? t('liveArtifact.refresh.successOne')
-        : t('liveArtifact.refresh.successMany', { count: liveArtifactEvent.refreshedTileCount ?? 0 }),
-    );
+    setRefreshSuccess(t('liveArtifact.refresh.successOne'));
     void fetchLiveArtifact(projectId, liveArtifact.artifactId).then((next) => {
       if (next) setDetail(next);
     });
@@ -217,24 +212,10 @@ export function LiveArtifactViewer({
     setRefreshError(null);
     setRefreshSuccess(null);
     try {
-      let refreshTarget = detail;
-      if (refreshTarget && approvedRefreshableTileCount(refreshTarget) === 0 && pendingReadOnlyRefreshTileCount(refreshTarget) > 0) {
-        const approved = window.confirm(
-          'Approve read-only refresh for this live artifact? The daemon will re-read the listed local/project sources when you refresh. You can revoke this from the Source tab.',
-        );
-        if (!approved) return;
-        refreshTarget = grantReadOnlyRefreshPermission(refreshTarget);
-        const updated = await updateLiveArtifact(projectId, liveArtifact.artifactId, liveArtifactUpdateInput(refreshTarget));
-        setDetail(updated);
-      }
       const result = await refreshLiveArtifact(projectId, liveArtifact.artifactId);
       setDetail(result.artifact);
       setReloadKey((n) => n + 1);
-      setRefreshSuccess(
-        result.refresh.refreshedTileCount === 1
-          ? t('liveArtifact.refresh.successOne')
-          : t('liveArtifact.refresh.successMany', { count: result.refresh.refreshedTileCount }),
-      );
+      setRefreshSuccess(t('liveArtifact.refresh.successOne'));
       await onRefreshArtifacts?.();
     } catch (error) {
       setRefreshError(refreshErrorMessage(error, t));
@@ -248,31 +229,7 @@ export function LiveArtifactViewer({
   const provenancePayload = detail ? liveArtifactProvenancePayload(detail) : null;
   const refreshPayload = detail ? liveArtifactRefreshPayload(detail) : null;
   const currentRefreshStatus = detail?.refreshStatus ?? liveArtifact.refreshStatus;
-  const refreshableTileCount = detail ? approvedRefreshableTileCount(detail) : null;
-  const pendingRefreshTileCount = detail ? pendingReadOnlyRefreshTileCount(detail) : null;
-  const hasRefreshSource = (refreshableTileCount ?? 0) > 0 || (pendingRefreshTileCount ?? 0) > 0;
   const isRunning = refreshing || currentRefreshStatus === 'running';
-  const lastTileError = detail?.tiles.find((tile) => tile.lastError)?.lastError ?? null;
-
-  async function handleRevokeRefreshPermission() {
-    if (!detail || refreshing || approvedRefreshableTileCount(detail) === 0) return;
-    const approved = window.confirm('Revoke manual read-only refresh approval for this live artifact?');
-    if (!approved) return;
-    setRefreshError(null);
-    setRefreshSuccess(null);
-    try {
-      const updated = await updateLiveArtifact(
-        projectId,
-        liveArtifact.artifactId,
-        liveArtifactUpdateInput(revokeReadOnlyRefreshPermission(detail)),
-      );
-      setDetail(updated);
-      setRefreshSuccess('Refresh approval revoked. You will be asked to approve before the next manual refresh.');
-      await onRefreshArtifacts?.();
-    } catch (error) {
-      setRefreshError(refreshErrorMessage(error, t));
-    }
-  }
 
   return (
     <div className="viewer html-viewer live-artifact-viewer">
@@ -287,26 +244,19 @@ export function LiveArtifactViewer({
           >
             <Icon name="reload" size={14} />
           </button>
-          <span className="viewer-meta">
-            Live artifact · {refreshStatusLabel(currentRefreshStatus, t)}
-          </span>
         </div>
         <div className="viewer-toolbar-actions">
           <button
             type="button"
             className="viewer-action primary"
             onClick={() => void handleRefresh()}
-            disabled={isRunning || loading || !hasRefreshSource}
+            disabled={isRunning}
             aria-busy={isRunning}
             aria-label={isRunning ? t('liveArtifact.refresh.running') : t('liveArtifact.refresh.button')}
             title={
-              loading
-                ? t('liveArtifact.refresh.loadingTitle')
-                : !hasRefreshSource
-                  ? t('liveArtifact.refresh.noSourceTitle')
-                  : refreshableTileCount === 0
-                    ? 'Approve read-only refresh and run it'
-                    : t('liveArtifact.refresh.buttonTitle')
+              isRunning
+                ? t('liveArtifact.refresh.running')
+                : t('liveArtifact.refresh.buttonTitle')
             }
           >
             <Icon name={isRunning ? 'spinner' : 'reload'} size={13} />
@@ -389,10 +339,10 @@ export function LiveArtifactViewer({
             message={t('liveArtifact.refresh.runningMessage')}
             action={t('liveArtifact.refresh.runningAction')}
           />
-        ) : currentRefreshStatus === 'failed' && lastTileError ? (
+        ) : currentRefreshStatus === 'failed' ? (
           <LiveArtifactRefreshNotice
             tone="error"
-            message={t('liveArtifact.refresh.previousFailure', { message: lastTileError })}
+            message={t('liveArtifact.refresh.previousFailure', { message: t('liveArtifact.refresh.genericFailure') })}
             action={t('liveArtifact.refresh.failureAction')}
           />
         ) : null}
@@ -418,8 +368,6 @@ export function LiveArtifactViewer({
           <LiveArtifactSourcePanel
             liveArtifact={detail}
             value={sourcePayload}
-            onRevoke={() => void handleRevokeRefreshPermission()}
-            revokeDisabled={refreshing || loading}
           />
         ) : mode === 'data' ? (
           <JsonPanel value={dataPayload} emptyLabel="No data.json cache available." />
@@ -465,21 +413,6 @@ function LiveArtifactRefreshNotice({
   );
 }
 
-function refreshStatusLabel(status: LiveArtifact['refreshStatus'], t: TranslateFn): string {
-  switch (status) {
-    case 'never':
-      return t('liveArtifact.refresh.statusNever');
-    case 'idle':
-      return t('liveArtifact.refresh.statusReady');
-    case 'running':
-      return t('liveArtifact.refresh.running');
-    case 'succeeded':
-      return t('liveArtifact.refresh.statusSucceeded');
-    case 'failed':
-      return t('liveArtifact.refresh.statusFailed');
-  }
-}
-
 function refreshErrorMessage(error: unknown, t: TranslateFn): string {
   if (error instanceof LiveArtifactRefreshError && error.status === 0) {
     return t('liveArtifact.refresh.networkFailure');
@@ -496,100 +429,16 @@ const LIVE_ARTIFACT_VIEWER_TABS: Array<{ id: LiveArtifactViewerTab; label: strin
   { id: 'refresh-history', label: 'Refresh history' },
 ];
 
-type LiveArtifactTile = LiveArtifact['tiles'][number];
-
-const READ_ONLY_REFRESH_TOOL_NAMES = new Set<string>();
-
-function isReadOnlyRefreshEligibleTile(tile: LiveArtifactTile): boolean {
-  const source = tile.sourceJson;
-  return source?.type === 'daemon_tool'
-    && source.toolName !== undefined
-    && READ_ONLY_REFRESH_TOOL_NAMES.has(source.toolName);
-}
-
-function approvedRefreshableTileCount(liveArtifact: LiveArtifact): number {
-  return liveArtifact.tiles.filter((tile) => tile.sourceJson?.refreshPermission === 'manual_refresh_granted_for_read_only').length;
-}
-
-function pendingReadOnlyRefreshTileCount(liveArtifact: LiveArtifact): number {
-  return liveArtifact.tiles.filter((tile) => (
-    tile.sourceJson?.refreshPermission === 'none' && isReadOnlyRefreshEligibleTile(tile)
-  )).length;
-}
-
-function withReadOnlyRefreshPermission(
-  liveArtifact: LiveArtifact,
-  refreshPermission: 'none' | 'manual_refresh_granted_for_read_only',
-): LiveArtifact {
-  return {
-    ...liveArtifact,
-    tiles: liveArtifact.tiles.map((tile) => {
-      if (!tile.sourceJson || !isReadOnlyRefreshEligibleTile(tile)) return tile;
-      return {
-        ...tile,
-        sourceJson: {
-          ...tile.sourceJson,
-          refreshPermission,
-        },
-      };
-    }),
-  };
-}
-
-function grantReadOnlyRefreshPermission(liveArtifact: LiveArtifact): LiveArtifact {
-  return withReadOnlyRefreshPermission(liveArtifact, 'manual_refresh_granted_for_read_only');
-}
-
-function revokeReadOnlyRefreshPermission(liveArtifact: LiveArtifact): LiveArtifact {
-  return withReadOnlyRefreshPermission(liveArtifact, 'none');
-}
-
-function liveArtifactUpdateInput(liveArtifact: LiveArtifact) {
-  return {
-    title: liveArtifact.title,
-    slug: liveArtifact.slug,
-    status: liveArtifact.status,
-    pinned: liveArtifact.pinned,
-    preview: liveArtifact.preview,
-    tiles: liveArtifact.tiles,
-    ...(liveArtifact.document === undefined ? {} : { document: liveArtifact.document }),
-  };
-}
-
 function LiveArtifactSourcePanel({
-  liveArtifact,
   value,
-  onRevoke,
-  revokeDisabled,
 }: {
   liveArtifact: LiveArtifact | null;
   value: unknown;
-  onRevoke: () => void;
-  revokeDisabled: boolean;
 }) {
-  const approvedCount = liveArtifact ? approvedRefreshableTileCount(liveArtifact) : 0;
-  const pendingCount = liveArtifact ? pendingReadOnlyRefreshTileCount(liveArtifact) : 0;
-
   return (
     <div className="live-artifact-source-panel">
       <div className="live-artifact-source-summary">
-        <span>
-          Refresh permission: {approvedCount > 0
-            ? `manual read-only approval granted for ${approvedCount} source${approvedCount === 1 ? '' : 's'}`
-            : pendingCount > 0
-              ? `not approved; ${pendingCount} read-only source${pendingCount === 1 ? '' : 's'} can be approved on first refresh`
-              : 'none'}
-        </span>
-        {approvedCount > 0 ? (
-          <button
-            type="button"
-            className="viewer-action"
-            onClick={onRevoke}
-            disabled={revokeDisabled}
-          >
-            Revoke refresh approval
-          </button>
-        ) : null}
+        <span>Refresh runs automatically for available sources.</span>
       </div>
       <JsonPanel value={value} emptyLabel="No source metadata available." />
     </div>
@@ -625,25 +474,12 @@ function liveArtifactSourcePayload(liveArtifact: LiveArtifact): unknown {
           sourceJson: liveArtifact.document.sourceJson,
         }
       : null,
-    tiles: liveArtifact.tiles.map((tile) => ({
-      id: tile.id,
-      kind: tile.kind,
-      title: tile.title,
-      refreshStatus: tile.refreshStatus,
-      sourceJson: tile.sourceJson,
-      lastError: tile.lastError,
-    })),
   };
 }
 
 function liveArtifactProvenancePayload(liveArtifact: LiveArtifact): unknown {
   return {
     documentSource: liveArtifact.document?.sourceJson ?? null,
-    tiles: liveArtifact.tiles.map((tile) => ({
-      id: tile.id,
-      title: tile.title,
-      provenanceJson: tile.provenanceJson,
-    })),
   };
 }
 
@@ -651,12 +487,6 @@ function liveArtifactRefreshPayload(liveArtifact: LiveArtifact): unknown {
   return {
     refreshStatus: liveArtifact.refreshStatus,
     lastRefreshedAt: liveArtifact.lastRefreshedAt ?? null,
-    tiles: liveArtifact.tiles.map((tile) => ({
-      id: tile.id,
-      title: tile.title,
-      refreshStatus: tile.refreshStatus,
-      lastError: tile.lastError ?? null,
-    })),
   };
 }
 

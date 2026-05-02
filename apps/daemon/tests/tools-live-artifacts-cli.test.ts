@@ -114,7 +114,7 @@ describe('live artifact tool CLI environment', () => {
             preview: { type: 'html', entry: 'index.html' },
             updatedAt: '2026-04-30T12:00:00.000Z',
           },
-          refresh: { id: 'refresh-000001', status: 'succeeded', refreshedTileCount: 1 },
+          refresh: { id: 'refresh-000001', status: 'succeeded', refreshedSourceCount: 1 },
         }),
         { headers: { 'Content-Type': 'application/json' }, status: 200 },
       ),
@@ -141,7 +141,7 @@ describe('live artifact tool CLI environment', () => {
         preview: { type: 'html', entry: 'index.html' },
         updatedAt: '2026-04-30T12:00:00.000Z',
       },
-      refresh: { id: 'refresh-000001', status: 'succeeded', refreshedTileCount: 1 },
+      refresh: { id: 'refresh-000001', status: 'succeeded', refreshedSourceCount: 1 },
     });
   });
 

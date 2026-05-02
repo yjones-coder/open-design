@@ -118,8 +118,6 @@ export function App() {
             next.designSystemId = dsList.find((d) => d.id === 'default')?.id
               ?? dsList[0]!.id;
           }
-        } else {
-          next.mode = 'api';
         }
         saveConfig(next);
         if (alive && hasAnyConfiguredProvider(next.mediaProviders)) {

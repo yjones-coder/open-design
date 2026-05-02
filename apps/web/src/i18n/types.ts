@@ -227,6 +227,15 @@ export interface Dict {
   'newproj.audioDurationSeconds': string;
   'newproj.voiceLabel': string;
   'newproj.voicePlaceholder': string;
+  'newproj.connectorsLabel': string;
+  'newproj.connectorsHint': string;
+  'newproj.connectorsEmptyTitle': string;
+  'newproj.connectorsEmptyBody': string;
+  'newproj.connectorsEmptyCta': string;
+  'newproj.connectorsLoading': string;
+  'newproj.connectorsCountOne': string;
+  'newproj.connectorsCountMany': string;
+  'newproj.connectorsManage': string;
 
   // Prompt templates
   'promptTemplates.searchPlaceholder': string;

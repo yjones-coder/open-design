@@ -312,6 +312,25 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
     }
   });
 
+  app.get('/api/connectors/status', async (_req: Request, res: Response) => {
+    try {
+      res.json({ statuses: service.listConnectorStatuses() });
+    } catch (err) {
+      sendConnectorRouteError(res, err, options.sendApiError);
+    }
+  });
+
+  app.get('/api/connectors/discovery', async (req: Request, res: Response) => {
+    try {
+      const refresh = typeof req.query.refresh === 'string'
+        ? ['1', 'true', 'yes'].includes(req.query.refresh.toLowerCase())
+        : false;
+      res.json(await service.listConnectorDiscovery({ refresh }));
+    } catch (err) {
+      sendConnectorRouteError(res, err, options.sendApiError);
+    }
+  });
+
   app.get('/api/connectors/:connectorId', async (req: Request, res: Response) => {
     try {
       const connectorId = req.params.connectorId;

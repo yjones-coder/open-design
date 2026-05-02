@@ -1510,7 +1510,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
         artifactId,
         refreshId: result.refresh.id,
         title: result.artifact.title,
-        refreshedTileCount: result.refresh.refreshedTileCount,
+        refreshedSourceCount: result.refresh.refreshedSourceCount,
       });
       res.json(result);
     } catch (err) {
@@ -2186,8 +2186,6 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       toolTokenRevoked = true;
       toolTokenRegistry.revokeToken(toolTokenGrant.token, reason);
     };
-    res.on('close', () => revokeToolToken('sse_end'));
-    res.on('finish', () => revokeToolToken('sse_end'));
     const runtimeToolPrompt = createAgentRuntimeToolPrompt(daemonUrl, toolTokenGrant);
     const daemonSystemPrompt = await composeDaemonSystemPrompt({ projectId, skillId, designSystemId });
     const instructionPrompt = [daemonSystemPrompt, runtimeToolPrompt, systemPrompt]
@@ -2286,18 +2284,14 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     run.promptFileCleaned = cleanPromptFile;
     const args = def.buildArgs(effectivePrompt, safeImages, extraAllowedDirs, agentOptions, { cwd });
 
-    const sse = createSseResponse(res);
     const send = (event, data, id = null) => {
       design.runs.emit(run, event, data);
-      return sse.send(event, data, id);
     };
     const unregisterChatAgentEventSink = () => {
       activeChatAgentEventSinks.delete(runId);
     };
     if (toolTokenGrant?.runId) {
       activeChatAgentEventSinks.set(toolTokenGrant.runId, (payload) => send('agent', payload));
-      res.on('close', unregisterChatAgentEventSink);
-      res.on('finish', unregisterChatAgentEventSink);
     }
 
     // resolvedBin was already looked up above for the ENAMETOOLONG check.
@@ -2404,7 +2398,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       unregisterChatAgentEventSink();
       send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', `spawn failed: ${err.message}`));
       design.runs.finish(run, 'failed', 1, null);
-      return sse.end();
+      return;
     }
 
     child.stdout.setEncoding('utf8');
