@@ -175,7 +175,11 @@ export function LiveArtifactViewer({
 
     setRefreshing(false);
     setRefreshError(null);
-    setRefreshSuccess(t('liveArtifact.refresh.successOne'));
+    if ((liveArtifactEvent.refreshedSourceCount ?? 0) > 0) {
+      setRefreshSuccess(t('liveArtifact.refresh.successOne'));
+    } else {
+      setRefreshError(t('liveArtifact.refresh.noSourceTitle'));
+    }
     void fetchLiveArtifact(projectId, liveArtifact.artifactId).then((next) => {
       if (next) setDetail(next);
     });
@@ -215,7 +219,11 @@ export function LiveArtifactViewer({
       const result = await refreshLiveArtifact(projectId, liveArtifact.artifactId);
       setDetail(result.artifact);
       setReloadKey((n) => n + 1);
-      setRefreshSuccess(t('liveArtifact.refresh.successOne'));
+      if (result.refresh.refreshedSourceCount > 0) {
+        setRefreshSuccess(t('liveArtifact.refresh.successOne'));
+      } else {
+        setRefreshError(t('liveArtifact.refresh.noSourceTitle'));
+      }
       await onRefreshArtifacts?.();
     } catch (error) {
       setRefreshError(refreshErrorMessage(error, t));
@@ -416,6 +424,9 @@ function LiveArtifactRefreshNotice({
 function refreshErrorMessage(error: unknown, t: TranslateFn): string {
   if (error instanceof LiveArtifactRefreshError && error.status === 0) {
     return t('liveArtifact.refresh.networkFailure');
+  }
+  if (error instanceof LiveArtifactRefreshError && error.code === 'LIVE_ARTIFACT_REFRESH_UNAVAILABLE') {
+    return t('liveArtifact.refresh.noSourceTitle');
   }
   if (error instanceof Error && error.message.length > 0) return error.message;
   return t('liveArtifact.refresh.genericFailure');

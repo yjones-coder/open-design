@@ -710,7 +710,6 @@ describe('live artifact store layout', () => {
       artifactId: created.artifact.id,
       refreshId: successLock.metadata.refreshId,
       dataJson: candidate.dataJson,
-      tiles: candidate.tiles,
       now: new Date('2026-04-30T11:01:00.000Z'),
     });
     await releaseLiveArtifactRefreshLock(successLock);
@@ -726,7 +725,6 @@ describe('live artifact store layout', () => {
     await expect(readFile(path.join(snapshotDir, 'data.json'), 'utf8')).resolves.toContain('"value": 99');
     await expect(readFile(path.join(snapshotDir, 'index.html'), 'utf8')).resolves.toContain('<p>99</p>');
     await expect(readFile(path.join(snapshotDir, 'template.html'), 'utf8')).resolves.toContain('{{data.value}}');
-    await expect(readFile(path.join(snapshotDir, 'tiles', 'tile-1.json'), 'utf8')).resolves.toBe(previousTile);
     expect(await readdir(created.paths.snapshotsDir)).toEqual([successLock.metadata.refreshId]);
     await expect(
       markLiveArtifactRefreshCommitted({
@@ -736,6 +734,75 @@ describe('live artifact store layout', () => {
         refreshId: successLock.metadata.refreshId,
       }),
     ).rejects.toBeInstanceOf(LiveArtifactStaleRefreshError);
+  });
+
+  it('maps document refresh data paths directly even when a legacy transform is present', () => {
+    const document: any = {
+      format: 'html_template_v1',
+      templatePath: 'template.html',
+      generatedPreviewPath: 'index.html',
+      dataPath: 'data.json',
+      dataJson: {
+        repository: {
+          fullName: 'nexu-io/open-design',
+          url: 'https://github.com/nexu-io/open-design',
+          starCount: 100,
+          starCountFormatted: '100',
+          fetchedAt: '2026-05-01T00:00:00.000Z',
+          fetchedDate: 'May 1, 2026',
+        },
+      },
+      sourceJson: {
+        type: 'daemon_tool',
+        toolName: 'public_github_repository_metric',
+        input: { url: 'https://api.github.com/repos/nexu-io/open-design' },
+        outputMapping: {
+          dataPaths: [
+            { from: 'stargazers_count', to: 'repository.starCount' },
+            { from: 'full_name', to: 'repository.fullName' },
+            { from: 'html_url', to: 'repository.url' },
+          ],
+          transform: 'metric_summary',
+        },
+        refreshPermission: 'none',
+      },
+    };
+
+    const candidate = buildLiveArtifactRefreshCandidate({
+      artifact: {
+        schemaVersion: 1,
+        id: 'la-github-stars',
+        projectId: 'project-1',
+        title: 'GitHub Stars',
+        slug: 'github-stars',
+        status: 'active',
+        pinned: false,
+        preview: { type: 'html', entry: 'index.html' },
+        refreshStatus: 'idle',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:00:00.000Z',
+        tiles: [],
+        document,
+      },
+      currentDataJson: document.dataJson,
+      documentOutput: {
+        output: {
+          stargazers_count: 12987,
+          full_name: 'nexu-io/open-design',
+          html_url: 'https://github.com/nexu-io/open-design',
+          updated_at: '2026-05-02T00:00:00Z',
+        },
+      },
+    });
+
+    expect(candidate.dataJson).toMatchObject({
+      repository: {
+        starCount: 12987,
+        starCountFormatted: '12,987',
+        fetchedDate: 'May 2, 2026',
+      },
+    });
+    expect(candidate.dataJson).not.toHaveProperty('value');
   });
 
   it('normalizes refresh timeout configuration and rejects invalid durations', () => {

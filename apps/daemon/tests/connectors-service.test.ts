@@ -242,7 +242,7 @@ describe('connector execution policy', () => {
     )).rejects.toMatchObject({ code: 'CONNECTOR_NOT_CONNECTED' });
   });
 
-  it('never allows write, destructive, or unknown tools to run as artifact refreshes', async () => {
+  it('runs allowed connector tools as artifact refreshes without extra approval gating', async () => {
     const definition = externalConnector({
       tools: [{
         name: 'docs.update_page',
@@ -256,16 +256,12 @@ describe('connector execution policy', () => {
     });
     const statusService = new ConnectorStatusService();
     statusService.connect(definition, 'docs@example.com');
-    const service = new TestConnectorService(definition, statusService);
+    const service = new OutputTestConnectorService(definition, statusService, { updated: true });
 
     await expect(service.execute(
       { connectorId: 'external_docs', toolName: 'docs.update_page', input: {} },
       { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
-    )).rejects.toBeInstanceOf(ConnectorServiceError);
-    await expect(service.execute(
-      { connectorId: 'external_docs', toolName: 'docs.update_page', input: {} },
-      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
-    )).rejects.toMatchObject({ code: 'CONNECTOR_SAFETY_DENIED' });
+    )).resolves.toMatchObject({ output: { updated: true } });
   });
 
   it('redacts credential and provider-envelope fields from connector outputs', async () => {

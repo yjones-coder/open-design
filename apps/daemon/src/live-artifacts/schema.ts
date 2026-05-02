@@ -554,6 +554,23 @@ function validatePreview(value: unknown, path: string, issues: LiveArtifactValid
   return { type, entry };
 }
 
+const SAFE_MAPPING_SEGMENT = /^[A-Za-z_][A-Za-z0-9_-]*$|^(?:0|[1-9][0-9]*)$/;
+const UNSAFE_MAPPING_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+
+function validateMappingPath(value: string, path: string, issues: LiveArtifactValidationIssue[]): void {
+  const normalized = value.startsWith('$.') ? value.slice(2) : value;
+  if (normalized.length === 0 || normalized.startsWith('.') || normalized.endsWith('.') || normalized.includes('..')) {
+    issues.push({ path, message: `${path} must be a dot-separated JSON path` });
+    return;
+  }
+  for (const segment of normalized.split('.')) {
+    if (!SAFE_MAPPING_SEGMENT.test(segment) || UNSAFE_MAPPING_SEGMENTS.has(segment)) {
+      issues.push({ path, message: `${path} contains unsupported JSON path segment: ${segment}` });
+      return;
+    }
+  }
+}
+
 function validateSource(value: unknown, path: string, issues: LiveArtifactValidationIssue[]): LiveArtifactTileSource | undefined {
   if (!isPlainObject(value)) {
     issues.push({ path, message: `${path} must be an object` });
@@ -604,6 +621,8 @@ function validateSource(value: unknown, path: string, issues: LiveArtifactValida
             }
             const from = asString(item.from, `${itemPath}.from`, issues, MAX_PATH_LENGTH);
             const to = asString(item.to, `${itemPath}.to`, issues, MAX_PATH_LENGTH);
+            if (from !== undefined) validateMappingPath(from, `${itemPath}.from`, issues);
+            if (to !== undefined) validateMappingPath(to, `${itemPath}.to`, issues);
             if (from !== undefined && to !== undefined) mapping.dataPaths?.push({ from, to });
           });
         }

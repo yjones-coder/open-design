@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { listFiles, projectDir, readProjectFile, validateProjectPath } from '../projects.js';
-import type { BoundedJsonObject, BoundedJsonValue, LiveArtifact, LiveArtifactRefreshSourceMetadata, LiveArtifactTile, LiveArtifactTileSource } from './schema.js';
+import type { BoundedJsonObject, BoundedJsonValue, LiveArtifact, LiveArtifactRefreshSourceMetadata, LiveArtifactTileSource } from './schema.js';
 import { validateBoundedJsonObject } from './schema.js';
 
 const execFileAsync = promisify(execFile);
@@ -42,7 +42,8 @@ export interface LiveArtifactRefreshSourceExecutionOptions {
 export type LocalDaemonRefreshToolName =
   | 'project_files.search'
   | 'project_files.read_json'
-  | 'git.summary';
+  | 'git.summary'
+  | 'public_github_repository_metric';
 
 export interface ExecuteLocalDaemonRefreshSourceOptions {
   projectsRoot: string;
@@ -69,7 +70,6 @@ export interface BuildLiveArtifactRefreshCandidateOptions {
 
 export interface LiveArtifactRefreshCandidate {
   dataJson: BoundedJsonObject;
-  tiles: LiveArtifactTile[];
 }
 
 export interface ProjectFilesSearchInput extends BoundedJsonObject {
@@ -85,6 +85,11 @@ export interface ProjectFilesReadJsonInput extends BoundedJsonObject {
 
 export interface GitSummaryInput extends BoundedJsonObject {
   maxCommits?: number;
+}
+
+export interface PublicGithubRepositoryMetricInput extends BoundedJsonObject {
+  url?: string;
+  fields?: string[];
 }
 
 
@@ -209,6 +214,7 @@ export async function withLiveArtifactRefreshRun<T>(
   try {
     return await Promise.race([callback(run), abortPromise(run.signal)]);
   } catch (error) {
+    if (!run.signal.aborted) throw error;
     throw toRefreshAbortError(error, run);
   } finally {
     registry.finishRun(run);
@@ -241,6 +247,7 @@ export async function withLiveArtifactRefreshSourceTimeout<T>(
   try {
     return await Promise.race([callback(sourceController.signal), abortPromise(sourceController.signal)]);
   } catch (error) {
+    if (!sourceController.signal.aborted) throw error;
     throw toRefreshAbortError(error, run);
   } finally {
     clearTimeout(sourceTimeout);
@@ -251,7 +258,8 @@ export async function withLiveArtifactRefreshSourceTimeout<T>(
 function isLocalDaemonRefreshToolName(value: string | undefined): value is LocalDaemonRefreshToolName {
   return value === 'project_files.search'
     || value === 'project_files.read_json'
-    || value === 'git.summary';
+    || value === 'git.summary'
+    || value === 'public_github_repository_metric';
 }
 
 function asBoundedRefreshOutput(value: BoundedJsonObject): BoundedJsonObject {
@@ -289,14 +297,14 @@ function readMappedValue(root: BoundedJsonObject, path: string): BoundedJsonValu
   for (const segment of parseMappingPath(path, 'outputMapping.dataPaths.from')) {
     if (Array.isArray(current)) {
       const index = Number(segment);
-      if (!Number.isSafeInteger(index) || index < 0) return null;
+      if (!Number.isSafeInteger(index) || index < 0) throw new Error(`outputMapping.dataPaths.from array segment is invalid: ${segment}`);
       current = current[index];
     } else if (isJsonObject(current)) {
       current = current[segment];
     } else {
-      return null;
+      throw new Error(`outputMapping.dataPaths.from path is missing: ${path}`);
     }
-    if (current === undefined) return null;
+    if (current === undefined) throw new Error(`outputMapping.dataPaths.from path is missing: ${path}`);
   }
   return current;
 }
@@ -437,18 +445,62 @@ function cloneBoundedJsonObject(value: BoundedJsonObject): BoundedJsonObject {
   return JSON.parse(JSON.stringify(value)) as BoundedJsonObject;
 }
 
+function deepMergeBoundedJsonObject(target: BoundedJsonObject, source: BoundedJsonObject): void {
+  for (const [key, value] of Object.entries(source)) {
+    const current = target[key];
+    if (isJsonObject(current) && isJsonObject(value)) {
+      deepMergeBoundedJsonObject(current, value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function dateLabel(value: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
+function applyLegacyGithubRepositoryMetricCompat(dataJson: BoundedJsonObject, output: BoundedJsonObject): void {
+  const repository = dataJson.repository;
+  if (!isJsonObject(repository)) return;
+  const stars = output.stargazers_count;
+  if (typeof stars === 'number') {
+    repository.starCount = stars;
+    if (typeof repository.starCountFormatted === 'string') repository.starCountFormatted = formatNumber(stars);
+  }
+  if (typeof output.full_name === 'string') repository.fullName = output.full_name;
+  if (typeof output.html_url === 'string') repository.url = output.html_url;
+  if (typeof output.updated_at === 'string') {
+    repository.fetchedAt = output.updated_at;
+    const label = dateLabel(output.updated_at);
+    if (label !== undefined && typeof repository.fetchedDate === 'string') repository.fetchedDate = label;
+  }
+}
+
 export function buildLiveArtifactRefreshCandidate(options: BuildLiveArtifactRefreshCandidateOptions): LiveArtifactRefreshCandidate {
   const dataJson = cloneBoundedJsonObject(options.currentDataJson);
 
   if (options.documentOutput !== undefined && options.artifact.document?.sourceJson !== undefined) {
-    const mapped = applyLiveArtifactOutputMapping({
-      source: options.artifact.document.sourceJson,
-      output: options.documentOutput.output,
-    });
-    Object.assign(dataJson, mapped);
+    const source = options.artifact.document.sourceJson;
+    const mapped = source.toolName === 'public_github_repository_metric' && source.outputMapping?.dataPaths !== undefined
+      ? asBoundedRefreshOutput(applyDataPaths(options.documentOutput.output, source.outputMapping.dataPaths))
+      : applyLiveArtifactOutputMapping({
+          source,
+          output: options.documentOutput.output,
+        });
+    deepMergeBoundedJsonObject(dataJson, mapped);
+    if (source.toolName === 'public_github_repository_metric') {
+      applyLegacyGithubRepositoryMetricCompat(dataJson, options.documentOutput.output);
+    }
   }
 
-  return { dataJson: asBoundedRefreshOutput(dataJson), tiles: options.artifact.tiles };
+  return { dataJson: asBoundedRefreshOutput(dataJson) };
 }
 
 function optionalString(value: BoundedJsonValue | undefined, field: string): string | undefined {
@@ -579,6 +631,63 @@ async function executeGitSummary(options: ExecuteLocalDaemonRefreshSourceOptions
   });
 }
 
+function selectGithubRepositoryApiUrl(input: PublicGithubRepositoryMetricInput): URL {
+  const rawUrl = optionalString(input.url, 'input.url');
+  if (rawUrl === undefined) throw new Error('public_github_repository_metric requires input.url');
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error('public_github_repository_metric input.url must be a valid URL');
+  }
+
+  if (url.protocol !== 'https:' || url.hostname !== 'api.github.com') {
+    throw new Error('public_github_repository_metric only supports https://api.github.com repository URLs');
+  }
+  if (!/^\/repos\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(url.pathname)) {
+    throw new Error('public_github_repository_metric only supports /repos/{owner}/{repo} URLs');
+  }
+  url.search = '';
+  url.hash = '';
+  url.username = '';
+  url.password = '';
+  return url;
+}
+
+function selectGithubFields(input: PublicGithubRepositoryMetricInput): string[] {
+  if (input.fields === undefined) return ['stargazers_count', 'full_name', 'html_url', 'updated_at'];
+  if (!Array.isArray(input.fields)) throw new Error('input.fields must be an array of strings');
+  const fields = input.fields.filter((field): field is string => typeof field === 'string');
+  if (fields.length !== input.fields.length) throw new Error('input.fields must be an array of strings');
+  return fields.slice(0, 20);
+}
+
+async function executePublicGithubRepositoryMetric(options: ExecuteLocalDaemonRefreshSourceOptions): Promise<BoundedJsonObject> {
+  const input = options.source.input as PublicGithubRepositoryMetricInput;
+  const url = selectGithubRepositoryApiUrl(input);
+  const fetchInit: RequestInit = {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'open-design-live-artifact-refresh',
+    },
+  };
+  if (options.signal !== undefined) fetchInit.signal = options.signal;
+  const response = await fetch(url, fetchInit);
+  if (!response.ok) {
+    throw new Error(`public_github_repository_metric request failed with ${response.status}`);
+  }
+  const parsed = await response.json() as Record<string, unknown>;
+  const output: BoundedJsonObject = { toolName: 'public_github_repository_metric' };
+  for (const field of selectGithubFields(input)) {
+    const value = parsed[field];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      output[field] = value;
+    }
+  }
+  return asBoundedRefreshOutput(output);
+}
+
 export async function executeLocalDaemonRefreshSource(options: ExecuteLocalDaemonRefreshSourceOptions): Promise<BoundedJsonObject> {
   if (options.source.type !== 'daemon_tool') {
     throw new Error('local daemon refresh sources require source.type daemon_tool');
@@ -594,5 +703,7 @@ export async function executeLocalDaemonRefreshSource(options: ExecuteLocalDaemo
       return executeProjectFilesReadJson(options);
     case 'git.summary':
       return executeGitSummary(options);
+    case 'public_github_repository_metric':
+      return executePublicGithubRepositoryMetric(options);
   }
 }

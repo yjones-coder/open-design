@@ -92,9 +92,10 @@ import {
   recoverStaleLiveArtifactRefreshes,
   updateLiveArtifact,
 } from './live-artifacts/store.js';
-import { refreshLiveArtifact } from './live-artifacts/refresh-service.js';
+import { LiveArtifactRefreshUnavailableError, refreshLiveArtifact } from './live-artifacts/refresh-service.js';
+import { LiveArtifactRefreshAbortError } from './live-artifacts/refresh.js';
 import { registerConnectorRoutes } from './connectors/routes.js';
-import { configureConnectorCredentialStore, deleteConnectorCredentialsByProvider, FileConnectorCredentialStore } from './connectors/service.js';
+import { configureConnectorCredentialStore, ConnectorServiceError, deleteConnectorCredentialsByProvider, FileConnectorCredentialStore } from './connectors/service.js';
 import { composioConnectorProvider } from './connectors/composio.js';
 import { configureComposioConfigStore, readPublicComposioConfig, writeComposioConfig } from './connectors/composio-config.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from './tool-tokens.js';
@@ -346,6 +347,17 @@ function sendLiveArtifactRouteError(res, err) {
     return sendApiError(res, 409, 'REFRESH_LOCKED', err.message, {
       details: { artifactId: err.artifactId },
     });
+  }
+  if (err instanceof LiveArtifactRefreshUnavailableError) {
+    return sendApiError(res, 400, 'LIVE_ARTIFACT_REFRESH_UNAVAILABLE', err.message);
+  }
+  if (err instanceof LiveArtifactRefreshAbortError) {
+    return sendApiError(res, err.kind === 'cancelled' ? 499 : 504, 'LIVE_ARTIFACT_REFRESH_TIMEOUT', err.message, {
+      details: { kind: err.kind, timeoutMs: err.timeoutMs ?? null, step: err.step ?? null },
+    });
+  }
+  if (err instanceof ConnectorServiceError) {
+    return sendApiError(res, err.status, err.code, err.message, err.details === undefined ? {} : { details: err.details });
   }
   if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
     return sendApiError(res, 404, 'LIVE_ARTIFACT_NOT_FOUND', 'live artifact not found');

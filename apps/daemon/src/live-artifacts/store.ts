@@ -6,7 +6,7 @@ import path from 'node:path';
 import { ensureProject, projectDir } from '../projects.js';
 import { DEFAULT_LIVE_ARTIFACT_TOTAL_TIMEOUT_MS } from './refresh.js';
 import { renderHtmlTemplateV1 } from './render.js';
-import type { BoundedJsonObject, LiveArtifact, LiveArtifactCreateInput, LiveArtifactProvenance, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshLogEntry, LiveArtifactRefreshSourceMetadata, LiveArtifactRefreshStepStatus, LiveArtifactUpdateInput, LiveArtifactValidationIssue } from './schema.js';
+import type { BoundedJsonObject, LiveArtifact, LiveArtifactCreateInput, LiveArtifactProvenance, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshLogEntry, LiveArtifactRefreshSourceMetadata, LiveArtifactRefreshStepStatus, LiveArtifactTileSource, LiveArtifactUpdateInput, LiveArtifactValidationIssue } from './schema.js';
 import { validateBoundedJsonObject, validateLiveArtifactCreateInput, validateLiveArtifactRefreshLogEntry, validateLiveArtifactUpdateInput, validatePersistedLiveArtifact } from './schema.js';
 
 export type LiveArtifactSummary = Omit<LiveArtifact, 'document' | 'tiles'> & {
@@ -157,8 +157,11 @@ export interface MarkLiveArtifactRefreshCommittedOptions {
 
 export interface CommitLiveArtifactRefreshCandidateOptions extends MarkLiveArtifactRefreshCommittedOptions {
   dataJson: BoundedJsonObject;
-  tiles: LiveArtifact['tiles'];
   provenanceJson?: LiveArtifactProvenance;
+  now?: Date;
+}
+
+export interface MarkLiveArtifactRefreshFailedOptions extends MarkLiveArtifactRefreshCommittedOptions {
   now?: Date;
 }
 
@@ -341,6 +344,12 @@ export async function ensureLiveArtifactStoreLayout(
 
 function stableJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+async function writeFileAtomic(filePath: string, contents: string): Promise<void> {
+  const tempPath = `${filePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  await writeFile(tempPath, contents, 'utf8');
+  await rename(tempPath, filePath);
 }
 
 function defaultTemplateHtml(title: string): string {
@@ -619,6 +628,27 @@ function artifactWithInitialRefreshPermission(artifact: LiveArtifact): LiveArtif
             refreshPermission: 'manual_refresh_granted_for_read_only',
           },
         };
+  }
+  return normalized;
+}
+
+function artifactWithDefaultConnectorRefreshPermission(artifact: LiveArtifact): LiveArtifact {
+  const withDefaultPermission = (sourceJson: LiveArtifactTileSource): LiveArtifactTileSource => {
+    if (sourceJson?.type !== 'connector_tool') return sourceJson;
+    return { ...sourceJson, refreshPermission: 'manual_refresh_granted_for_read_only' };
+  };
+  const normalized: LiveArtifact = {
+    ...artifact,
+    tiles: artifact.tiles.map((tile) => (
+      tile.sourceJson === undefined
+        ? tile
+        : { ...tile, sourceJson: withDefaultPermission(tile.sourceJson) }
+    )),
+  };
+  if (artifact.document !== undefined) {
+    normalized.document = artifact.document.sourceJson === undefined
+      ? artifact.document
+      : { ...artifact.document, sourceJson: withDefaultPermission(artifact.document.sourceJson) };
   }
   return normalized;
 }
@@ -914,10 +944,9 @@ async function writeLiveArtifactSuccessfulSnapshot(
   // validated successful commits that are safe to use for history/rollback views.
   const finalSnapshotDir = resolveInside(paths.snapshotsDir, options.refreshId, 'live artifact snapshot path escapes snapshots dir');
   const tempSnapshotDir = resolveInside(paths.snapshotsDir, `.tmp-${options.refreshId}-${randomBytes(6).toString('hex')}`, 'live artifact snapshot path escapes snapshots dir');
-  const tempTilesDir = resolveInside(tempSnapshotDir, LIVE_ARTIFACT_TILES_DIR, 'live artifact snapshot path escapes snapshot dir');
 
   await rm(tempSnapshotDir, { recursive: true, force: true });
-  await mkdir(tempTilesDir, { recursive: true });
+  await mkdir(tempSnapshotDir, { recursive: true });
   try {
     await Promise.all([
       writeFile(resolveInside(tempSnapshotDir, LIVE_ARTIFACT_ARTIFACT_FILE, 'live artifact snapshot path escapes snapshot dir'), stableJson(options.artifact), 'utf8'),
@@ -925,7 +954,6 @@ async function writeLiveArtifactSuccessfulSnapshot(
       writeFile(resolveInside(tempSnapshotDir, LIVE_ARTIFACT_TEMPLATE_FILE, 'live artifact snapshot path escapes snapshot dir'), options.templateHtml, 'utf8'),
       writeFile(resolveInside(tempSnapshotDir, LIVE_ARTIFACT_PREVIEW_FILE, 'live artifact snapshot path escapes snapshot dir'), options.previewHtml, 'utf8'),
       writeFile(resolveInside(tempSnapshotDir, LIVE_ARTIFACT_PROVENANCE_FILE, 'live artifact snapshot path escapes snapshot dir'), stableJson(options.provenanceJson), 'utf8'),
-      ...options.artifact.tiles.map((tile) => writeFile(resolveInside(tempTilesDir, `${validateLiveArtifactStorageId(tile.id)}.json`, 'live artifact snapshot tile path escapes tiles dir'), stableJson(tile), 'utf8')),
     ]);
     await rename(tempSnapshotDir, finalSnapshotDir);
   } catch (error) {
@@ -950,7 +978,6 @@ export async function commitLiveArtifactRefreshCandidate(
 
   const candidateArtifact: LiveArtifact = artifactWithDataJson({
     ...current,
-    tiles: options.tiles,
     refreshStatus: 'succeeded',
     updatedAt: nowIso,
     lastRefreshedAt: nowIso,
@@ -971,15 +998,11 @@ export async function commitLiveArtifactRefreshCandidate(
     lastCommittedRefreshOrdinal: refreshOrdinal,
   };
 
-  await mkdir(paths.tilesDir, { recursive: true });
-  await rm(paths.tilesDir, { recursive: true, force: true });
-  await mkdir(paths.tilesDir, { recursive: true });
   await Promise.all([
-    writeFile(paths.artifactJsonPath, stableJson(persisted.value), 'utf8'),
-    writeFile(paths.dataJsonPath, stableJson(candidateData.value), 'utf8'),
-    writeFile(paths.generatedPreviewHtmlPath, previewHtml, 'utf8'),
-    writeFile(paths.provenanceJsonPath, stableJson(provenanceJson), 'utf8'),
-    ...persisted.value.tiles.map((tile) => writeFile(liveArtifactTilePath(paths, tile.id), stableJson(tile), 'utf8')),
+    writeFileAtomic(paths.artifactJsonPath, stableJson(persisted.value)),
+    writeFileAtomic(paths.dataJsonPath, stableJson(candidateData.value)),
+    writeFileAtomic(paths.generatedPreviewHtmlPath, previewHtml),
+    writeFileAtomic(paths.provenanceJsonPath, stableJson(provenanceJson)),
   ]);
   await writeLiveArtifactSuccessfulSnapshot(paths, {
     refreshId: options.refreshId,
@@ -991,6 +1014,22 @@ export async function commitLiveArtifactRefreshCandidate(
   });
   await writeLiveArtifactRefreshState(paths, nextState);
   return { artifact: persisted.value, paths };
+}
+
+export async function markLiveArtifactRefreshFailed(
+  options: MarkLiveArtifactRefreshFailedOptions,
+): Promise<LiveArtifactStoreRecord> {
+  const artifactId = validateLiveArtifactStorageId(options.artifactId);
+  const paths = await assertLiveArtifactRefreshLockScope(options.projectsRoot, options.projectId, artifactId);
+  const current = await readPersistedLiveArtifact(paths);
+  assertArtifactMatchesStorage(current, options.projectId, artifactId);
+  const nowIso = (options.now ?? new Date()).toISOString();
+  const artifact = await writePersistedLiveArtifact(paths, {
+    ...current,
+    refreshStatus: 'failed',
+    updatedAt: nowIso,
+  });
+  return { artifact, paths };
 }
 
 export async function releaseLiveArtifactRefreshLock(lock: LiveArtifactRefreshLock): Promise<void> {
@@ -1245,7 +1284,7 @@ export async function updateLiveArtifact(options: UpdateLiveArtifactOptions): Pr
   };
   if (input.document !== undefined) updated.document = input.document;
 
-  const persisted = validatePersistedLiveArtifact(updated);
+  const persisted = validatePersistedLiveArtifact(artifactWithDefaultConnectorRefreshPermission(updated));
   if (!persisted.ok) throw new LiveArtifactStoreValidationError(persisted.error, persisted.issues);
 
   const templateHtml = options.templateHtml ?? await readTextFileOrDefault(paths.templateHtmlPath, defaultTemplateHtml(persisted.value.title));

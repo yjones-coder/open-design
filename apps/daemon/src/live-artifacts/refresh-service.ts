@@ -2,6 +2,7 @@ import {
   appendLiveArtifactRefreshLogEntry,
   commitLiveArtifactRefreshCandidate,
   getLiveArtifact,
+  markLiveArtifactRefreshFailed,
   type LiveArtifactStoreRecord,
   withLiveArtifactRefreshLock,
 } from './store.js';
@@ -32,6 +33,13 @@ export interface RefreshLiveArtifactResult {
   };
 }
 
+export class LiveArtifactRefreshUnavailableError extends Error {
+  constructor(message = 'No refresh source is available yet.') {
+    super(message);
+    this.name = 'LiveArtifactRefreshUnavailableError';
+  }
+}
+
 function nowDate(): Date {
   return new Date();
 }
@@ -57,7 +65,7 @@ function documentSourceMetadata(source: LiveArtifactTileSource): LiveArtifactRef
 }
 
 function isSupportedSource(source: LiveArtifactTileSource | undefined): source is LiveArtifactTileSource {
-  if (source?.refreshPermission !== 'manual_refresh_granted_for_read_only') return false;
+  if (source === undefined) return false;
   return source.type === 'daemon_tool' || source.type === 'connector_tool';
 }
 
@@ -77,7 +85,6 @@ async function executeRefreshSource(options: {
         toolName: connector.toolName,
         input: source.input,
         ...(connector.accountLabel === undefined ? {} : { expectedAccountLabel: connector.accountLabel }),
-        expectedApprovalPolicy: 'auto',
       },
       { projectsRoot, projectId, purpose: 'artifact_refresh', signal },
     );
@@ -133,6 +140,10 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
       const hasDocumentSource = isSupportedSource(documentSource);
       const timeouts = normalizeLiveArtifactRefreshTimeouts();
 
+      if (!hasDocumentSource) {
+        throw new LiveArtifactRefreshUnavailableError();
+      }
+
       const candidate = await withLiveArtifactRefreshRun(
         liveArtifactRefreshRunRegistry,
         {
@@ -186,7 +197,6 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
         artifactId: options.artifactId,
         refreshId,
         dataJson: candidate.dataJson,
-        tiles: candidate.tiles,
         now: nowDate(),
       });
 
@@ -206,6 +216,13 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
     } catch (error) {
       const refreshFinishedAt = nowDate();
       await appendLog({ step: 'refresh:failed', status: 'failed', startedAt: refreshStartedAt, finishedAt: refreshFinishedAt, error }).catch(() => {});
+      await markLiveArtifactRefreshFailed({
+        projectsRoot: options.projectsRoot,
+        projectId: options.projectId,
+        artifactId: options.artifactId,
+        refreshId,
+        now: refreshFinishedAt,
+      }).catch(() => {});
       throw error;
     }
   });

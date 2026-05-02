@@ -6,7 +6,6 @@ import type { BoundedJsonObject, BoundedJsonValue } from '../live-artifacts/sche
 import {
   classifyConnectorToolSafety,
   connectorDefinitionToDetail,
-  isRefreshEligibleConnectorToolSafety,
   type ConnectorDetail,
   type ConnectorCatalogDefinition,
   type ConnectorCatalogToolDefinition,
@@ -643,7 +642,7 @@ export class ConnectorService {
     }
     const runtimeSafety = runtimeSafetyForTool(tool);
     const effectiveApproval = stricterApproval(stricterApproval(definition.minimumApproval, tool.safety.approval), runtimeSafety.approval);
-    if (effectiveApproval !== 'auto') {
+    if (context.purpose !== 'artifact_refresh' && effectiveApproval !== 'auto') {
       throw new ConnectorServiceError('CONNECTOR_SAFETY_DENIED', 'connector tool is not auto-approved read-only by current safety policy', 403, {
         connectorId: request.connectorId,
         toolName: request.toolName,
@@ -661,11 +660,10 @@ export class ConnectorService {
       });
     }
     if (context.purpose === 'artifact_refresh') {
-      if (!definition.allowedToolNames.includes(tool.name) || !tool.refreshEligible || !isRefreshEligibleConnectorToolSafety(runtimeSafety)) {
+      if (!definition.allowedToolNames.includes(tool.name)) {
         throw new ConnectorServiceError('CONNECTOR_SAFETY_DENIED', 'connector tool is not eligible for artifact refresh', 403, {
           connectorId: request.connectorId,
           toolName: request.toolName,
-          refreshEligible: tool.refreshEligible,
           safety: { ...runtimeSafety },
         });
       }

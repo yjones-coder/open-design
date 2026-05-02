@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startServer } from '../src/server.js';
-import { connectorService } from '../src/connectors/service.js';
+import { connectorService, ConnectorServiceError } from '../src/connectors/service.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from '../src/tool-tokens.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -237,6 +237,122 @@ describe('live artifact tool routes', () => {
     expect(uiRefresh.body.refresh).toMatchObject({ id: 'refresh-000002', status: 'succeeded', refreshedSourceCount: 1 });
     expect(uiRefresh.body.artifact.document.dataJson).toMatchObject({ title: 'Open bugs', owner: '8' });
     expect(executeConnector).toHaveBeenCalledTimes(2);
+  });
+
+  it('defaults updated connector sources to refreshable', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-refresh-default');
+    const executeConnector = vi.spyOn(connectorService, 'execute').mockResolvedValueOnce({
+      ok: true,
+      connectorId: 'monet',
+      toolName: 'monet.metrics',
+      safety: { sideEffect: 'read', approval: 'auto' },
+      output: { title: 'Default refresh', owner: '9' },
+    });
+
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ input: validCreateInput('Default Refresh Artifact') }),
+    });
+    expect(create.status).toBe(200);
+
+    const update = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        artifactId: create.body.artifact.id,
+        input: {
+          document: {
+            ...validCreateInput('Default Refresh Artifact').document,
+            sourceJson: {
+              type: 'connector_tool',
+              toolName: 'monet.metrics',
+              input: { report: 'defaults' },
+              connector: {
+                connectorId: 'monet',
+                toolName: 'monet.metrics',
+                approvalPolicy: 'read_only_auto',
+              },
+              refreshPermission: 'none',
+            },
+          },
+        },
+      }),
+    });
+    expect(update.status).toBe(200);
+    expect(update.body.artifact.document.sourceJson.refreshPermission).toBe('manual_refresh_granted_for_read_only');
+
+    const refresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(refresh.status).toBe(200);
+    expect(refresh.body.artifact.document.dataJson).toMatchObject({ title: 'Default refresh', owner: '9' });
+    expect(executeConnector).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects refresh requests when no refresh source exists', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-refresh-unavailable');
+
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ input: validCreateInput('No Source Artifact') }),
+    });
+    expect(create.status).toBe(200);
+
+    const uiRefresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(uiRefresh.status).toBe(400);
+    expect(uiRefresh.body.error).toMatchObject({
+      code: 'LIVE_ARTIFACT_REFRESH_UNAVAILABLE',
+      message: 'No refresh source is available yet.',
+    });
+  });
+
+  it('marks artifacts failed and returns connector refresh error codes', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-refresh-failure');
+    vi.spyOn(connectorService, 'execute').mockRejectedValueOnce(
+      new ConnectorServiceError('CONNECTOR_NOT_CONNECTED', 'connector is not connected', 403, { connectorId: 'monet' }),
+    );
+
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: {
+          ...validCreateInput('Failed Refresh Artifact'),
+          document: {
+            ...validCreateInput('Failed Refresh Artifact').document,
+            sourceJson: {
+              type: 'connector_tool',
+              toolName: 'monet.metrics',
+              input: { report: 'fail' },
+              connector: {
+                connectorId: 'monet',
+                toolName: 'monet.metrics',
+                approvalPolicy: 'read_only_auto',
+              },
+              refreshPermission: 'none',
+            },
+          },
+        },
+      }),
+    });
+    expect(create.status).toBe(200);
+
+    const refresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(refresh.status).toBe(403);
+    expect(refresh.body.error).toMatchObject({ code: 'CONNECTOR_NOT_CONNECTED', message: 'connector is not connected' });
+
+    const detail = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.artifact).toMatchObject({ refreshStatus: 'failed' });
   });
 
   it('serves live artifact previews with restrictive iframe headers', async () => {
