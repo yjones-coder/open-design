@@ -117,6 +117,11 @@ export const AGENT_DEFS = [
     id: 'claude',
     name: 'Claude Code',
     bin: 'claude',
+    // Drop-in forks that ship a CLI argv-compatible with `claude`. Tried in
+    // order if `claude` itself isn't on PATH, so users on a single-binary
+    // install (e.g. only OpenClaude — https://github.com/Gitlawb/openclaude
+    // — issue #235) get auto-detected without writing wrapper scripts.
+    fallbackBins: ['openclaude'],
     versionArgs: ['--version'],
     helpArgs: ['--help'],
     capabilityFlags: {
@@ -426,10 +431,8 @@ export const AGENT_DEFS = [
       { id: 'claude-sonnet-4.6', label: 'Claude Sonnet 4.6' },
       { id: 'gpt-5.2', label: 'GPT-5.2' },
     ],
-    buildArgs: (prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
+    buildArgs: (_prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
       const args = [
-        '-p',
-        prompt,
         '--allow-all-tools',
         '--output-format',
         'json',
@@ -443,6 +446,7 @@ export const AGENT_DEFS = [
       for (const d of dirs) args.push('--add-dir', d);
       return args;
     },
+    promptViaStdin: true,
     streamFormat: 'copilot-stream-json',
   },
   {
@@ -543,6 +547,21 @@ export function resolveOnPath(bin) {
   return null;
 }
 
+// Resolve the first available binary for an agent definition. Tries
+// `def.bin` first, then walks `def.fallbackBins` in order. Used for
+// agents whose forks ship under a different binary name but speak the
+// exact same CLI (Claude Code → OpenClaude, issue #235). Returns null
+// when no candidate is on PATH.
+export function resolveAgentExecutable(def) {
+  if (!def?.bin) return null;
+  const candidates = [def.bin, ...(Array.isArray(def.fallbackBins) ? def.fallbackBins : [])];
+  for (const bin of candidates) {
+    const resolved = resolveOnPath(bin);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
 async function fetchModels(def, resolvedBin) {
   if (typeof def.fetchModels === 'function') {
     try {
@@ -574,7 +593,7 @@ async function fetchModels(def, resolvedBin) {
 }
 
 async function probe(def) {
-  const resolved = resolveOnPath(def.bin);
+  const resolved = resolveAgentExecutable(def);
   if (!resolved) {
     return {
       ...stripFns(def),
@@ -621,8 +640,9 @@ function stripFns(def) {
   // Drop the buildArgs / listModels closures but keep declarative metadata
   // (reasoningOptions, streamFormat, name, bin, etc.). `models` is
   // populated separately by `fetchModels`, so we strip the static
-  // `fallbackModels` slot here too. `helpArgs` / `capabilityFlags` are
-  // probe-only metadata and shouldn't bleed into the API response either.
+  // `fallbackModels` slot here too. `helpArgs` / `capabilityFlags` /
+  // `fallbackBins` are probe-only metadata and shouldn't bleed into the
+  // API response either.
   const {
     buildArgs,
     listModels,
@@ -630,6 +650,7 @@ function stripFns(def) {
     fallbackModels,
     helpArgs,
     capabilityFlags,
+    fallbackBins,
     ...rest
   } = def;
   return rest;
@@ -658,7 +679,7 @@ export function getAgentDef(id) {
 export function resolveAgentBin(id) {
   const def = getAgentDef(id);
   if (!def?.bin) return null;
-  return resolveOnPath(def.bin);
+  return resolveAgentExecutable(def);
 }
 
 // Daemon's /api/chat needs to validate the user's model pick against the

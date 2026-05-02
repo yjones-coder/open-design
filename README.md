@@ -25,7 +25,7 @@
   <a href="QUICKSTART.md"><img alt="Quickstart" src="https://img.shields.io/badge/quickstart-3%20commands-green?style=flat-square" /></a>
 </p>
 
-<p align="center"><b>English</b> · <a href="README.de.md">Deutsch</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ko.md">한국어</a> · <a href="README.ja-JP.md">日本語</a></p>
+<p align="center"><b>English</b> · <a href="README.de.md">Deutsch</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ko.md">한국어</a> · <a href="README.ja-JP.md">日本語</a></p>
 
 ---
 
@@ -416,7 +416,8 @@ open-design/
 │       └── browser-chrome.html
 │
 ├── templates/
-│   └── deck-framework.html        ← deck baseline (nav / counter / print)
+│   ├── deck-framework.html        ← deck baseline (nav / counter / print)
+│   └── kami-deck.html             ← kami-flavored deck starter (parchment / ink-blue serif)
 │
 ├── scripts/
 │   └── sync-design-systems.ts     ← re-import upstream awesome-design-md tarball
@@ -725,6 +726,12 @@ The SVG above is regenerated daily by [`.github/workflows/metrics.yml`](.github/
 
 If the curve bends up, that's the signal we look for. ★ this repo to push it.
 
+## Credits
+
+The HTML PPT Studio family of skills — the master [`skills/html-ppt/`](skills/html-ppt/) and the per-template wrappers under [`skills/html-ppt-*/`](skills/) (15 full-deck templates, 36 themes, 31 single-page layouts, 27 CSS animations + 20 canvas FX, the keyboard runtime, and the magnetic-card presenter mode) — are integrated from the open-source project [`lewislulu/html-ppt-skill`](https://github.com/lewislulu/html-ppt-skill) (MIT). The upstream LICENSE ships in-tree at [`skills/html-ppt/LICENSE`](skills/html-ppt/LICENSE) and authorship credit goes to [@lewislulu](https://github.com/lewislulu). Each per-template Examples card (`html-ppt-pitch-deck`, `html-ppt-tech-sharing`, `html-ppt-presenter-mode`, `html-ppt-xhs-post`, …) delegates authoring guidance to the master skill so the upstream's prompt → output behavior is preserved end-to-end when you click **Use this prompt**.
+
+The magazine / horizontal-swipe deck flow under [`skills/guizang-ppt/`](skills/guizang-ppt/) is integrated from [`op7418/guizang-ppt-skill`](https://github.com/op7418/guizang-ppt-skill) (MIT). Authorship credit goes to [@op7418](https://github.com/op7418).
+
 ## License
 
-Apache-2.0. The bundled `skills/guizang-ppt/` retains its original [LICENSE](skills/guizang-ppt/LICENSE) (MIT) and authorship attribution to [op7418](https://github.com/op7418).
+Apache-2.0. The bundled `skills/guizang-ppt/` retains its original [LICENSE](skills/guizang-ppt/LICENSE) (MIT) and authorship attribution to [op7418](https://github.com/op7418). The bundled `skills/html-ppt/` retains its original [LICENSE](skills/html-ppt/LICENSE) (MIT) and authorship attribution to [lewislulu](https://github.com/lewislulu).

@@ -25,7 +25,7 @@
   <a href="QUICKSTART.md"><img alt="Quickstart" src="https://img.shields.io/badge/quickstart-3%20commands-green?style=flat-square" /></a>
 </p>
 
-<p align="center"><a href="README.md">English</a> · <a href="README.de.md">Deutsch</a> · <b>简体中文</b> · <a href="README.ko.md">한국어</a> · <a href="README.ja-JP.md">日本語</a></p>
+<p align="center"><a href="README.md">English</a> · <a href="README.de.md">Deutsch</a> · <b>简体中文</b> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ko.md">한국어</a> · <a href="README.ja-JP.md">日本語</a></p>
 
 ---
 
@@ -719,6 +719,12 @@ Daemon 启动时从 `PATH` 自动检测，无需配置。流式分发逻辑在 [
 
 曲线往上走 —— 那就是我们想看到的信号。点 ★ 推它一把。
 
+## 鸣谢 / Credits
+
+[`skills/html-ppt/`](skills/html-ppt/) 主 skill 以及 [`skills/html-ppt-*/`](skills/) 下的 15 个 per-template 子 skill —— 含 15 套 full-deck、36 套主题、31 个单页 layout、27 个 CSS 动画 + 20 个 canvas FX、键盘 runtime 与磁吸卡片演讲者模式 —— 整合自开源项目 [`lewislulu/html-ppt-skill`](https://github.com/lewislulu/html-ppt-skill)（MIT）。原始 LICENSE 已保留于 [`skills/html-ppt/LICENSE`](skills/html-ppt/LICENSE)，原作者归属 [@lewislulu](https://github.com/lewislulu)。每张 per-template 的 Examples 卡片（`html-ppt-pitch-deck`、`html-ppt-tech-sharing`、`html-ppt-presenter-mode`、`html-ppt-xhs-post` …）都把 authoring 指南委托给主 skill，所以点 **Use this prompt** 后，沿用上游同样的 prompt → 产物路径。
+
+[`skills/guizang-ppt/`](skills/guizang-ppt/) 杂志风横向翻页 deck 整合自 [`op7418/guizang-ppt-skill`](https://github.com/op7418/guizang-ppt-skill)（MIT），原作者归属 [@op7418](https://github.com/op7418)。
+
 ## License
 
-Apache-2.0。内置的 [`skills/guizang-ppt/`](skills/guizang-ppt/) 保留它原始的 [LICENSE](skills/guizang-ppt/LICENSE)（MIT）和原作者 [op7418](https://github.com/op7418) 的归属。
+Apache-2.0。内置的 [`skills/guizang-ppt/`](skills/guizang-ppt/) 保留它原始的 [LICENSE](skills/guizang-ppt/LICENSE)（MIT）和原作者 [op7418](https://github.com/op7418) 的归属。内置的 [`skills/html-ppt/`](skills/html-ppt/) 保留它原始的 [LICENSE](skills/html-ppt/LICENSE)（MIT）和原作者 [lewislulu](https://github.com/lewislulu) 的归属。
