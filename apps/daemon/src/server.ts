@@ -901,6 +901,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // Health/version remain open for monitoring probes.
   // Non-browser clients (no Origin header) are always allowed.
   app.use('/api', (req, res, next) => {
+    // Live artifact previews have stricter local-daemon validation and
+    // loopback CORS handling on the route itself. Let that middleware produce
+    // the structured error shape and preflight headers for preview embeds.
+    if (/^\/live-artifacts\/[^/]+\/preview$/.test(req.path)) return next();
+
     const origin = req.headers.origin;
     // Non-browser client → allow.
     if (origin == null || origin === '') return next();
