@@ -127,6 +127,32 @@ describe('API proxy routes', () => {
 
     await expect(res.text()).resolves.toContain('Gemini blocked the prompt (SAFETY).');
   });
+
+  it('forwards maxTokens to Gemini generation config', async () => {
+    const fetchMock = vi.fn((input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return realFetch(input, init);
+      return Promise.resolve(sseResponse('data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}\n\n'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await realFetch(`${baseUrl}/api/proxy/google/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: 'https://generativelanguage.googleapis.com',
+        apiKey: 'google-key',
+        model: 'gemini-2.0-flash',
+        maxTokens: 1234,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    const [, upstreamInit] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse(String(upstreamInit?.body))).toMatchObject({
+      generationConfig: { maxOutputTokens: 1234 },
+    });
+  });
 });
 
 function sseResponse(text: string): Response {

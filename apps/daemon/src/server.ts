@@ -2982,7 +2982,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   app.post('/api/proxy/google/stream', async (req, res) => {
     /** @type {Partial<ProxyStreamRequest>} */
     const proxyBody = req.body || {};
-    const { baseUrl, apiKey, model, systemPrompt, messages } = proxyBody;
+    const { baseUrl, apiKey, model, systemPrompt, messages, maxTokens } = proxyBody;
     if (!apiKey || !model) {
       return sendApiError(
         res,
@@ -3013,7 +3013,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       role: message.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: message.content }],
     }));
-    const payload = { contents };
+    const payload = {
+      contents,
+      generationConfig: {
+        maxOutputTokens:
+          typeof maxTokens === 'number' && maxTokens > 0 ? maxTokens : 8192,
+      },
+    };
     if (typeof systemPrompt === 'string' && systemPrompt) {
       payload.systemInstruction = { parts: [{ text: systemPrompt }] };
     }
