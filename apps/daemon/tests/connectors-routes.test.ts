@@ -175,8 +175,9 @@ describe('connector routes', () => {
     expect(second.status).toBe(200);
     expect(first.body.connectors.map((connector) => connector.id)).toEqual(expect.arrayContaining(['github', 'notion', 'google_drive', 'slack', 'zoom']));
     expect(second.body.connectors.map((connector) => connector.id)).toEqual(expect.arrayContaining(['github', 'notion', 'google_drive', 'slack', 'zoom']));
+    expect(first.body.connectors.find((connector) => connector.id === 'slack')?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'slack.slack_list_channels' })]));
     expect(first.body.meta).toMatchObject({ provider: 'composio' });
-    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 1 });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 2 });
   });
 
   it('returns connector statuses by connectorId', async () => {

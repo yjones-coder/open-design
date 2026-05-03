@@ -156,6 +156,24 @@ export interface Dict {
   'connectors.gateTitle': string;
   'connectors.gateBody': string;
   'connectors.gateAction': string;
+  'connectors.aboutLabel': string;
+  'connectors.detailsLabel': string;
+  'connectors.statusLabel': string;
+  'connectors.categoryLabel': string;
+  'connectors.providerLabel': string;
+  'connectors.toolsSection': string;
+  'connectors.toolsLoading': string;
+  'connectors.noToolsAvailable': string;
+  'connectors.openDetailsAria': string;
+  'connectors.toolsBadgeNone': string;
+  'connectors.toolsBadgeOne': string;
+  'connectors.toolsBadgeMany': string;
+  'connectors.searchPlaceholder': string;
+  'connectors.searchAriaLabel': string;
+  'connectors.searchClear': string;
+  'connectors.emptyNoMatchTitle': string;
+  'connectors.emptyNoMatchBody': string;
+  'connectors.emptyNoMatchAction': string;
 
   // New project panel
   'newproj.tabPrototype': string;

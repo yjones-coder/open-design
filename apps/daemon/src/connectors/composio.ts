@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import type { BoundedJsonObject, BoundedJsonValue } from '../live-artifacts/schema.js';
 import { defineConnectorTool, type ConnectorCatalogDefinition, type ConnectorCatalogToolDefinition } from './catalog.js';
 import { readComposioConfig } from './composio-config.js';
+import { getComposioToolkitMetadata } from './composio-descriptions.js';
 import { ConnectorServiceError, type ConnectorCredentialMaterial } from './service.js';
 
 const DEFAULT_COMPOSIO_BASE_URL = 'https://backend.composio.dev';
@@ -338,6 +339,12 @@ interface ComposioToolkitResponse {
   logo?: unknown;
   description?: unknown;
   categories?: unknown;
+  meta?: {
+    description?: unknown;
+    categories?: unknown;
+    tools_count?: unknown;
+    toolsCount?: unknown;
+  };
 }
 
 interface ComposioToolResponse {
@@ -458,13 +465,12 @@ export class ComposioConnectorProvider {
     this.discoveredAuthConfigIds = discoveredAuthConfigIds;
     const toolkits = apiKey ? await this.listToolkitsSafe(signal) : [];
     const toolkitBySlug = new Map(toolkits.map((toolkit) => [normalizeComposioSlug(getString(toolkit.slug) ?? ''), toolkit]));
-    const definitions: ConnectorCatalogDefinition[] = [];
-    for (const staticDefinition of STATIC_COMPOSIO_CATALOG) {
+    const definitions = await mapWithConcurrency(STATIC_COMPOSIO_CATALOG, 8, async (staticDefinition) => {
       const configuredEntry = configuredByConnectorId.get(staticDefinition.id);
       const toolkitSlug = configuredEntry?.toolkitSlug ?? staticDefinition.providerConnectorId ?? staticDefinition.id;
       const toolkit = toolkitBySlug.get(normalizeComposioSlug(toolkitSlug));
-      definitions.push(await this.definitionFromToolkit(staticDefinition, toolkitSlug, toolkit, Boolean(configuredEntry), signal));
-    }
+      return this.definitionFromToolkit(staticDefinition, toolkitSlug, toolkit, Boolean(apiKey), signal);
+    });
     return definitions;
   }
 
@@ -743,8 +749,9 @@ export class ComposioConnectorProvider {
       .map((tool) => tool.name);
     const allowedToolNames = [...new Set([...staticDefinition.allowedToolNames, ...autoAllowedLiveToolNames])];
     const name = getString(toolkit?.name) ?? staticDefinition.name;
-    const category = firstCategoryName(toolkit?.categories) ?? staticDefinition.category;
-    const description = getString(toolkit?.description) ?? staticDefinition.description;
+    const category = firstCategoryName(toolkit?.meta?.categories) ?? firstCategoryName(toolkit?.categories) ?? staticDefinition.category;
+    const liveDescription = getComposioToolkitDescription(toolkit);
+    const description = liveDescription ?? staticDefinition.description;
     return {
       ...staticDefinition,
       id: connectorId,
@@ -867,12 +874,18 @@ function buildStaticComposioCatalog(): ConnectorCatalogDefinition[] {
 }
 
 function createComposioCatalogDefinition(toolkit: ComposioToolkitCatalogEntry): ConnectorCatalogDefinition {
+  const curated = getComposioToolkitMetadata(toolkit.slug);
+  // Prefer a hand-authored description when offline. Live Composio toolkit
+  // metadata still wins during discovery, as long as it is not the legacy
+  // generic "Connect to X through Composio." placeholder.
+  const description = curated?.description ?? fallbackComposioDescription(toolkit.name, curated?.category ?? toolkit.category);
+  const category = curated?.category ?? toolkit.category ?? 'Integration';
   return {
     id: connectorIdForToolkitSlug(toolkit.slug),
     name: toolkit.name,
     provider: 'composio',
-    category: toolkit.category ?? 'Composio',
-    description: `Connect to ${toolkit.name} through Composio.`,
+    category,
+    description,
     providerConnectorId: toolkit.slug,
     authentication: 'composio',
     tools: [],
@@ -907,6 +920,46 @@ function getString(value: unknown): string | undefined {
 function getStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
+}
+
+async function mapWithConcurrency<T, U>(items: readonly T[], concurrency: number, mapper: (item: T, index: number) => Promise<U>): Promise<U[]> {
+  const results = new Array<U>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index]!, index);
+    }
+  }));
+  return results;
+}
+
+function getComposioToolkitDescription(toolkit: ComposioToolkitResponse | undefined): string | undefined {
+  const description = getString(toolkit?.meta?.description) ?? getString(toolkit?.description);
+  if (!description || isGenericComposioDescription(description)) return undefined;
+  return description;
+}
+
+function isGenericComposioDescription(description: string): boolean {
+  return /^connect to .+ through composio\.?$/i.test(description.trim())
+    || /^.+ integration via composio\.?$/i.test(description.trim());
+}
+
+function fallbackComposioDescription(name: string, category: string | undefined): string {
+  const normalizedCategory = category?.trim().toLowerCase();
+  if (normalizedCategory?.includes('project')) return `Coordinate ${name} projects, tasks, and workflow data inside Open Design.`;
+  if (normalizedCategory?.includes('communication')) return `Bring ${name} conversations, channels, and collaboration context into Open Design.`;
+  if (normalizedCategory?.includes('documentation')) return `Search and reuse ${name} knowledge, pages, and documentation in Open Design.`;
+  if (normalizedCategory?.includes('storage')) return `Find and reference ${name} files, folders, and document metadata from Open Design.`;
+  if (normalizedCategory?.includes('developer')) return `Inspect ${name} developer resources, activity, and operational context from Open Design.`;
+  if (normalizedCategory?.includes('crm') || normalizedCategory?.includes('sales')) return `Use ${name} customer, deal, and account context in Open Design artifacts.`;
+  if (normalizedCategory?.includes('marketing')) return `Analyze ${name} campaigns, audiences, and marketing activity from Open Design.`;
+  if (normalizedCategory?.includes('finance') || normalizedCategory?.includes('commerce')) return `Work with ${name} business, billing, and transaction data in Open Design.`;
+  if (normalizedCategory?.includes('observability')) return `Surface ${name} incidents, metrics, and operational signals in Open Design.`;
+  if (normalizedCategory?.includes('data')) return `Query ${name} datasets and platform metadata for data-backed Open Design artifacts.`;
+  return `Use ${name} tools and data directly from Open Design.`;
 }
 
 function getComposioAuthConfigId(response: ComposioAuthConfigResponse): string | undefined {
