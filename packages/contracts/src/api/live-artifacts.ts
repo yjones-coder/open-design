@@ -217,11 +217,11 @@ export type LiveArtifactSummary = Omit<LiveArtifact, 'document' | 'tiles'> & {
 };
 
 export interface LiveArtifactListResponse {
-  liveArtifacts: LiveArtifactSummary[];
+  artifacts: LiveArtifactSummary[];
 }
 
 export interface LiveArtifactDetailResponse {
-  liveArtifact: LiveArtifact;
+  artifact: LiveArtifact;
 }
 
 export interface LiveArtifactRefreshResponse {
