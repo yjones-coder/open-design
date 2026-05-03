@@ -229,6 +229,10 @@ describe('live artifact tool routes', () => {
     expect(toolRefresh.body.artifact).toMatchObject({ refreshStatus: 'succeeded', lastRefreshedAt: expect.any(String) });
     expect(toolRefresh.body.artifact.document.dataJson).toMatchObject({ title: 'Open bugs', owner: '7' });
     expect(executeConnector).toHaveBeenCalledTimes(1);
+    expect(executeConnector).toHaveBeenLastCalledWith(
+      expect.objectContaining({ expectedApprovalPolicy: 'auto' }),
+      expect.objectContaining({ purpose: 'artifact_refresh' }),
+    );
 
     const uiRefresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
       method: 'POST',
@@ -237,6 +241,49 @@ describe('live artifact tool routes', () => {
     expect(uiRefresh.body.refresh).toMatchObject({ id: 'refresh-000002', status: 'succeeded', refreshedSourceCount: 1 });
     expect(uiRefresh.body.artifact.document.dataJson).toMatchObject({ title: 'Open bugs', owner: '8' });
     expect(executeConnector).toHaveBeenCalledTimes(2);
+    expect(executeConnector).toHaveBeenLastCalledWith(
+      expect.objectContaining({ expectedApprovalPolicy: 'auto' }),
+      expect.objectContaining({ purpose: 'artifact_refresh' }),
+    );
+  });
+
+  it('rejects refresh requests when the stored source disables refresh execution', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-refresh-disabled');
+
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ input: validCreateInput('Disabled Refresh Artifact') }),
+    });
+    expect(create.status).toBe(200);
+
+    const update = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        artifactId: create.body.artifact.id,
+        input: {
+          document: {
+            ...validCreateInput('Disabled Refresh Artifact').document,
+            sourceJson: {
+              type: 'daemon_tool',
+              toolName: 'project_files.search',
+              input: { query: 'should-not-run' },
+              refreshPermission: 'none',
+            },
+          },
+        },
+      }),
+    });
+    expect(update.status).toBe(200);
+    expect(update.body.artifact.document.sourceJson.refreshPermission).toBe('none');
+
+    const refresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(refresh.status).toBe(400);
+    expect(refresh.body.error).toMatchObject({ code: 'LIVE_ARTIFACT_REFRESH_UNAVAILABLE' });
   });
 
   it('defaults updated connector sources to refreshable', async () => {

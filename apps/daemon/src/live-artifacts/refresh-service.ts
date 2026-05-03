@@ -15,7 +15,8 @@ import {
   withLiveArtifactRefreshSourceTimeout,
 } from './refresh.js';
 import { connectorService } from '../connectors/service.js';
-import type { BoundedJsonObject, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshSourceMetadata, LiveArtifactTileSource } from './schema.js';
+import type { ConnectorToolApproval } from '../connectors/catalog.js';
+import type { BoundedJsonObject, LiveArtifactConnectorApprovalPolicy, LiveArtifactRefreshErrorRecord, LiveArtifactRefreshSourceMetadata, LiveArtifactTileSource } from './schema.js';
 
 export interface RefreshLiveArtifactOptions {
   projectsRoot: string;
@@ -66,7 +67,16 @@ function documentSourceMetadata(source: LiveArtifactTileSource): LiveArtifactRef
 
 function isSupportedSource(source: LiveArtifactTileSource | undefined): source is LiveArtifactTileSource {
   if (source === undefined) return false;
+  if (source.refreshPermission === 'none') return false;
   return source.type === 'daemon_tool' || source.type === 'connector_tool';
+}
+
+function connectorExpectedApprovalPolicy(policy: LiveArtifactConnectorApprovalPolicy): ConnectorToolApproval {
+  switch (policy) {
+    case 'read_only_auto':
+    case 'manual_refresh_granted_for_read_only':
+      return 'auto';
+  }
 }
 
 async function executeRefreshSource(options: {
@@ -76,6 +86,9 @@ async function executeRefreshSource(options: {
   signal: AbortSignal;
 }): Promise<BoundedJsonObject> {
   const { projectsRoot, projectId, source, signal } = options;
+  if (source.refreshPermission === 'none') {
+    throw new LiveArtifactRefreshUnavailableError('Refresh is disabled for this source.');
+  }
   if (source.type === 'connector_tool') {
     const connector = source.connector;
     if (connector === undefined) throw new Error('connector refresh source requires connector metadata');
@@ -85,6 +98,7 @@ async function executeRefreshSource(options: {
         toolName: connector.toolName,
         input: source.input,
         ...(connector.accountLabel === undefined ? {} : { expectedAccountLabel: connector.accountLabel }),
+        expectedApprovalPolicy: connectorExpectedApprovalPolicy(connector.approvalPolicy),
       },
       { projectsRoot, projectId, purpose: 'artifact_refresh', signal },
     );

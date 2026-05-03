@@ -692,6 +692,9 @@ export async function executeLocalDaemonRefreshSource(options: ExecuteLocalDaemo
   if (options.source.type !== 'daemon_tool') {
     throw new Error('local daemon refresh sources require source.type daemon_tool');
   }
+  if (options.source.refreshPermission === 'none') {
+    throw new Error('refresh is disabled for this source');
+  }
   if (!isLocalDaemonRefreshToolName(options.source.toolName)) {
     throw new Error(`unsupported local daemon refresh tool: ${options.source.toolName ?? '<missing>'}`);
   }
