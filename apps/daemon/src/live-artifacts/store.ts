@@ -1198,7 +1198,7 @@ export async function ensureLiveArtifactPreview(options: RegenerateLiveArtifactP
     ]);
     const previewStat = await stat(paths.generatedPreviewHtmlPath);
     const newestDependencyMtime = Math.max(...dependencyStats.map((dependencyStat) => dependencyStat.mtimeMs));
-    if (previewStat.mtimeMs >= newestDependencyMtime) {
+    if (previewStat.mtimeMs > newestDependencyMtime) {
       return { artifact, paths, html: await readFile(paths.generatedPreviewHtmlPath, 'utf8') };
     }
   } catch (error) {
