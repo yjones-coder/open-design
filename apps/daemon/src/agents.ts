@@ -1,9 +1,10 @@
 // @ts-nocheck
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { delimiter } from 'node:path';
 import path from 'node:path';
+import { homedir } from 'node:os';
 import { detectAcpModels } from './acp.js';
 import { parsePiModels } from './pi-rpc.js';
 
@@ -27,7 +28,7 @@ const agentCapabilities = new Map();
 //                            to show.
 //   - `fallbackModels`     : static hint list. Used as the source of truth
 //                            for CLIs that don't expose a listing command
-//                            (Claude Code, Codex, Gemini CLI, Qwen Code)
+//                            (Claude Code, Codex, Devin for Terminal, Gemini CLI, Qwen Code)
 //                            and as the fallback for the others.
 //   - `reasoningOptions`   : optional reasoning-effort presets (currently
 //                            only Codex exposes this knob).
@@ -66,6 +67,34 @@ const agentCapabilities = new Map();
 
 const DEFAULT_MODEL_OPTION = { id: 'default', label: 'Default (CLI config)' };
 
+// Map a user-picked reasoning effort to one the chosen model will accept.
+// Codex's CLI accepts `none | minimal | low | medium | high | xhigh`, but
+// real models support narrower subsets — gpt-5.2/5.3/5.4/5.5 reject
+// `minimal`, gpt-5.1 rejects `xhigh`, gpt-5.1-codex-mini accepts only
+// `medium` / `high`.
+// An undefined / 'default' modelId is clamped as if it were gpt-5.5,
+// since that's codex's current default model. Unknown / future model ids
+// pass through unchanged — if the API later rejects, the server error
+// is the signal that a new rule belongs here.
+function clampCodexReasoning(modelId, effort) {
+  if (!effort) return effort;
+  const raw = String(modelId ?? '').trim();
+  const id = raw.includes('/') ? raw.split('/').pop() : raw;
+  const isGpt5LateFamily =
+    !id ||
+    id === 'default' ||
+    id.startsWith('gpt-5.2') ||
+    id.startsWith('gpt-5.3') ||
+    id.startsWith('gpt-5.4') ||
+    id.startsWith('gpt-5.5');
+  if (isGpt5LateFamily && effort === 'minimal') return 'low';
+  if (id === 'gpt-5.1' && effort === 'xhigh') return 'high';
+  if (id === 'gpt-5.1-codex-mini') {
+    return effort === 'high' || effort === 'xhigh' ? 'high' : 'medium';
+  }
+  return effort;
+}
+
 // Parse one-id-per-line stdout from `<cli> models` and prepend the synthetic
 // default option. Used by opencode / cursor-agent.
 function parseLineSeparatedModels(stdout) {
@@ -89,6 +118,11 @@ export const AGENT_DEFS = [
     id: 'claude',
     name: 'Claude Code',
     bin: 'claude',
+    // Drop-in forks that ship a CLI argv-compatible with `claude`. Tried in
+    // order if `claude` itself isn't on PATH, so users on a single-binary
+    // install (e.g. only OpenClaude — https://github.com/Gitlawb/openclaude
+    // — issue #235) get auto-detected without writing wrapper scripts.
+    fallbackBins: ['openclaude'],
     versionArgs: ['--version'],
     helpArgs: ['--help'],
     capabilityFlags: {
@@ -110,11 +144,17 @@ export const AGENT_DEFS = [
       { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5' },
       { id: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
     ],
-    buildArgs: (prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
+    // Prompt delivered via stdin to avoid both Linux `spawn E2BIG`
+    // (MAX_ARG_STRLEN caps a single argv entry at ~128 KB) and Windows
+    // `spawn ENAMETOOLONG` (CreateProcess caps the full command line at
+    // ~32 KB direct, ~8 KB via .cmd shim). `claude -p` with no positional
+    // prompt reads the prompt from stdin under `--input-format text` (the
+    // default), which has no length cap. Mirrors the codex/gemini/opencode/
+    // cursor/qwen entries below.
+    buildArgs: (_prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
       const caps = agentCapabilities.get('claude') || {};
       const args = [
         '-p',
-        prompt,
         '--output-format',
         'stream-json',
         '--verbose',
@@ -139,6 +179,7 @@ export const AGENT_DEFS = [
       args.push('--permission-mode', 'bypassPermissions');
       return args;
     },
+    promptViaStdin: true,
     streamFormat: 'claude-stream-json',
   },
   {
@@ -162,8 +203,13 @@ export const AGENT_DEFS = [
       { id: 'medium', label: 'Medium' },
       { id: 'high', label: 'High' },
     ],
-    // Prompt delivered via stdin (`codex exec -`) to avoid Windows
-    // `spawn ENAMETOOLONG` while keeping Codex on its structured JSON stream.
+    // Prompt is delivered via stdin pipe (gated by `promptViaStdin: true`
+    // below) to avoid Windows `spawn ENAMETOOLONG` while keeping Codex on
+    // its structured JSON stream. Recent Codex CLI versions reject a bare
+    // `-` argv sentinel — passing both the pipe and `-` produces
+    // `error: unexpected argument '-' found` and the agent exits with
+    // code 2 before any prompt is read (see issue #237). The pipe alone
+    // is sufficient for stdin delivery.
     buildArgs: (_prompt, _imagePaths, _extra, options = {}, runtimeContext = {}) => {
       const args = [
         'exec',
@@ -183,16 +229,45 @@ export const AGENT_DEFS = [
         args.push('--model', options.model);
       }
       if (options.reasoning && options.reasoning !== 'default') {
+        const effort = clampCodexReasoning(options.model, options.reasoning);
         // Codex accepts `-c key=value` config overrides; reasoning effort
         // is exposed as `model_reasoning_effort`.
-        args.push('-c', `model_reasoning_effort="${options.reasoning}"`);
+        args.push('-c', `model_reasoning_effort="${effort}"`);
       }
-      args.push('-');
       return args;
     },
     promptViaStdin: true,
     streamFormat: 'json-event-stream',
     eventParser: 'codex',
+  },
+  {
+    id: 'devin',
+    name: 'Devin for Terminal',
+    bin: 'devin',
+    versionArgs: ['--version'],
+    fetchModels: async (resolvedBin) =>
+      detectAcpModels({
+        bin: resolvedBin,
+        args: ['--permission-mode', 'dangerous', '--respect-workspace-trust', 'false', 'acp'],
+        timeoutMs: 15_000,
+        defaultModelOption: DEFAULT_MODEL_OPTION,
+      }),
+    // Fallback aliases from Devin for Terminal docs
+    // (https://cli.devin.ai/docs/models): `adaptive` appears in the config example;
+    // `opus`, `sonnet`, `swe`, `codex`, `gemini`, and `gpt` are documented
+    // as short model-family names / recommended picks.
+    fallbackModels: [
+      DEFAULT_MODEL_OPTION,
+      { id: 'adaptive', label: 'adaptive' },
+      { id: 'swe', label: 'swe' },
+      { id: 'opus', label: 'opus' },
+      { id: 'sonnet', label: 'sonnet' },
+      { id: 'codex', label: 'codex' },
+      { id: 'gpt', label: 'gpt' },
+      { id: 'gemini', label: 'gemini' },
+    ],
+    buildArgs: () => ['--permission-mode', 'dangerous', '--respect-workspace-trust', 'false', 'acp'],
+    streamFormat: 'acp-json-rpc',
   },
   {
     id: 'gemini',
@@ -369,6 +444,16 @@ export const AGENT_DEFS = [
     name: 'GitHub Copilot CLI',
     bin: 'copilot',
     versionArgs: ['--version'],
+    // `-p -` enters Copilot's prompt mode and tells the CLI to read the
+    // prompt body from stdin instead of expecting it as a positional argv
+    // element. Without it the daemon writes the prompt to the child's
+    // stdin pipe (because `promptViaStdin: true` below) but Copilot stays
+    // in interactive mode, never reads stdin, and rejects the run with
+    // `error: too many arguments. Expected 0 arguments but got N` —
+    // the regression filed in #350. PR #258 standardized agents on stdin
+    // delivery and dropped the per-prompt argv path, but missed flipping
+    // Copilot's mode from interactive to `-p -`.
+    //
     // `--allow-all-tools` is required for non-interactive runs: without it
     // the CLI blocks waiting for human approval on every tool call. Unlike
     // Codex (where `exec` is a dedicated headless subcommand with
@@ -392,10 +477,10 @@ export const AGENT_DEFS = [
       { id: 'claude-sonnet-4.6', label: 'Claude Sonnet 4.6' },
       { id: 'gpt-5.2', label: 'GPT-5.2' },
     ],
-    buildArgs: (prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
+    buildArgs: (_prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
       const args = [
         '-p',
-        prompt,
+        '-',
         '--allow-all-tools',
         '--output-format',
         'json',
@@ -409,6 +494,7 @@ export const AGENT_DEFS = [
       for (const d of dirs) args.push('--add-dir', d);
       return args;
     },
+    promptViaStdin: true,
     streamFormat: 'copilot-stream-json',
   },
   {
@@ -492,19 +578,119 @@ export const AGENT_DEFS = [
     buildArgs: () => ['acp'],
     streamFormat: 'acp-json-rpc',
   },
+  {
+    id: 'vibe',
+    name: 'Mistral Vibe CLI',
+    bin: 'vibe-acp',
+    versionArgs: ['--version'],
+    fetchModels: async (resolvedBin) =>
+      detectAcpModels({
+        bin: resolvedBin,
+        args: [],
+        timeoutMs: 15_000,
+        defaultModelOption: DEFAULT_MODEL_OPTION,
+      }),
+    fallbackModels: [
+      DEFAULT_MODEL_OPTION,
+    ],
+    buildArgs: () => [],
+    streamFormat: 'acp-json-rpc',
+  },
 ];
+
+function existingDirsUnder(root, segments = []) {
+  const dirs = [];
+  let entries = [];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return dirs;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(root, entry.name, ...segments);
+    if (existsSync(full)) dirs.push(full);
+  }
+  return dirs;
+}
+
+const TOOLCHAIN_DIR_CACHE_TTL_MS = 5000;
+let cachedToolchainHome = null;
+let cachedToolchainDirs = null;
+let cachedToolchainDirsAt = 0;
+
+function userToolchainDirs() {
+  const homeOverride = process.env.OD_AGENT_HOME;
+  const home = homeOverride || homedir();
+  const now = Date.now();
+  if (
+    cachedToolchainHome === home &&
+    cachedToolchainDirs &&
+    now - cachedToolchainDirsAt < TOOLCHAIN_DIR_CACHE_TTL_MS
+  ) {
+    return cachedToolchainDirs;
+  }
+  cachedToolchainHome = home;
+  cachedToolchainDirsAt = now;
+  cachedToolchainDirs = [
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.opencode', 'bin'),
+    path.join(home, '.bun', 'bin'),
+    path.join(home, '.volta', 'bin'),
+    path.join(home, '.asdf', 'shims'),
+    path.join(home, 'Library', 'pnpm'),
+    path.join(home, '.cargo', 'bin'),
+    ...(process.platform !== 'win32' && !homeOverride ? ['/opt/homebrew/bin', '/usr/local/bin'] : []),
+    ...existingDirsUnder(path.join(home, '.local', 'share', 'mise', 'installs', 'node'), ['bin']),
+    ...existingDirsUnder(path.join(home, '.nvm', 'versions', 'node'), ['bin']),
+    ...existingDirsUnder(path.join(home, '.local', 'share', 'fnm', 'node-versions'), ['installation', 'bin']),
+  ];
+  return cachedToolchainDirs;
+}
+
+function resolvePathDirs() {
+  const seen = new Set();
+  const dirs = [
+    ...(process.env.PATH || '').split(delimiter),
+    // GUI launchers (macOS .app bundles, Linux .desktop files) often start
+    // with a minimal PATH. Include common user-level CLI install locations
+    // so agent detection matches the user's shell-installed tools,
+    // especially Node version managers.
+    ...userToolchainDirs(),
+  ];
+  return dirs.filter((dir) => {
+    if (!dir || seen.has(dir)) return false;
+    seen.add(dir);
+    return true;
+  });
+}
 
 export function resolveOnPath(bin) {
   const exts =
     process.platform === 'win32'
       ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')
       : [''];
-  const dirs = (process.env.PATH || '').split(delimiter);
+  const dirs = resolvePathDirs();
   for (const dir of dirs) {
     for (const ext of exts) {
       const full = path.join(dir, bin + ext);
       if (full && existsSync(full)) return full;
     }
+  }
+  return null;
+}
+
+// Resolve the first available binary for an agent definition. Tries
+// `def.bin` first, then walks `def.fallbackBins` in order. Used for
+// agents whose forks ship under a different binary name but speak the
+// exact same CLI (Claude Code → OpenClaude, issue #235). Returns null
+// when no candidate is on PATH.
+export function resolveAgentExecutable(def) {
+  if (!def?.bin) return null;
+  const candidates = [def.bin, ...(Array.isArray(def.fallbackBins) ? def.fallbackBins : [])];
+  for (const bin of candidates) {
+    const resolved = resolveOnPath(bin);
+    if (resolved) return resolved;
   }
   return null;
 }
@@ -540,7 +726,7 @@ async function fetchModels(def, resolvedBin) {
 }
 
 async function probe(def) {
-  const resolved = resolveOnPath(def.bin);
+  const resolved = resolveAgentExecutable(def);
   if (!resolved) {
     return {
       ...stripFns(def),
@@ -587,8 +773,9 @@ function stripFns(def) {
   // Drop the buildArgs / listModels closures but keep declarative metadata
   // (reasoningOptions, streamFormat, name, bin, etc.). `models` is
   // populated separately by `fetchModels`, so we strip the static
-  // `fallbackModels` slot here too. `helpArgs` / `capabilityFlags` are
-  // probe-only metadata and shouldn't bleed into the API response either.
+  // `fallbackModels` slot here too. `helpArgs` / `capabilityFlags` /
+  // `fallbackBins` are probe-only metadata and shouldn't bleed into the
+  // API response either.
   const {
     buildArgs,
     listModels,
@@ -596,6 +783,7 @@ function stripFns(def) {
     fallbackModels,
     helpArgs,
     capabilityFlags,
+    fallbackBins,
     ...rest
   } = def;
   return rest;
@@ -635,7 +823,7 @@ export function buildLiveArtifactsMcpServersForAgent(def, { enabled = true } = {
 export function resolveAgentBin(id) {
   const def = getAgentDef(id);
   if (!def?.bin) return null;
-  return resolveOnPath(def.bin);
+  return resolveAgentExecutable(def);
 }
 
 // Daemon's /api/chat needs to validate the user's model pick against the

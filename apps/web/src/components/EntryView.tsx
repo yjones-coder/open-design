@@ -21,7 +21,6 @@ import { DesignsTab } from './DesignsTab';
 import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
 import { DesignSystemsTab } from './DesignSystemsTab';
 import { ExamplesTab } from './ExamplesTab';
-import { AppChromeHeader, SettingsIconButton } from './AppChromeHeader';
 import { Icon } from './Icon';
 import { LanguageMenu } from './LanguageMenu';
 import { CenteredLoader } from './Loading';
@@ -33,7 +32,7 @@ import {
   fetchConnectors,
   fetchConnectorStatuses,
 } from '../providers/registry';
-
+import { PetRail } from './pet/PetRail';
 import { PromptTemplatePreviewModal } from './PromptTemplatePreviewModal';
 import { PromptTemplatesTab } from './PromptTemplatesTab';
 
@@ -55,7 +54,10 @@ interface Props {
   onOpenLiveArtifact: (projectId: string, artifactId: string) => void;
   onDeleteProject: (id: string) => void;
   onChangeDefaultDesignSystem: (id: string) => void;
-  onOpenSettings: (section?: 'execution' | 'media' | 'composio' | 'language' | 'about') => void;
+  onOpenSettings: (section?: 'execution' | 'media' | 'composio' | 'language' | 'appearance' | 'notifications' | 'pet' | 'about') => void;
+  onAdoptPet: () => void;
+  onAdoptPetInline: (petId: string) => void;
+  onTogglePet: () => void;
 }
 
 const SIDEBAR_MIN = 320;
@@ -75,6 +77,12 @@ export function isTrustedConnectorCallbackOrigin(origin: string, currentOrigin?:
     return false;
   }
 }
+
+// Lets the user fully remove the right-side pet rail from the entry
+// layout. They re-summon it from the entry-view avatar dropdown — the
+// PetRail's own collapse toggle only narrows the column, so this state
+// is the "the rail isn't there at all" escape hatch.
+const PET_RAIL_HIDDEN_KEY = 'open-design:pet-rail-hidden';
 
 function loadSidebarWidth(): number {
   try {
@@ -117,6 +125,15 @@ function applyConnectorStatuses(
   });
 }
 
+function loadPetRailHidden(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(PET_RAIL_HIDDEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function EntryView({
   skills,
   designSystems,
@@ -134,6 +151,9 @@ export function EntryView({
   onDeleteProject,
   onChangeDefaultDesignSystem,
   onOpenSettings,
+  onAdoptPet,
+  onAdoptPetInline,
+  onTogglePet,
 }: Props) {
   const t = useT();
   const [topTab, setTopTab] = useState<TopTab>('designs');
@@ -145,6 +165,18 @@ export function EntryView({
   const [connectors, setConnectors] = useState<ConnectorDetail[]>([]);
   const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [connectorDiscoveryLoading, setConnectorDiscoveryLoading] = useState(false);
+  const [petRailHidden, setPetRailHiddenState] = useState<boolean>(() => loadPetRailHidden());
+  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  const avatarMenuRef = useRef<HTMLDivElement | null>(null);
+
+  function setPetRailHidden(next: boolean) {
+    setPetRailHiddenState(next);
+    try {
+      window.localStorage.setItem(PET_RAIL_HIDDEN_KEY, next ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }
 
   const currentAgent = useMemo(
     () => agents.find((a) => a.id === config.agentId) ?? null,
@@ -287,149 +319,268 @@ export function EntryView({
     setConnectors((curr) => curr.map((connector) => (connector.id === next.id ? next : connector)));
   }
 
+  // Dismiss the avatar dropdown on outside-click / Escape so it behaves
+  // like the project-view AvatarMenu (which uses the same shell CSS).
+  useEffect(() => {
+    if (!avatarMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (!avatarMenuRef.current) return;
+      if (!avatarMenuRef.current.contains(e.target as Node)) {
+        setAvatarMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAvatarMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [avatarMenuOpen]);
+
   return (
-    <div className="entry-shell">
-      <AppChromeHeader
-        actions={(
-          <SettingsIconButton
-            onClick={() => onOpenSettings()}
-            title={t('entry.openSettingsTitle')}
-            ariaLabel={t('entry.openSettingsAria')}
-          />
-        )}
-      />
-      <div
-        className="entry"
-        style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}
-      >
-        <aside className="entry-side" style={{ width: sidebarWidth }}>
-          <NewProjectPanel
-            skills={skills}
-            designSystems={designSystems}
-            defaultDesignSystemId={defaultDesignSystemId}
-            templates={templates}
-            onCreate={handleCreate}
-            onImportClaudeDesign={onImportClaudeDesign}
-            mediaProviders={config.mediaProviders}
-            connectors={connectors}
-            connectorsLoading={connectorsLoading}
-            onOpenConnectorsTab={() => setTopTab('connectors')}
-            loading={loading}
-          />
-          <div className="entry-side-foot">
-            <button
-              type="button"
-              className="foot-pill"
-              onClick={() => onOpenSettings()}
-              title={t('settings.envConfigure')}
-            >
-              <Icon name="settings" size={12} />
-              <span>
-                {config.mode === 'daemon'
-                  ? t('settings.localCli')
-                  : t('settings.anthropicApi')}
-              </span>
-              <span style={{ color: 'var(--text-faint)' }}>·</span>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
-                {envMetaLine}
-              </span>
-            </button>
-            <LanguageMenu />
+    <div
+      className={`entry${petRailHidden ? '' : ' has-pet-rail'}`}
+      style={{
+        gridTemplateColumns: petRailHidden
+          ? `${sidebarWidth}px 1fr`
+          : `${sidebarWidth}px 1fr auto`,
+      }}
+    >
+      <aside className="entry-side" style={{ width: sidebarWidth }}>
+        <div className="entry-brand">
+          <span className="entry-brand-mark" aria-hidden>
+            <img src="/logo.svg" alt="" className="brand-mark-img" draggable={false} />
+          </span>
+          <div className="entry-brand-text">
+            <div className="entry-brand-title-row">
+              <span className="entry-brand-title">{t('app.brand')}</span>
+              <span className="entry-brand-pill">{t('app.brandPill')}</span>
+            </div>
+            <div className="entry-brand-subtitle">{t('app.brandSubtitle')}</div>
           </div>
+        </div>
+        <NewProjectPanel
+          skills={skills}
+          designSystems={designSystems}
+          defaultDesignSystemId={defaultDesignSystemId}
+          templates={templates}
+          promptTemplates={promptTemplates}
+          onCreate={handleCreate}
+          onImportClaudeDesign={onImportClaudeDesign}
+          mediaProviders={config.mediaProviders}
+          connectors={connectors}
+          connectorsLoading={connectorsLoading}
+          onOpenConnectorsTab={() => setTopTab('connectors')}
+          loading={loading}
+        />
+        <div className="entry-side-foot">
           <button
             type="button"
-            aria-label={t('entry.resizeAria')}
-            className={`entry-side-resizer${resizing ? ' dragging' : ''}`}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              startWidthRef.current = sidebarWidth;
-              startXRef.current = e.clientX;
-              setResizing(true);
-            }}
-          />
-        </aside>
-        <main className="entry-main">
-          <div className="entry-header">
-            <div className="entry-tabs" role="tablist">
-              <TopTabButton current={topTab} value="designs" label={t('entry.tabDesigns')} onClick={setTopTab} />
-              <TopTabButton current={topTab} value="examples" label={t('entry.tabExamples')} onClick={setTopTab} />
-              <TopTabButton
-                current={topTab}
-                value="design-systems"
-                label={t('entry.tabDesignSystems')}
-                onClick={setTopTab}
-              />
-              <TopTabButton current={topTab} value="connectors" label={t('entry.tabConnectors')} onClick={setTopTab} />
-              <TopTabButton
-                current={topTab}
-                value="image-templates"
-                label={t('entry.tabImageTemplates')}
-                onClick={setTopTab}
-              />
-              <TopTabButton
-                current={topTab}
-                value="video-templates"
-                label={t('entry.tabVideoTemplates')}
-                onClick={setTopTab}
-              />
+            className={`foot-pill pet-pill${config.pet?.adopted ? '' : ' pet-pill-fresh'}`}
+            onClick={onAdoptPet}
+            title={
+              config.pet?.adopted
+                ? t('pet.changePet')
+                : t('pet.adoptCallout')
+            }
+          >
+            <span className="pet-pill-glyph" aria-hidden>
+              {config.pet?.adopted
+                ? config.pet.petId === 'custom'
+                  ? config.pet.custom.glyph || '🦄'
+                  : '🐾'
+                : '🐾'}
+            </span>
+            <span>
+              {config.pet?.adopted
+                ? t('pet.changePet')
+                : t('pet.adoptCallout')}
+            </span>
+            {!config.pet?.adopted ? <span className="pet-pill-dot" aria-hidden /> : null}
+          </button>
+          <button
+            type="button"
+            className="foot-pill"
+            onClick={() => onOpenSettings()}
+            title={t('settings.envConfigure')}
+          >
+            <Icon name="settings" size={12} />
+            <span>
+              {config.mode === 'daemon'
+                ? t('settings.localCli')
+                : t('settings.anthropicApi')}
+            </span>
+            <span style={{ color: 'var(--text-faint)' }}>·</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+              {envMetaLine}
+            </span>
+          </button>
+          <LanguageMenu />
+        </div>
+        <button
+          type="button"
+          aria-label={t('entry.resizeAria')}
+          className={`entry-side-resizer${resizing ? ' dragging' : ''}`}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            startWidthRef.current = sidebarWidth;
+            startXRef.current = e.clientX;
+            setResizing(true);
+          }}
+        />
+      </aside>
+      <main className="entry-main">
+        <div className="entry-header">
+          <div className="entry-tabs" role="tablist">
+            <TopTabButton current={topTab} value="designs" label={t('entry.tabDesigns')} onClick={setTopTab} />
+            <TopTabButton current={topTab} value="examples" label={t('entry.tabExamples')} onClick={setTopTab} />
+            <TopTabButton
+              current={topTab}
+              value="design-systems"
+              label={t('entry.tabDesignSystems')}
+              onClick={setTopTab}
+            />
+            <TopTabButton current={topTab} value="connectors" label={t('entry.tabConnectors')} onClick={setTopTab} />
+            <TopTabButton
+              current={topTab}
+              value="image-templates"
+              label={t('entry.tabImageTemplates')}
+              onClick={setTopTab}
+            />
+            <TopTabButton
+              current={topTab}
+              value="video-templates"
+              label={t('entry.tabVideoTemplates')}
+              onClick={setTopTab}
+            />
+          </div>
+          <div className="entry-header-right">
+            {/* Avatar dropdown — mirrors the project-view AvatarMenu so
+                users get the same anchor for cross-cutting options
+                (open settings, hide / show the pet rail). */}
+            <div className="avatar-menu" ref={avatarMenuRef}>
+              <button
+                type="button"
+                className="avatar-btn"
+                onClick={() => setAvatarMenuOpen((v) => !v)}
+                title={t('entry.openSettingsTitle')}
+                aria-label={t('entry.openSettingsAria')}
+                aria-haspopup="menu"
+                aria-expanded={avatarMenuOpen}
+              >
+                <img
+                  src="/avatar.png"
+                  alt=""
+                  aria-hidden
+                  draggable={false}
+                  className="avatar-btn-photo"
+                />
+              </button>
+              {avatarMenuOpen ? (
+                <div className="avatar-popover" role="menu">
+                  <button
+                    type="button"
+                    className="avatar-item"
+                    onClick={() => {
+                      setPetRailHidden(!petRailHidden);
+                      setAvatarMenuOpen(false);
+                    }}
+                  >
+                    <span className="avatar-item-icon" aria-hidden>
+                      <Icon name={petRailHidden ? 'sparkles' : 'eye'} size={14} />
+                    </span>
+                    <span>
+                      {petRailHidden
+                        ? t('pet.railShow')
+                        : t('pet.railHide')}
+                    </span>
+                  </button>
+                  <div style={{ height: 1, background: 'var(--border-soft)', margin: '4px 6px' }} />
+                  <button
+                    type="button"
+                    className="avatar-item"
+                    onClick={() => {
+                      setAvatarMenuOpen(false);
+                      onOpenSettings();
+                    }}
+                  >
+                    <span className="avatar-item-icon" aria-hidden>
+                      <Icon name="settings" size={14} />
+                    </span>
+                    <span>{t('avatar.settings')}</span>
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
-          <div className="entry-tab-content">
-            {loading ? (
-              <CenteredLoader label={t('entry.loadingWorkspace')} />
-            ) : (
-              <>
-                {topTab === 'designs' ? (
-                  <DesignsTab
-                    projects={projects}
-                    skills={skills}
-                    designSystems={designSystems}
-                    onOpen={onOpenProject}
-                    onOpenLiveArtifact={onOpenLiveArtifact}
-                    onDelete={onDeleteProject}
-                  />
-                ) : null}
-                {topTab === 'examples' ? (
-                  <ExamplesTab skills={skills} onUsePrompt={usePromptFromSkill} />
-                ) : null}
-                {topTab === 'design-systems' ? (
-                  <DesignSystemsTab
-                    systems={designSystems}
-                    selectedId={defaultDesignSystemId}
-                    onSelect={onChangeDefaultDesignSystem}
-                    onPreview={previewDesignSystem}
-                  />
-                ) : null}
-                {topTab === 'connectors' ? (
-                  <ConnectorsTab
-                    connectors={connectors}
-                    loading={connectorsLoading}
-                    toolsLoading={connectorDiscoveryLoading}
-                    composioConfigured={Boolean(config.composio?.apiKeyConfigured)}
-                    onOpenSettings={onOpenSettings}
-                    onConnect={async (connectorId) => updateConnector(await connectConnector(connectorId))}
-                    onDisconnect={async (connectorId) => updateConnector(await disconnectConnector(connectorId))}
-                  />
-                ) : null}
-                {topTab === 'image-templates' ? (
-                  <PromptTemplatesTab
-                    surface="image"
-                    templates={promptTemplates}
-                    onPreview={setPreviewPromptTemplate}
-                  />
-                ) : null}
-                {topTab === 'video-templates' ? (
-                  <PromptTemplatesTab
-                    surface="video"
-                    templates={promptTemplates}
-                    onPreview={setPreviewPromptTemplate}
-                  />
-                ) : null}
-              </>
-            )}
-          </div>
-        </main>
-      </div>
+        </div>
+        <div className="entry-tab-content">
+          {loading ? (
+            <CenteredLoader label={t('entry.loadingWorkspace')} />
+          ) : (
+            <>
+              {topTab === 'designs' ? (
+                <DesignsTab
+                  projects={projects}
+                  skills={skills}
+                  designSystems={designSystems}
+                  onOpen={onOpenProject}
+                  onOpenLiveArtifact={onOpenLiveArtifact}
+                  onDelete={onDeleteProject}
+                />
+              ) : null}
+              {topTab === 'examples' ? (
+                <ExamplesTab skills={skills} onUsePrompt={usePromptFromSkill} />
+              ) : null}
+              {topTab === 'design-systems' ? (
+                <DesignSystemsTab
+                  systems={designSystems}
+                  selectedId={defaultDesignSystemId}
+                  onSelect={onChangeDefaultDesignSystem}
+                  onPreview={previewDesignSystem}
+                />
+              ) : null}
+              {topTab === 'connectors' ? (
+                <ConnectorsTab
+                  connectors={connectors}
+                  loading={connectorsLoading}
+                  toolsLoading={connectorDiscoveryLoading}
+                  composioConfigured={Boolean(config.composio?.apiKeyConfigured)}
+                  onOpenSettings={onOpenSettings}
+                  onConnect={async (connectorId) => updateConnector(await connectConnector(connectorId))}
+                  onDisconnect={async (connectorId) => updateConnector(await disconnectConnector(connectorId))}
+                />
+              ) : null}
+              {topTab === 'image-templates' ? (
+                <PromptTemplatesTab
+                  surface="image"
+                  templates={promptTemplates}
+                  onPreview={setPreviewPromptTemplate}
+                />
+              ) : null}
+              {topTab === 'video-templates' ? (
+                <PromptTemplatesTab
+                  surface="video"
+                  templates={promptTemplates}
+                  onPreview={setPreviewPromptTemplate}
+                />
+              ) : null}
+            </>
+          )}
+        </div>
+      </main>
+      {petRailHidden ? null : (
+        <PetRail
+          config={config}
+          onAdoptInline={onAdoptPetInline}
+          onOpenPetSettings={onAdoptPet}
+          onTuck={onTogglePet}
+          onHide={() => setPetRailHidden(true)}
+        />
+      )}
       {previewSystem ? (
         <DesignSystemPreviewModal
           system={previewSystem}
