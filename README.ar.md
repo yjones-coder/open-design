@@ -245,10 +245,10 @@
 ما تُكوِّنه عند الإرسال ليس "system + user". بل:
 
 ```
-DISCOVERY directives  (نموذج turn-1، فرع turn-2 للهوية، TodoWrite، تقييم خماسي الأبعاد)
+DISCOVERY directives  (turn-1 form, turn-2 brand branch, TodoWrite, 5-dim critique)
   + identity charter   (OFFICIAL_DESIGNER_PROMPT, anti-AI-slop, junior-pass)
-  + active DESIGN.md   (72 نظاماً متاحاً)
-  + active SKILL.md    (31 skill متاحة)
+  + active DESIGN.md   (72 systems available)
+  + active SKILL.md    (31 skills available)
   + project metadata   (kind, fidelity, speakerNotes, animations, inspiration ids)
   + skill side files   (auto-injected pre-flight: read assets/template.html + references/*.md)
   + (deck kind, no skill seed) DECK_FRAMEWORK_DIRECTIVE   (nav / counter / scroll / print)
@@ -259,15 +259,15 @@ DISCOVERY directives  (نموذج turn-1، فرع turn-2 للهوية، TodoWrit
 ## المعمارية
 
 ```
-┌────────────────────── المتصفّح (Next.js 16) ─────────────────────┐
-│  chat · مساحة الملفات · معاينة iframe · الإعدادات · الاستيراد   │
+┌────────────────────── browser (Next.js 16) ──────────────────────┐
+│  chat · file workspace · iframe preview · settings · imports     │
 └──────────────┬───────────────────────────────────┬───────────────┘
                │ /api/* (rewritten in dev)          │
                ▼                                    ▼
    ┌──────────────────────────────────┐   /api/proxy/{provider}/stream (SSE)
-   │  Local daemon (Express + SQLite) │   ─→ أيّ نقطة OpenAI-compat
-   │                                  │       (BYOK)
-   │  /api/agents          /api/skills│       مع حماية SSRF
+   │  Local daemon (Express + SQLite) │   ─→ any OpenAI-compat
+   │                                  │       endpoint (BYOK)
+   │  /api/agents          /api/skills│       w/ SSRF blocking
    │  /api/design-systems  /api/projects/…
    │  /api/chat (SSE)      /api/proxy/{provider}/stream (SSE)
    │  /api/templates       /api/import/claude-design
@@ -275,7 +275,7 @@ DISCOVERY directives  (نموذج turn-1، فرع turn-2 للهوية، TodoWrit
    │  /api/upload          /api/projects/:id/files…
    │  /artifacts (static)  /frames (static)
    │
-   │  اختياري: sidecar IPC على /tmp/open-design/ipc/<ns>/<app>.sock
+   │  optional: sidecar IPC at /tmp/open-design/ipc/<ns>/<app>.sock
    │  (STATUS · EVAL · SCREENSHOT · CONSOLE · CLICK · SHUTDOWN)
    └─────────┬────────────────────────┘
              │ spawn(cli, [...], { cwd: .od/projects/<id> })
@@ -283,7 +283,7 @@ DISCOVERY directives  (نموذج turn-1، فرع turn-2 للهوية، TodoWrit
    ┌──────────────────────────────────────────────────────────────────┐
    │  claude · codex · devin (ACP) · gemini · opencode · cursor-agent │
    │  qwen · copilot · hermes (ACP) · kimi (ACP) · pi (RPC) · kiro (ACP) · vibe (ACP)     │
-   │  يقرأ SKILL.md + DESIGN.md، ويكتب artifacts إلى القرص            │
+   │  reads SKILL.md + DESIGN.md, writes artifacts to disk            │
    └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -305,10 +305,10 @@ DISCOVERY directives  (نموذج turn-1، فرع turn-2 للهوية، TodoWrit
 git clone https://github.com/nexu-io/open-design.git
 cd open-design
 corepack enable
-corepack pnpm --version   # يجب أن يطبع 10.33.2
+corepack pnpm --version   # should print 10.33.2
 pnpm install
 pnpm tools-dev run web
-# افتح رابط الويب الذي يطبعه tools-dev
+# open the web URL printed by tools-dev
 ```
 
 متطلّبات البيئة: Node `~24` و pnpm `10.33.x`. أدوات `nvm`/`fnm` اختيارية فقط؛ إن استخدمت إحداها فشغّل `nvm install 24 && nvm use 24` أو `fnm install 24 && fnm use 24` قبل `pnpm install`.
@@ -331,8 +331,8 @@ pnpm tools-dev run web
 ```
 .od/
 ├── app.sqlite                 ← projects · conversations · messages · open tabs
-├── artifacts/                 ← رندرز "Save to disk" منفردة (مع timestamp)
-└── projects/<id>/             ← مجلد عمل لكل مشروع، وأيضاً cwd الوكيل
+├── artifacts/                 ← one-off "Save to disk" renders (timestamped)
+└── projects/<id>/             ← per-project working dir, also the agent's cwd
 ```
 
 | تريد… | افعل |
@@ -347,50 +347,51 @@ pnpm tools-dev run web
 
 ```
 open-design/
-├── README.md                      ← الإنجليزية
+├── README.md                      ← English
+├── README.ar.md                   ← العربية (this file)
 ├── README.de.md                   ← Deutsch
-├── README.ar.md                   ← هذا الملف
+├── README.ru.md                   ← Русский
 ├── README.zh-CN.md                ← 简体中文
-├── QUICKSTART.md                  ← دليل التشغيل / البناء / النشر
-├── package.json                   ← pnpm workspace، bin واحد: od
+├── QUICKSTART.md                  ← run / build / deploy guide
+├── package.json                   ← pnpm workspace, single bin: od
 │
 ├── apps/
-│   ├── daemon/                    ← Node + Express، الخادم الوحيد
-│   │   ├── src/                   ← كود مصدر TypeScript للـ daemon
-│   │   │   ├── cli.ts             ← مصدر bin `od`، يُترجم إلى dist/cli.js
-│   │   │   ├── server.ts          ← مسارات /api/* (projects، chat، files، exports)
-│   │   │   ├── agents.ts          ← ماسح PATH + بناة argv لكل CLI
-│   │   │   ├── claude-stream.ts   ← محلّل JSON متدفّق لـ stdout الخاص بـ Claude Code
-│   │   │   ├── skills.ts          ← محمّل frontmatter لـ SKILL.md
-│   │   │   └── db.ts              ← مخطّط SQLite (projects/messages/templates/tabs)
-│   │   ├── sidecar/               ← غلاف sidecar للـ daemon لـ tools-dev
-│   │   └── tests/                 ← اختبارات حزمة الـ daemon
+│   ├── daemon/                    ← Node + Express, the only server
+│   │   ├── src/                   ← TypeScript daemon source
+│   │   │   ├── cli.ts             ← `od` bin source, compiled to dist/cli.js
+│   │   │   ├── server.ts          ← /api/* routes (projects, chat, files, exports)
+│   │   │   ├── agents.ts          ← PATH scanner + per-CLI argv builders
+│   │   │   ├── claude-stream.ts   ← streaming JSON parser for Claude Code stdout
+│   │   │   ├── skills.ts          ← SKILL.md frontmatter loader
+│   │   │   └── db.ts              ← SQLite schema (projects/messages/templates/tabs)
+│   │   ├── sidecar/               ← tools-dev daemon sidecar wrapper
+│   │   └── tests/                 ← daemon package tests
 │   │
-│   └── web/                       ← Next.js 16 App Router + عميل React
-│       ├── app/                   ← مداخل App Router
-│       ├── next.config.ts         ← rewrites للتطوير + تصدير ثابت إلى out/
-│       └── src/                   ← وحدات React + TypeScript للعميل
-│           ├── App.tsx            ← التوجيه، الإقلاع، الإعدادات
-│           ├── components/        ← chat، composer، picker، preview، sketch، …
+│   └── web/                       ← Next.js 16 App Router + React client
+│       ├── app/                   ← App Router entrypoints
+│       ├── next.config.ts         ← dev rewrites + prod static export to out/
+│       └── src/                   ← React + TypeScript client modules
+│           ├── App.tsx            ← routing, bootstrap, settings
+│           ├── components/        ← chat, composer, picker, preview, sketch, …
 │           ├── prompts/
 │           │   ├── system.ts      ← composeSystemPrompt(base, skill, DS, metadata)
-│           │   ├── discovery.ts   ← نموذج turn-1 + فرع turn-2 + تقييم خماسي
-│           │   └── directions.ts  ← 5 اتجاهات بصرية × OKLch palette + font stack
-│           ├── artifacts/         ← محلّل `<artifact>` متدفّق + manifests
-│           ├── runtime/           ← srcdoc لـ iframe، markdown، مساعدات تصدير
-│           ├── providers/         ← SSE الـ daemon + ناقلات BYOK API
-│           └── state/             ← config + projects (localStorage + مدعوم بالـ daemon)
+│           │   ├── discovery.ts   ← turn-1 form + turn-2 branch + 5-dim critique
+│           │   └── directions.ts  ← 5 visual directions × OKLch palette + font stack
+│           ├── artifacts/         ← streaming <artifact> parser + manifests
+│           ├── runtime/           ← iframe srcdoc, markdown, export helpers
+│           ├── providers/         ← daemon SSE + BYOK API transports
+│           └── state/             ← config + projects (localStorage + daemon-backed)
 │
-├── e2e/                           ← Playwright UI + harness تكامل خارجي/Vitest
+├── e2e/                           ← Playwright UI + external integration/Vitest harness
 │
 ├── packages/
-│   ├── contracts/                 ← عقود تطبيق ويب/daemon مشتركة
-│   ├── sidecar-proto/             ← عقد بروتوكول Open Design sidecar
-│   ├── sidecar/                   ← أساسيات runtime عامة لـ sidecar
-│   └── platform/                  ← أساسيات عمليات/منصّة عامة
+│   ├── contracts/                 ← shared web/daemon app contracts
+│   ├── sidecar-proto/             ← Open Design sidecar protocol contract
+│   ├── sidecar/                   ← generic sidecar runtime primitives
+│   └── platform/                  ← generic process/platform primitives
 │
-├── skills/                        ← 31 حزمة SKILL.md (27 prototype + 4 deck)
-│   ├── web-prototype/             ← الافتراضي لوضع prototype
+├── skills/                        ← 31 SKILL.md skill bundles (27 prototype + 4 deck)
+│   ├── web-prototype/             ← default for prototype mode
 │   ├── saas-landing/  dashboard/  pricing-page/  docs-page/  blog-post/
 │   ├── mobile-app/  mobile-onboarding/  gamified-app/
 │   ├── email-marketing/  social-carousel/  magazine-poster/
@@ -398,20 +399,20 @@ open-design/
 │   ├── critique/  tweaks/  wireframe-sketch/
 │   ├── pm-spec/  team-okrs/  meeting-notes/  kanban-board/
 │   ├── eng-runbook/  finance-report/  invoice/  hr-onboarding/
-│   ├── simple-deck/  replit-deck/  weekly-update/   ← وضع deck
-│   └── guizang-ppt/               ← magazine-web-ppt المضمَّنة (الافتراضية لـ deck)
+│   ├── simple-deck/  replit-deck/  weekly-update/   ← deck mode
+│   └── guizang-ppt/               ← bundled magazine-web-ppt (default for deck)
 │       ├── SKILL.md
 │       ├── assets/template.html   ← seed
 │       └── references/{themes,layouts,components,checklist}.md
 │
-├── design-systems/                ← 72 نظام DESIGN.md
+├── design-systems/                ← 72 DESIGN.md systems
 │   ├── default/                   ← Neutral Modern (starter)
 │   ├── warm-editorial/            ← Warm Editorial (starter)
 │   ├── linear-app/  vercel/  stripe/  airbnb/  notion/  cursor/  apple/  …
-│   └── README.md                  ← نظرة عامة على الكتالوج
+│   └── README.md                  ← catalog overview
 │
 ├── assets/
-│   └── frames/                    ← إطارات أجهزة مشتركة (تُستخدم عبر الـ skills)
+│   └── frames/                    ← shared device frames (used cross-skill)
 │       ├── iphone-15-pro.html
 │       ├── android-pixel.html
 │       ├── ipad-pro.html
@@ -419,27 +420,27 @@ open-design/
 │       └── browser-chrome.html
 │
 ├── templates/
-│   ├── deck-framework.html        ← أساس deck (nav / counter / print)
-│   └── kami-deck.html             ← starter بنكهة kami (parchment / ink-blue serif)
+│   ├── deck-framework.html        ← deck baseline (nav / counter / print)
+│   └── kami-deck.html             ← kami-flavored deck starter (parchment / ink-blue serif)
 │
 ├── scripts/
-│   └── sync-design-systems.ts     ← إعادة استيراد tarball awesome-design-md
+│   └── sync-design-systems.ts     ← re-import upstream awesome-design-md tarball
 │
 ├── docs/
-│   ├── spec.md                    ← مواصفات المنتج، السيناريوهات، التميّز
-│   ├── architecture.md            ← الطوبولوجيا، تدفّق البيانات، المكوّنات
-│   ├── skills-protocol.md         ← frontmatter `od:` الموسّع لـ SKILL.md
-│   ├── agent-adapters.md          ← الاكتشاف والتوزيع لكل CLI
+│   ├── spec.md                    ← product spec, scenarios, differentiation
+│   ├── architecture.md            ← topologies, data flow, components
+│   ├── skills-protocol.md         ← extended SKILL.md od: frontmatter
+│   ├── agent-adapters.md          ← per-CLI detection + dispatch
 │   ├── modes.md                   ← prototype / deck / template / design-system
-│   ├── references.md              ← provenance طويل
-│   ├── roadmap.md                 ← التسليم بمراحل
+│   ├── references.md              ← long-form provenance
+│   ├── roadmap.md                 ← phased delivery
 │   ├── schemas/                   ← JSON schemas
-│   └── examples/                  ← أمثلة artifacts نموذجية
+│   └── examples/                  ← canonical artifact examples
 │
-└── .od/                           ← بيانات runtime، gitignored، تُنشأ تلقائياً
+└── .od/                           ← runtime data, gitignored, auto-created
     ├── app.sqlite                 ← projects / conversations / messages / tabs
-    ├── projects/<id>/             ← مجلد عمل كل مشروع (cwd الوكيل)
-    └── artifacts/                 ← رندرز فردية محفوظة
+    ├── projects/<id>/             ← per-project working folder (agent's cwd)
+    └── artifacts/                 ← saved one-off renders
 ```
 
 ## أنظمة التصميم
@@ -739,7 +740,7 @@ Issues و PRs و skills جديدة وأنظمة تصميم جديدة، كلّه
 
 ## الترخيص
 
-Apache-2.0 — راجع [`LICENSE`](LICENSE).
+Apache-2.0. تحتفظ `skills/guizang-ppt/` المضمَّنة بترخيصها الأصلي [LICENSE](skills/guizang-ppt/LICENSE) (MIT) ونسبة التأليف لـ [op7418](https://github.com/op7418). تحتفظ `skills/html-ppt/` المضمَّنة بترخيصها الأصلي [LICENSE](skills/html-ppt/LICENSE) (MIT) ونسبة التأليف لـ [lewislulu](https://github.com/lewislulu).
 
 [cd]: https://x.com/claudeai/status/2045156267690213649
 
