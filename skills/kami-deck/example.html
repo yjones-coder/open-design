@@ -1048,6 +1048,21 @@ strong { font-weight: 500; }
     }
   }, { passive: true });
 
+  /* Host-driven navigation: Open Design's host bridge classifies this deck
+     as class-driven (because go() toggles .slide.active) but the visible
+     slide is moved by deck.style.transform, which the bridge can't drive.
+     Route od:slide messages through the local go()/jump so toolbar
+     next/prev and initialSlideIndex restore actually shift the deck. */
+  addEventListener('message', function (e) {
+    var data = e && e.data;
+    if (!data || data.type !== 'od:slide') return;
+    if (data.action === 'go' && typeof data.index === 'number') go(data.index);
+    else if (data.action === 'next') go(idx + 1);
+    else if (data.action === 'prev') go(idx - 1);
+    else if (data.action === 'first') go(0);
+    else if (data.action === 'last') go(total - 1);
+  });
+
   go(0);
 })();
 </script>
