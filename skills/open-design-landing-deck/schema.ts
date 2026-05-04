@@ -118,5 +118,11 @@ export interface OpenDesignLandingDeckInputs {
   imagery: ImageryConfig;
 }
 
-/** @deprecated Use `OpenDesignLandingDeckInputs`. Kept for one release for backwards compat. */
+/**
+ * @deprecated Use `OpenDesignLandingDeckInputs`.
+ *
+ * Backwards-compat alias kept for the v0.3.x line and removed in the next
+ * minor (v0.4.0). Migration steps live in `README.md` under
+ * "Migrating from `editorial-collage-deck`".
+ */
 export type EditorialCollageDeckInputs = OpenDesignLandingDeckInputs;

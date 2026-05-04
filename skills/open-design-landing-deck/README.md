@@ -95,6 +95,21 @@ FAL_KEY=fal-... npx tsx ../open-design-landing/scripts/imagegen.ts \
 npx tsx ../open-design-landing/scripts/placeholder.ts ../open-design-landing/assets/
 ```
 
+## Migrating from `editorial-collage-deck`
+
+This skill replaces the older `editorial-collage-deck` skill. The renames
+are mechanical:
+
+| Old                          | New                            |
+| ---------------------------- | ------------------------------ |
+| skill folder `editorial-collage-deck` | `open-design-landing-deck` |
+| TS type `EditorialCollageDeckInputs`  | `OpenDesignLandingDeckInputs` |
+
+The `EditorialCollageDeckInputs` alias re-exported from
+[`schema.ts`](./schema.ts) is a temporary bridge: it is kept for the
+**v0.3.x** line and removed in the next minor release (**v0.4.0**).
+Update imports before then.
+
 ## See also
 
 - [`open-design-landing`](../open-design-landing/) — landing page sister skill.
