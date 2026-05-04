@@ -1017,7 +1017,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     }
   });
 
-  app.put('/api/connectors/composio/config', (req, res) => {
+  app.put('/api/connectors/composio/config', requireLocalDaemonRequest, (req, res) => {
     try {
       const before = readComposioConfig();
       const cfg = writeComposioConfig(req.body);

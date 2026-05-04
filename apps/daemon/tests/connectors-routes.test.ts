@@ -134,7 +134,7 @@ async function jsonFetch(url, init) {
   return { status: response.status, body: await response.json() };
 }
 
-async function postWithHostHeader(url, host) {
+async function requestWithHostHeader(method, url, host, body) {
   const target = new URL(url);
   return await new Promise((resolve, reject) => {
     const req = httpRequest(
@@ -143,8 +143,11 @@ async function postWithHostHeader(url, host) {
         hostname: target.hostname,
         port: target.port,
         path: target.pathname + target.search,
-        method: 'POST',
-        headers: { host },
+        method,
+        headers: {
+          host,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
       },
       (res) => {
         const chunks = [];
@@ -158,8 +161,16 @@ async function postWithHostHeader(url, host) {
       },
     );
     req.on('error', reject);
-    req.end();
+    req.end(body === undefined ? undefined : JSON.stringify(body));
   });
+}
+
+async function postWithHostHeader(url, host) {
+  return requestWithHostHeader('POST', url, host);
+}
+
+async function putWithHostHeader(url, host, body) {
+  return requestWithHostHeader('PUT', url, host, body);
 }
 
 function mintConnectorToolToken(projectId = 'connector-route-project', runId = 'connector-route-run', overrides = {}) {
@@ -289,6 +300,14 @@ describe('connector routes', () => {
     expect(connect.status).toBe(403);
     expect(JSON.stringify(connect.body.error)).toContain('Cross-origin');
     expect(lastComposioLinkRequest).toBeUndefined();
+  });
+
+  it('rejects Composio config updates from non-loopback daemon hosts', async () => {
+    const response = await putWithHostHeader(`${baseUrl}/api/connectors/composio/config`, 'example.com', { apiKey: 'cmp_remote' });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toContain('request host must be a loopback daemon address');
+    expect(readComposioConfig().apiKey).toBe('cmp_test');
   });
 
   it('clears Composio connector credentials when rotating to a key with the same tail', async () => {
