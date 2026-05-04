@@ -654,7 +654,7 @@ function extractSubtitle(raw) {
   return window.split(/\n\n/)[0]?.slice(0, 240) ?? '';
 }
 
-function extractColors(raw) {
+export function extractColors(raw) {
   const colors = [];
   const seen = new Set();
   function push(name, value, role) {
@@ -711,9 +711,13 @@ function extractColors(raw) {
 
     // Pattern B: list-prefixed spec lines like
     //   "- Background: `#7d2ae8`" inside a ### Buttons block.
+    // Also handles the `- **Name:** \`#hex\`` shape (colon inside the bold
+    // wrapper) used by agentic/warm-editorial: the optional `\*{0,2}` slots
+    // before the name and after the colon let us absorb the surrounding
+    // `**` markers without needing a third pattern.
     // Use the name itself as the role so lookups can still see "Background"
     // and "Text" labels.
-    const spec = /^[\s>*-]*([A-Za-z][A-Za-z0-9 /&()+_'’-]{1,40}?)\s*[:：]\s*`?(#[0-9a-fA-F]{3,8})/.exec(line);
+    const spec = /^[\s>*-]*\*{0,2}([A-Za-z][^:*\n]{1,40}?)\*{0,2}\s*[:：]\s*\*{0,2}\s*`?(#[0-9a-fA-F]{3,8})/.exec(line);
     if (spec) {
       push(spec[1], spec[2], spec[1]);
     }
