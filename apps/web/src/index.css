@@ -7007,8 +7007,13 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
 
 .pet-sprite {
   position: relative;
-  width: 56px;
-  height: 56px;
+  /* The overlay sprite was 56px which read as a tiny postage stamp
+     against a 1280px+ canvas — bumped to 96px so the pet feels like
+     a present companion rather than a thumbnail. The image-mode
+     children inherit width/height: 100% via .pet-image, so atlas /
+     strip / static pets all scale up automatically. */
+  width: 96px;
+  height: 96px;
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -7025,20 +7030,23 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
 }
 .pet-sprite:active { cursor: grabbing; }
 .pet-sprite-glyph {
-  font-size: 30px;
+  /* Glyph font-size scales with the sprite box (~0.55 ratio) so
+     emoji-only built-ins and the avatar mark stay legible at the
+     larger overlay size. */
+  font-size: 52px;
   line-height: 1;
   animation: var(--pet-anim, pet-float) 3.4s ease-in-out infinite;
   filter: drop-shadow(0 1px 0 rgba(0,0,0,0.08));
 }
 .pet-sprite-shadow {
   position: absolute;
-  bottom: -10px;
+  bottom: -12px;
   left: 50%;
-  width: 36px;
-  height: 6px;
+  width: 64px;
+  height: 8px;
   background: rgba(0, 0, 0, 0.18);
   border-radius: 50%;
-  filter: blur(3px);
+  filter: blur(4px);
   transform: translateX(-50%);
   animation: pet-shadow 3.4s ease-in-out infinite;
 }
