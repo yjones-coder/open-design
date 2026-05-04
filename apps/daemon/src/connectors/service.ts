@@ -264,6 +264,8 @@ function assertJsonSchemaMatches(value: BoundedJsonValue, schema: BoundedJsonObj
     const actualType = Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
     if (type === 'number') {
       if (typeof value !== 'number') throw new Error(`${path} must be a number`);
+    } else if (type === 'integer') {
+      if (typeof value !== 'number' || !Number.isInteger(value)) throw new Error(`${path} must be an integer`);
     } else if (type !== actualType) {
       throw new Error(`${path} must be a ${type}`);
     }
@@ -293,7 +295,7 @@ function assertJsonSchemaMatches(value: BoundedJsonValue, schema: BoundedJsonObj
   if (type === 'string' && typeof value === 'string') {
     if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) throw new Error(`${path} exceeds connector input schema maxLength`);
   }
-  if (type === 'number' && typeof value === 'number') {
+  if ((type === 'number' || type === 'integer') && typeof value === 'number') {
     if (typeof schema.minimum === 'number' && value < schema.minimum) throw new Error(`${path} is below connector input schema minimum`);
     if (typeof schema.maximum === 'number' && value > schema.maximum) throw new Error(`${path} exceeds connector input schema maximum`);
   }

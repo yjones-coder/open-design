@@ -280,6 +280,34 @@ describe('connector execution policy', () => {
     )).rejects.toMatchObject({ code: 'CONNECTOR_INPUT_SCHEMA_MISMATCH' });
   });
 
+  it('accepts JSON Schema integer connector inputs and rejects fractional values', async () => {
+    const definition = externalConnector({
+      tools: [{
+        name: 'docs.search',
+        title: 'Search docs',
+        requiredScopes: ['docs:read'],
+        inputSchemaJson: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['limit'], additionalProperties: false },
+        safety: { sideEffect: 'read', approval: 'auto', reason: 'read-only docs search' },
+        refreshEligible: true,
+      }],
+      allowedToolNames: ['docs.search'],
+      minimumApproval: 'auto',
+    });
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'docs@example.com', { token: 'secret' });
+    const service = new OutputTestConnectorService(definition, statusService);
+
+    await expect(service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.search', input: { limit: 25 } },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'agent_preview' },
+    )).resolves.toMatchObject({ ok: true });
+
+    await expect(service.execute(
+      { connectorId: 'external_docs', toolName: 'docs.search', input: { limit: 1.5 } },
+      { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'agent_preview' },
+    )).rejects.toMatchObject({ code: 'CONNECTOR_INPUT_SCHEMA_MISMATCH' });
+  });
+
   it('fails closed when runtime scope classification is no longer read-only', async () => {
     const definition = externalConnector({
       tools: [{
