@@ -279,6 +279,24 @@ describe('connector routes', () => {
     expect(disconnect.body.connector).toMatchObject({ id: 'github', status: 'available' });
   });
 
+  it('clears Composio connector credentials when rotating to a key with the same tail', async () => {
+    const connect = await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
+
+    expect(connect.status).toBe(200);
+    expect(connect.body.connector).toMatchObject({ id: 'github', status: 'connected' });
+
+    const rotate = await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'cmp_rotated_test' }),
+    });
+    const statuses = await jsonFetch(`${baseUrl}/api/connectors/status`);
+
+    expect(rotate.status).toBe(200);
+    expect(rotate.body).toMatchObject({ configured: true, apiKeyTail: 'test' });
+    expect(statuses.body.statuses.github).toMatchObject({ status: 'available' });
+  });
+
   it('creates a managed Composio auth config when connecting an unconfigured connector', async () => {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve(undefined)));

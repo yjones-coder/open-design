@@ -109,7 +109,7 @@ import { LiveArtifactRefreshAbortError } from './live-artifacts/refresh.js';
 import { registerConnectorRoutes } from './connectors/routes.js';
 import { configureConnectorCredentialStore, ConnectorServiceError, deleteConnectorCredentialsByProvider, FileConnectorCredentialStore } from './connectors/service.js';
 import { composioConnectorProvider } from './connectors/composio.js';
-import { configureComposioConfigStore, readPublicComposioConfig, writeComposioConfig } from './connectors/composio-config.js';
+import { configureComposioConfigStore, readComposioConfig, readPublicComposioConfig, writeComposioConfig } from './connectors/composio-config.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from './tool-tokens.js';
 import {
   buildDeployFileSet,
@@ -993,10 +993,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
   app.put('/api/connectors/composio/config', (req, res) => {
     try {
-      const before = readPublicComposioConfig();
+      const before = readComposioConfig();
       const cfg = writeComposioConfig(req.body);
+      const after = readComposioConfig();
       composioConnectorProvider.clearDiscoveryCache();
-      if (!cfg.configured || (before.configured && before.apiKeyTail !== cfg.apiKeyTail)) {
+      if (!cfg.configured || (before.apiKey && before.apiKey !== after.apiKey)) {
         deleteConnectorCredentialsByProvider('composio');
       }
       res.json(cfg);
