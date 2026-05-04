@@ -481,6 +481,8 @@ export class ComposioConnectorProvider {
   }
 
   async connect(definition: ConnectorCatalogDefinition, callbackUrl: string, signal?: AbortSignal): Promise<ComposioConnectionStart> {
+    this.pruneExpiredPendingConnections();
+
     const authConfigId = await this.getOrCreateManagedAuthConfigId(definition, signal);
     if (!authConfigId) {
       throw new ConnectorServiceError('CONNECTOR_EXECUTION_FAILED', 'Composio auth config could not be created for this connector', 503, {
@@ -511,6 +513,7 @@ export class ComposioConnectorProvider {
     const validatedConnection = status === 'ACTIVE' && providerConnectionId
       ? await this.getValidatedConnectedAccount(definition, providerConnectionId, authConfigId, signal)
       : undefined;
+    if (validatedConnection) this.pendingConnections.delete(state);
 
     return {
       kind: redirectUrl ? 'redirect_required' : status === 'ACTIVE' ? 'connected' : 'pending',
@@ -522,6 +525,8 @@ export class ComposioConnectorProvider {
   }
 
   async completeConnection(input: { definition: ConnectorCatalogDefinition; state: string; providerConnectionId?: string; status?: string; signal?: AbortSignal }): Promise<ComposioConnectionCompletion> {
+    this.pruneExpiredPendingConnections();
+
     const connectorId = input.definition.id;
     const pending = this.pendingConnections.get(input.state);
     this.pendingConnections.delete(input.state);
@@ -541,6 +546,12 @@ export class ComposioConnectorProvider {
     const expectedAuthConfigId = await this.getAuthConfigId(input.definition, input.signal);
     const response = await this.getValidatedConnectedAccount(input.definition, providerConnectionId, expectedAuthConfigId, input.signal);
     return this.connectionToCredentials(input.definition, providerConnectionId, response);
+  }
+
+  private pruneExpiredPendingConnections(now = Date.now()): void {
+    for (const [state, pending] of this.pendingConnections.entries()) {
+      if (pending.expiresAtMs <= now) this.pendingConnections.delete(state);
+    }
   }
 
   private async getValidatedConnectedAccount(definition: ConnectorCatalogDefinition, providerConnectionId: string, expectedAuthConfigId: string | undefined, signal?: AbortSignal): Promise<ComposioConnectedAccountResponse> {

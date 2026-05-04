@@ -19,6 +19,7 @@ import {
   type ConnectorCatalogDefinition,
 } from '../src/connectors/catalog.js';
 import type { BoundedJsonObject } from '../src/live-artifacts/schema.js';
+import { listConnectorTools } from '../src/tools/connectors.js';
 
 function externalConnector(overrides: Partial<ConnectorCatalogDefinition> = {}): ConnectorCatalogDefinition {
   return {
@@ -175,6 +176,51 @@ describe('connector read-only safety classification', () => {
 });
 
 describe('connector execution policy', () => {
+  it('omits connected allowed tools that are not auto-approved read-only from agent preview listings', async () => {
+    const definition = externalConnector({
+      tools: [
+        {
+          name: 'docs.search',
+          title: 'Search docs',
+          requiredScopes: ['docs:read'],
+          safety: { sideEffect: 'read', approval: 'auto', reason: 'read-only docs search' },
+          refreshEligible: true,
+        },
+        {
+          name: 'docs.update_page',
+          title: 'Update page',
+          requiredScopes: ['docs:write'],
+          safety: { sideEffect: 'write', approval: 'confirm', reason: 'write-capable docs update' },
+          refreshEligible: false,
+        },
+      ],
+      allowedToolNames: ['docs.search', 'docs.update_page'],
+      minimumApproval: 'auto',
+    });
+    const statusService = new ConnectorStatusService();
+    statusService.connect(definition, 'docs@example.com');
+    const service = new TestConnectorService(definition, statusService);
+
+    await expect(listConnectorTools({
+      grant: {
+        token: 'test-token',
+        projectId: 'project-a',
+        runId: 'run-a',
+        allowedEndpoints: [],
+        allowedOperations: [],
+        issuedAt: '2026-04-30T00:00:00.000Z',
+        expiresAt: '2026-04-30T00:15:00.000Z',
+      },
+      projectsRoot: '/tmp/open-design-test',
+      service,
+    })).resolves.toEqual([
+      expect.objectContaining({
+        id: 'external_docs',
+        tools: [expect.objectContaining({ name: 'docs.search' })],
+      }),
+    ]);
+  });
+
   it('rejects connector inputs that no longer match the current tool schema', async () => {
     const definition = externalConnector({
       tools: [{

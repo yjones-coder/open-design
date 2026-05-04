@@ -1,11 +1,51 @@
 import type { ToolTokenGrant } from '../tool-tokens.js';
 
+import { classifyConnectorToolSafety, type ConnectorCatalogDefinition, type ConnectorToolDetail, type ConnectorToolSafety } from '../connectors/catalog.js';
 import { connectorService, ConnectorService, type ConnectorExecuteRequest } from '../connectors/service.js';
 
 export interface ConnectorToolContext {
   grant: ToolTokenGrant;
   projectsRoot: string;
   service?: ConnectorService;
+}
+
+function approvalRank(approval: ConnectorCatalogDefinition['minimumApproval']): number {
+  switch (approval) {
+    case 'auto':
+      return 0;
+    case 'confirm':
+      return 1;
+    case 'disabled':
+      return 2;
+    default:
+      return 2;
+  }
+}
+
+function stricterApproval(
+  left: ConnectorCatalogDefinition['minimumApproval'] | undefined,
+  right: ConnectorCatalogDefinition['minimumApproval'] | undefined,
+): ConnectorCatalogDefinition['minimumApproval'] | undefined {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return approvalRank(left) >= approvalRank(right) ? left : right;
+}
+
+function runtimeSafetyForTool(tool: ConnectorCatalogDefinition['tools'][number]): ConnectorToolSafety {
+  const classified = classifyConnectorToolSafety(tool);
+  if (classified.sideEffect !== 'read' || classified.approval !== 'auto') return classified;
+  return tool.safety;
+}
+
+function isAgentPreviewListableTool(definition: ConnectorCatalogDefinition, tool: ConnectorToolDetail): boolean {
+  if (!definition.allowedToolNames.includes(tool.name)) return false;
+
+  const catalogTool = definition.tools.find((candidate) => candidate.name === tool.name);
+  if (!catalogTool) return false;
+
+  const runtimeSafety = runtimeSafetyForTool(catalogTool);
+  const effectiveApproval = stricterApproval(stricterApproval(definition.minimumApproval, catalogTool.safety.approval), runtimeSafety.approval);
+  return runtimeSafety.sideEffect === 'read' && effectiveApproval === 'auto';
 }
 
 export async function listConnectorTools(context: ConnectorToolContext): Promise<Awaited<ReturnType<ConnectorService['listConnectors']>>> {
@@ -17,7 +57,7 @@ export async function listConnectorTools(context: ConnectorToolContext): Promise
     .map(({ definition, connector }) => ({
       ...connector,
       tools: connector.tools
-        .filter((tool) => definition.allowedToolNames.includes(tool.name))
+        .filter((tool) => isAgentPreviewListableTool(definition, tool))
         .sort((left, right) => {
           const leftReadOnly = left.safety.sideEffect === 'read' && left.safety.approval === 'auto';
           const rightReadOnly = right.safety.sideEffect === 'read' && right.safety.approval === 'auto';

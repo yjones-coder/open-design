@@ -4,7 +4,7 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startServer } from '../src/server.js';
-import { composioConnectorProvider, getStaticComposioCatalogDefinitions } from '../src/connectors/composio.js';
+import { ComposioConnectorProvider, composioConnectorProvider, getStaticComposioCatalogDefinitions } from '../src/connectors/composio.js';
 import { readComposioConfig, writeComposioConfig } from '../src/connectors/composio-config.js';
 import { deleteConnectorCredentialsByProvider } from '../src/connectors/service.js';
 import { CHAT_TOOL_ENDPOINTS, CHAT_TOOL_OPERATIONS, toolTokenRegistry } from '../src/tool-tokens.js';
@@ -126,6 +126,7 @@ afterEach(async () => {
   server = undefined;
   toolTokenRegistry.clear();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 async function jsonFetch(url, init) {
@@ -394,6 +395,28 @@ describe('connector routes', () => {
     const hydrated = await composioConnectorProvider.getDefinition('slack');
     expect(hydrated?.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['slack.slack_list_channels', 'slack.slack_send_message']));
     expect(hydrated?.allowedToolNames).toEqual(['slack.slack_list_channels']);
+  });
+
+  it('TTL-prunes pending Composio OAuth states even if callbacks never arrive', async () => {
+    mockComposioFetch({
+      linkResponse: {
+        connected_account_id: 'ca_github',
+        status: 'INITIATED',
+        redirect_url: 'https://example.com/oauth',
+      },
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-30T00:00:00.000Z'));
+    const provider = new ComposioConnectorProvider();
+    const github = getStaticComposioCatalogDefinitions().find((connector) => connector.id === 'github');
+
+    await provider.connect(github, `${baseUrl}/api/connectors/oauth/callback/github`);
+    expect(provider.pendingConnections.size).toBe(1);
+
+    vi.advanceTimersByTime(10 * 60 * 1000 + 1);
+    await provider.connect(github, `${baseUrl}/api/connectors/oauth/callback/github`);
+
+    expect(provider.pendingConnections.size).toBe(1);
   });
 
   it('returns branded callback HTML that notifies the opener', async () => {
