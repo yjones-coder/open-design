@@ -654,7 +654,7 @@ function extractSubtitle(raw) {
   return window.split(/\n\n/)[0]?.slice(0, 240) ?? '';
 }
 
-function extractColors(raw) {
+export function extractColors(raw) {
   const colors = [];
   const seen = new Set();
   function push(name, value, role) {
