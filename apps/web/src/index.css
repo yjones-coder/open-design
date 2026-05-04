@@ -4539,7 +4539,7 @@ button.connector-action.is-loading {
 }
 .df-row {
   display: grid;
-  grid-template-columns: 36px 1fr auto auto;
+  grid-template-columns: 28px 36px 1fr auto auto;
   align-items: center;
   gap: 12px;
   padding: 10px 20px;
@@ -4557,6 +4557,38 @@ button.connector-action.is-loading {
 .df-row:hover { background: var(--bg-subtle); }
 .df-row.active { background: var(--blue-bg); color: var(--text); }
 .df-row.active .df-row-name { color: var(--text-strong); }
+.df-row.selected { background: var(--blue-bg); }
+
+.df-row-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+  user-select: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.df-row-check:hover { background: var(--border); color: var(--text); }
+.df-row-check[aria-checked="true"] { color: var(--accent-strong); }
+
+.df-select-all {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.df-select-all:hover { background: var(--bg-subtle); color: var(--text); }
 .df-row-icon {
   width: 32px;
   height: 32px;
@@ -5433,6 +5465,11 @@ button.connector-action.is-loading {
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+.comment-frame-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
 }
 .comment-overlay-layer {
   position: absolute;
