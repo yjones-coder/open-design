@@ -79,7 +79,7 @@ export interface LiveArtifact {
   createdAt: string;
   updatedAt: string;
   lastRefreshedAt?: string;
-  document?: LiveArtifactDocument;
+  document: LiveArtifactDocument;
 }
 
 export interface LiveArtifactRefreshConnectorMetadata {
@@ -125,7 +125,7 @@ export interface LiveArtifactCreateInput {
   pinned?: boolean;
   status?: LiveArtifact['status'];
   preview: LiveArtifactPreview;
-  document?: LiveArtifactDocument;
+  document: LiveArtifactDocument;
 }
 
 export interface LiveArtifactUpdateInput {
@@ -707,9 +707,9 @@ export function validatePersistedLiveArtifact(value: unknown, path = 'liveArtifa
   const createdAt = validateIsoDate(value.createdAt, `${path}.createdAt`, issues);
   const updatedAt = validateIsoDate(value.updatedAt, `${path}.updatedAt`, issues);
   const lastRefreshedAt = value.lastRefreshedAt === undefined ? undefined : validateIsoDate(value.lastRefreshedAt, `${path}.lastRefreshedAt`, issues);
-  const document = value.document === undefined ? undefined : validateDocument(value.document, `${path}.document`, issues);
+  const document = validateDocument(value.document, `${path}.document`, issues);
 
-  if (issues.length > 0 || id === undefined || projectId === undefined || title === undefined || slug === undefined || status === undefined || pinned === undefined || preview === undefined || refreshStatus === undefined || createdAt === undefined || updatedAt === undefined) {
+  if (issues.length > 0 || id === undefined || projectId === undefined || title === undefined || slug === undefined || status === undefined || pinned === undefined || preview === undefined || refreshStatus === undefined || createdAt === undefined || updatedAt === undefined || document === undefined) {
     return fail(issues);
   }
   const liveArtifact: LiveArtifact = {
@@ -724,11 +724,11 @@ export function validatePersistedLiveArtifact(value: unknown, path = 'liveArtifa
     refreshStatus,
     createdAt,
     updatedAt,
+    document,
   };
   if (sessionId !== undefined) liveArtifact.sessionId = sessionId;
   if (createdByRunId !== undefined) liveArtifact.createdByRunId = createdByRunId;
   if (lastRefreshedAt !== undefined) liveArtifact.lastRefreshedAt = lastRefreshedAt;
-  if (document !== undefined) liveArtifact.document = document;
   return ok(liveArtifact);
 }
 
@@ -789,14 +789,13 @@ export function validateLiveArtifactCreateInput(value: unknown, path = 'input'):
   const pinned = asOptionalBoolean(value.pinned, `${path}.pinned`, issues);
   const status = value.status === undefined ? undefined : validateEnum(value.status, LIVE_ARTIFACT_STATUSES, `${path}.status`, issues);
   const preview = validatePreview(value.preview, `${path}.preview`, issues);
-  const document = value.document === undefined ? undefined : validateDocument(value.document, `${path}.document`, issues);
-  if (issues.length > 0 || title === undefined || preview === undefined) return fail(issues);
-  const input: LiveArtifactCreateInput = { title, preview };
+  const document = validateDocument(value.document, `${path}.document`, issues);
+  if (issues.length > 0 || title === undefined || preview === undefined || document === undefined) return fail(issues);
+  const input: LiveArtifactCreateInput = { title, preview, document };
   if (slug !== undefined) input.slug = slug;
   if (sessionId !== undefined) input.sessionId = sessionId;
   if (pinned !== undefined) input.pinned = pinned;
   if (status !== undefined) input.status = status;
-  if (document !== undefined) input.document = document;
   return ok(input);
 }
 

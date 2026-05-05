@@ -2,6 +2,7 @@ import {
   appendLiveArtifactRefreshLogEntry,
   commitLiveArtifactRefreshCandidate,
   getLiveArtifact,
+  markLiveArtifactRefreshRunning,
   markLiveArtifactRefreshFailed,
   type LiveArtifactStoreRecord,
   withLiveArtifactRefreshLock,
@@ -22,6 +23,7 @@ export interface RefreshLiveArtifactOptions {
   projectId: string;
   artifactId: string;
   now?: Date;
+  onStarted?: (event: { refreshId: string; artifact: LiveArtifactStoreRecord['artifact'] }) => void | Promise<void>;
 }
 
 export interface RefreshLiveArtifactResult {
@@ -66,7 +68,7 @@ function documentSourceMetadata(source: LiveArtifactSource): LiveArtifactRefresh
 
 function isSupportedSource(source: LiveArtifactSource | undefined): source is LiveArtifactSource {
   if (source === undefined) return false;
-  return source.type === 'daemon_tool' || source.type === 'connector_tool';
+  return source.type === 'local_file' || source.type === 'daemon_tool' || source.type === 'connector_tool';
 }
 
 async function executeRefreshSource(options: {
@@ -93,7 +95,7 @@ async function executeRefreshSource(options: {
     }
     return result.output;
   }
-  if (source.type !== 'daemon_tool') {
+  if (source.type !== 'daemon_tool' && source.type !== 'local_file') {
     throw new Error(`refresh source ${source.type} is not supported yet`);
   }
   return executeLocalDaemonRefreshSource({ projectsRoot, projectId, source, signal });
@@ -131,6 +133,14 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
 
     const refreshStartedAt = options.now ?? nowDate();
     await appendLog({ step: 'refresh:start', status: 'running', startedAt: refreshStartedAt });
+    const running = await markLiveArtifactRefreshRunning({
+      projectsRoot: options.projectsRoot,
+      projectId: options.projectId,
+      artifactId: options.artifactId,
+      refreshId,
+      now: refreshStartedAt,
+    });
+    await options.onStarted?.({ refreshId, artifact: running.artifact });
 
     try {
       const record = await getLiveArtifact(options);

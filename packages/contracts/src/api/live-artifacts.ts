@@ -90,7 +90,7 @@ export interface LiveArtifact {
   createdAt: string;
   updatedAt: string;
   lastRefreshedAt?: string;
-  document?: LiveArtifactDocument;
+  document: LiveArtifactDocument;
 }
 
 export type LiveArtifactDaemonOwnedInputField =
@@ -114,7 +114,7 @@ export type LiveArtifactCreateInput = LiveArtifactRejectDaemonOwnedInputFields &
   pinned?: boolean;
   status?: LiveArtifactStatus;
   preview: LiveArtifactPreview;
-  document?: LiveArtifactDocument;
+  document: LiveArtifactDocument;
 };
 
 export type LiveArtifactUpdateInput = LiveArtifactRejectDaemonOwnedInputFields & {
@@ -145,4 +145,44 @@ export interface LiveArtifactRefreshResponse {
     status: 'succeeded';
     refreshedSourceCount: number;
   };
+}
+
+export type LiveArtifactRefreshStepStatus = 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
+
+export interface LiveArtifactRefreshErrorRecord {
+  code?: string;
+  message: string;
+  path?: string;
+}
+
+export interface LiveArtifactRefreshSourceMetadata {
+  sourceType: 'document';
+  toolName?: string;
+  connector?: {
+    connectorId: string;
+    accountLabel?: string;
+    toolName: string;
+    approvalPolicy?: LiveArtifactConnectorApprovalPolicy;
+  };
+}
+
+export interface LiveArtifactRefreshLogEntry {
+  schemaVersion: 1;
+  projectId: string;
+  artifactId: string;
+  refreshId: string;
+  sequence: number;
+  step: string;
+  status: LiveArtifactRefreshStepStatus;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  source?: LiveArtifactRefreshSourceMetadata;
+  error?: LiveArtifactRefreshErrorRecord;
+  metadata?: BoundedJsonObject;
+  createdAt: string;
+}
+
+export interface LiveArtifactRefreshLogResponse {
+  refreshes: LiveArtifactRefreshLogEntry[];
 }

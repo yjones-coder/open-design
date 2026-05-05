@@ -20,7 +20,7 @@ import {
   upsertPreviewComment,
   writeProjectTextFile,
 } from '../providers/registry';
-import { useProjectFileEvents } from '../providers/project-events';
+import { useProjectFileEvents, type ProjectEvent } from '../providers/project-events';
 import { composeSystemPrompt } from '@open-design/contracts';
 import { navigate } from '../router';
 import { agentDisplayName, agentModelDisplayName } from '../utils/agentLabels';
@@ -60,6 +60,7 @@ import type {
   PreviewCommentTarget,
   ProjectFile,
   ProjectTemplate,
+  LiveArtifactEventItem,
   LiveArtifactSummary,
   SkillSummary,
 } from '../types';
@@ -103,6 +104,41 @@ interface Props {
   onProjectsRefresh: () => void;
 }
 
+let liveArtifactEventSequence = 0;
+
+function appendLiveArtifactEventItem(
+  prev: LiveArtifactEventItem[],
+  event: LiveArtifactEventItem['event'],
+): LiveArtifactEventItem[] {
+  liveArtifactEventSequence += 1;
+  const next = [...prev, { id: liveArtifactEventSequence, event }];
+  return next.length > 50 ? next.slice(next.length - 50) : next;
+}
+
+function projectEventToAgentEvent(evt: ProjectEvent): LiveArtifactEventItem['event'] | null {
+  if (evt.type === 'file-changed') return null;
+  if (evt.type === 'live_artifact') {
+    return {
+      kind: 'live_artifact',
+      action: evt.action,
+      projectId: evt.projectId,
+      artifactId: evt.artifactId,
+      title: evt.title,
+      refreshStatus: evt.refreshStatus,
+    };
+  }
+  return {
+    kind: 'live_artifact_refresh',
+    phase: evt.phase,
+    projectId: evt.projectId,
+    artifactId: evt.artifactId,
+    refreshId: evt.refreshId,
+    title: evt.title,
+    refreshedSourceCount: evt.refreshedSourceCount,
+    error: evt.error,
+  };
+}
+
 export function ProjectView({
   project,
   routeFileName,
@@ -139,7 +175,7 @@ export function ProjectView({
   const [filesRefresh, setFilesRefresh] = useState(0);
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const [liveArtifacts, setLiveArtifacts] = useState<LiveArtifactSummary[]>([]);
-  const [latestLiveArtifactEvent, setLatestLiveArtifactEvent] = useState<AgentEvent | null>(null);
+  const [liveArtifactEvents, setLiveArtifactEvents] = useState<LiveArtifactEventItem[]>([]);
   // The persisted set of open tabs + active tab. Persisted via PUT on every
   // change; loaded once when the project mounts.
   const [openTabsState, setOpenTabsState] = useState<OpenTabsState>({
@@ -384,10 +420,18 @@ export function ProjectView({
   // bump filesRefresh so the file list refetches with new mtimes — which
   // propagates through to FileViewer iframes via PR #384's ?v=${mtime}
   // cache-bust, triggering an automatic preview reload without a click.
-  const handleProjectFileChange = useCallback(() => {
-    setFilesRefresh((n) => n + 1);
-  }, []);
-  useProjectFileEvents(project.id, daemonLive, handleProjectFileChange);
+  const handleProjectEvent = useCallback((evt: ProjectEvent) => {
+    if (evt.type === 'file-changed') {
+      setFilesRefresh((n) => n + 1);
+      return;
+    }
+    const agentEvent = projectEventToAgentEvent(evt);
+    if (!agentEvent) return;
+    setLiveArtifactEvents((prev) => appendLiveArtifactEventItem(prev, agentEvent));
+    void refreshLiveArtifacts();
+    onProjectsRefresh();
+  }, [onProjectsRefresh, refreshLiveArtifacts]);
+  useProjectFileEvents(project.id, daemonLive, handleProjectEvent);
 
   // When the URL points at a specific file, fire an open request so the
   // FileWorkspace promotes it to an active tab. We watch routeFileName
@@ -894,15 +938,15 @@ export function ProjectView({
         textBuffer.flush();
         updateAssistant((prev) => ({ ...prev, events: [...(prev.events ?? []), ev] }));
         if (ev.kind === 'live_artifact') {
-          setLatestLiveArtifactEvent(ev);
+          setLiveArtifactEvents((prev) => appendLiveArtifactEventItem(prev, ev));
           void refreshLiveArtifacts().then(() => {
-            requestOpenFile(liveArtifactTabId(ev.artifactId));
+            if (ev.action !== 'deleted') requestOpenFile(liveArtifactTabId(ev.artifactId));
           });
           onProjectsRefresh();
           return;
         }
         if (ev.kind === 'live_artifact_refresh') {
-          setLatestLiveArtifactEvent(ev);
+          setLiveArtifactEvents((prev) => appendLiveArtifactEventItem(prev, ev));
           void refreshLiveArtifacts();
           onProjectsRefresh();
           return;
@@ -1481,7 +1525,7 @@ export function ProjectView({
           onExportAsPptx={handleExportAsPptx}
           streaming={streaming}
           openRequest={openRequest}
-          liveArtifactEvent={latestLiveArtifactEvent}
+          liveArtifactEvents={liveArtifactEvents}
           tabsState={openTabsState}
           onTabsStateChange={persistTabsState}
           previewComments={previewComments}

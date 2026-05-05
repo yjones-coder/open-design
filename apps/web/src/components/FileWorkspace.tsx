@@ -8,8 +8,8 @@ import {
 } from '../providers/registry';
 import {
   liveArtifactSummaryToWorkspaceEntry,
-  type AgentEvent,
   type LiveArtifactSummary,
+  type LiveArtifactEventItem,
   type LiveArtifactWorkspaceEntry,
   type OpenTabsState,
   type PreviewComment,
@@ -32,7 +32,7 @@ interface Props {
   onExportAsPptx?: ((fileName: string) => void) | undefined;
   streaming?: boolean;
   openRequest?: { name: string; nonce: number } | null;
-  liveArtifactEvent?: AgentEvent | null;
+  liveArtifactEvents?: LiveArtifactEventItem[];
   // Persisted set of open tabs + active tab. Owned by ProjectView so the
   // daemon's SQLite store can hold the source of truth and survive reloads.
   tabsState: OpenTabsState;
@@ -61,7 +61,7 @@ export function FileWorkspace({
   onExportAsPptx,
   streaming,
   openRequest,
-  liveArtifactEvent,
+  liveArtifactEvents = [],
   tabsState,
   onTabsStateChange,
   previewComments = [],
@@ -439,7 +439,7 @@ export function FileWorkspace({
           <LiveArtifactViewer
             projectId={projectId}
             liveArtifact={activeLiveArtifact}
-            liveArtifactEvent={liveArtifactEvent}
+            liveArtifactEvents={liveArtifactEvents}
             onRefreshArtifacts={onRefreshFiles}
           />
         ) : activeFile ? (

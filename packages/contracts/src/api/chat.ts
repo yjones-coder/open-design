@@ -79,7 +79,7 @@ export type PersistedAgentEvent =
   | { kind: 'thinking'; text: string }
   | {
       kind: 'live_artifact';
-      action: 'created' | 'updated';
+      action: 'created' | 'updated' | 'deleted';
       projectId: string;
       artifactId: string;
       title: string;

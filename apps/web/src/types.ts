@@ -16,6 +16,7 @@ import type {
   LiveArtifactDetailResponse,
   LiveArtifactListResponse,
   LiveArtifactPreview,
+  LiveArtifactRefreshLogEntry,
   LiveArtifactRefreshStatus,
   LiveArtifactStatus,
   LiveArtifactSummary,
@@ -274,6 +275,11 @@ export interface ComposioSettings {
 
 export type AgentEvent = PersistedAgentEvent;
 
+export interface LiveArtifactEventItem {
+  id: number;
+  event: Extract<AgentEvent, { kind: 'live_artifact' | 'live_artifact_refresh' }>;
+}
+
 export type { ChatAttachment, ChatCommentAttachment, ChatMessage };
 
 export interface Artifact {
@@ -336,6 +342,7 @@ export type {
   LiveArtifact,
   LiveArtifactDetailResponse,
   LiveArtifactListResponse,
+  LiveArtifactRefreshLogEntry,
   LiveArtifactRefreshStatus,
   LiveArtifactStatus,
   LiveArtifactSummary,

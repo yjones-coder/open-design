@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { listFiles, projectDir, readProjectFile, validateProjectPath } from '../projects.js';
@@ -353,7 +355,7 @@ function applyDataPaths(output: BoundedJsonObject, dataPaths: NonNullable<LiveAr
     const value = readMappedValue(output, dataPath.from);
     if (value !== undefined) writeMappedValue(mapped, dataPath.to, value);
   }
-  return Object.keys(mapped).length === 0 ? output : mapped;
+  return mapped;
 }
 
 function humanizeKey(key: string): string {
@@ -433,6 +435,9 @@ function metricSummary(value: BoundedJsonObject): BoundedJsonObject {
 export function applyLiveArtifactOutputMapping(options: ApplyLiveArtifactOutputMappingOptions): BoundedJsonObject {
   const mapping = options.source.outputMapping;
   const selected = applyDataPaths(options.output, mapping?.dataPaths);
+  if (mapping?.dataPaths !== undefined && mapping.dataPaths.length > 0 && Object.keys(selected).length === 0) {
+    return {};
+  }
   const transform = mapping?.transform ?? 'identity';
   const transformed = transform === 'identity'
     ? selected
@@ -581,16 +586,25 @@ async function executeProjectFilesSearch(options: ExecuteLocalDaemonRefreshSourc
 async function executeProjectFilesReadJson(options: ExecuteLocalDaemonRefreshSourceOptions): Promise<BoundedJsonObject> {
   const filePath = selectJsonPath(options.source.input as ProjectFilesReadJsonInput);
   if (!filePath.endsWith('.json')) throw new Error('project_files.read_json only supports .json files');
-  const entry = await readProjectFile(options.projectsRoot, options.projectId, filePath);
-  if (entry.size > 256 * 1024) throw new Error('project_files.read_json file exceeds 256KB');
+  const dir = projectDir(options.projectsRoot, options.projectId);
+  const target = path.resolve(dir, filePath);
+  const [dirReal, targetLinkStat] = await Promise.all([realpath(dir), lstat(target)]);
+  if (targetLinkStat.isSymbolicLink()) throw new Error('project_files.read_json does not follow symlinks');
+  const targetReal = await realpath(target);
+  if (!targetReal.startsWith(`${dirReal}${path.sep}`) && targetReal !== dirReal) {
+    throw new Error('project_files.read_json path escapes project dir');
+  }
+  const entryStat = await stat(targetReal);
+  if (!entryStat.isFile()) throw new Error('project_files.read_json path must be a file');
+  if (entryStat.size > 256 * 1024) throw new Error('project_files.read_json file exceeds 256KB');
   if (options.signal?.aborted === true) throw options.signal.reason;
   let parsed: BoundedJsonValue;
   try {
-    parsed = JSON.parse(entry.buffer.toString('utf8')) as BoundedJsonValue;
+    parsed = JSON.parse(await readFile(targetReal, 'utf8')) as BoundedJsonValue;
   } catch {
     throw new Error(`project_files.read_json could not parse JSON at ${filePath}`);
   }
-  return asBoundedRefreshOutput({ toolName: 'project_files.read_json', path: entry.path, size: entry.size, json: parsed });
+  return asBoundedRefreshOutput({ toolName: 'project_files.read_json', path: filePath, size: entryStat.size, json: parsed });
 }
 
 function compactExecOutput(value: string): string[] {
@@ -690,8 +704,23 @@ async function executePublicGithubRepositoryMetric(options: ExecuteLocalDaemonRe
 }
 
 export async function executeLocalDaemonRefreshSource(options: ExecuteLocalDaemonRefreshSourceOptions): Promise<BoundedJsonObject> {
+  if (options.source.type === 'local_file') {
+    const toolName = options.source.toolName ?? 'project_files.read_json';
+    if (toolName !== 'project_files.read_json') {
+      throw new Error(`unsupported local_file refresh tool: ${toolName}`);
+    }
+    return executeProjectFilesReadJson({
+      ...options,
+      source: {
+        ...options.source,
+        type: 'daemon_tool',
+        toolName,
+      },
+    });
+  }
+
   if (options.source.type !== 'daemon_tool') {
-    throw new Error('local daemon refresh sources require source.type daemon_tool');
+    throw new Error('local daemon refresh sources require source.type daemon_tool or local_file');
   }
   if (!isLocalDaemonRefreshToolName(options.source.toolName)) {
     throw new Error(`unsupported local daemon refresh tool: ${options.source.toolName ?? '<missing>'}`);

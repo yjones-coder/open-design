@@ -300,7 +300,6 @@ describe('live artifact store layout', () => {
         ...validCreateInput(),
         title: 'Current Health',
         slug: 'current-health',
-        document: undefined,
       },
       now: new Date('2026-04-30T10:12:12.345Z'),
     });
@@ -312,7 +311,7 @@ describe('live artifact store layout', () => {
       id: newer.artifact.id,
       projectId: 'project-1',
       title: 'Current Health',
-      hasDocument: false,
+      hasDocument: true,
     });
     expect(summaries[1]).toMatchObject({
       id: older.artifact.id,
@@ -843,7 +842,7 @@ describe('live artifact store layout', () => {
     expect(candidate.dataJson).not.toHaveProperty('value');
   });
 
-  it('falls back to full refresh output when all mapped data paths are missing', () => {
+  it('does not fall back to full refresh output when all mapped data paths are missing', () => {
     const document: any = {
       format: 'html_template_v1',
       templatePath: 'template.html',
@@ -891,14 +890,7 @@ describe('live artifact store layout', () => {
       },
     });
 
-    expect(candidate.dataJson).toMatchObject({
-      title: 'Notion word cloud',
-      count: 2,
-      rows: [
-        { title: 'Page one', characters: 120 },
-        { title: 'Page two', characters: 80 },
-      ],
-    });
+    expect(candidate.dataJson).toEqual({ title: 'Notion word cloud' });
   });
 
   it('normalizes refresh timeout configuration and rejects invalid durations', () => {
@@ -1036,6 +1028,20 @@ describe('live artifact store layout', () => {
       projectsRoot,
       projectId: 'project-1',
       source: {
+        type: 'local_file',
+        input: { path: 'metrics.json' },
+        refreshPermission: 'manual_refresh_granted_for_read_only',
+      },
+    })).resolves.toMatchObject({
+      toolName: 'project_files.read_json',
+      path: 'metrics.json',
+      json: { title: 'Q2 Metrics', rows: [{ name: 'Revenue', value: 42 }] },
+    });
+
+    await expect(executeLocalDaemonRefreshSource({
+      projectsRoot,
+      projectId: 'project-1',
+      source: {
         type: 'daemon_tool',
         toolName: 'project_files.read_json',
         input: { path: 'metrics.json' },
@@ -1057,6 +1063,65 @@ describe('live artifact store layout', () => {
         refreshPermission: 'manual_refresh_granted_for_read_only',
       },
     })).rejects.toThrow(/invalid file name|path escapes|reserved project path/);
+  });
+
+  it('merges local_file refresh output into existing document data', () => {
+    const document: any = {
+      format: 'html_template_v1',
+      templatePath: 'template.html',
+      generatedPreviewPath: 'index.html',
+      dataPath: 'data.json',
+      dataJson: {
+        title: 'Launch Metrics',
+        summary: { owner: 'Agent', status: 'draft' },
+      },
+      sourceJson: {
+        type: 'local_file',
+        input: { path: 'project-metrics.json' },
+        outputMapping: {
+          dataPaths: [
+            { from: 'json.summary', to: 'summary' },
+            { from: 'json.stats', to: 'stats' },
+          ],
+          transform: 'identity',
+        },
+        refreshPermission: 'manual_refresh_granted_for_read_only',
+      },
+    };
+
+    const candidate = buildLiveArtifactRefreshCandidate({
+      artifact: {
+        schemaVersion: 1,
+        id: 'la-launch-metrics',
+        projectId: 'project-1',
+        title: 'Launch Metrics',
+        slug: 'launch-metrics',
+        status: 'active',
+        pinned: false,
+        preview: { type: 'html', entry: 'index.html' },
+        refreshStatus: 'idle',
+        createdAt: '2026-05-05T00:00:00.000Z',
+        updatedAt: '2026-05-05T00:00:00.000Z',
+        document,
+      },
+      currentDataJson: document.dataJson,
+      documentOutput: {
+        output: {
+          toolName: 'project_files.read_json',
+          path: 'project-metrics.json',
+          json: {
+            summary: { owner: 'Local file', status: 'ready' },
+            stats: { openBugs: 7 },
+          },
+        },
+      },
+    });
+
+    expect(candidate.dataJson).toEqual({
+      title: 'Launch Metrics',
+      summary: { owner: 'Local file', status: 'ready' },
+      stats: { openBugs: 7 },
+    });
   });
 
   it('executes git.summary as a read-only local refresh source', async () => {

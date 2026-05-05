@@ -6,6 +6,7 @@ import type { Dict } from '../i18n/types';
 import {
   fetchLiveArtifact,
   fetchLiveArtifactCode,
+  fetchLiveArtifactRefreshes,
   checkDeploymentLink,
   deployProjectFile,
   fetchDeployConfig,
@@ -35,10 +36,11 @@ import { buildSrcdoc } from '../runtime/srcdoc';
 import { parseForceInline, shouldUrlLoadHtmlPreview } from './file-viewer-render-mode';
 import { saveTemplate } from '../state/projects';
 import type {
-  AgentEvent,
+  LiveArtifactEventItem,
   DeployConfigResponse,
   DeployProjectFileResponse,
   LiveArtifact,
+  LiveArtifactRefreshLogEntry,
   LiveArtifactViewerTab,
   LiveArtifactWorkspaceEntry,
   ProjectFile,
@@ -229,12 +231,12 @@ export function FileViewer({
 export function LiveArtifactViewer({
   projectId,
   liveArtifact,
-  liveArtifactEvent,
+  liveArtifactEvents = [],
   onRefreshArtifacts,
 }: {
   projectId: string;
   liveArtifact: LiveArtifactWorkspaceEntry;
-  liveArtifactEvent?: AgentEvent | null;
+  liveArtifactEvents?: LiveArtifactEventItem[];
   onRefreshArtifacts?: () => Promise<void> | void;
 }) {
   const t = useT();
@@ -247,6 +249,7 @@ export function LiveArtifactViewer({
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshSuccess, setRefreshSuccess] = useState<string | null>(null);
   const [refreshEvents, setRefreshEvents] = useState<LiveArtifactRefreshEvent[]>([]);
+  const [refreshHistory, setRefreshHistory] = useState<LiveArtifactRefreshLogEntry[]>([]);
 
   useEffect(() => {
     setRefreshError(null);
@@ -260,18 +263,28 @@ export function LiveArtifactViewer({
     return () => window.clearTimeout(timeout);
   }, [refreshSuccess]);
 
+  const processedLiveArtifactEventIdRef = useRef(0);
+
   useEffect(() => {
-    if (!liveArtifactEvent) return;
+    const pendingEvents = liveArtifactEvents.filter((item) => item.id > processedLiveArtifactEventIdRef.current);
+    if (pendingEvents.length === 0) return;
+    processedLiveArtifactEventIdRef.current = pendingEvents[pendingEvents.length - 1]?.id ?? processedLiveArtifactEventIdRef.current;
+
+    for (const { event: liveArtifactEvent } of pendingEvents) {
     if (
       (liveArtifactEvent.kind !== 'live_artifact' && liveArtifactEvent.kind !== 'live_artifact_refresh') ||
       liveArtifactEvent.projectId !== projectId ||
       liveArtifactEvent.artifactId !== liveArtifact.artifactId
     ) {
-      return;
+      continue;
     }
 
     if (liveArtifactEvent.kind === 'live_artifact') {
       setRefreshError(null);
+      if (liveArtifactEvent.action === 'deleted') {
+        setRefreshSuccess(`Live artifact deleted: ${liveArtifactEvent.title}`);
+        continue;
+      }
       setRefreshSuccess(
         liveArtifactEvent.action === 'created'
           ? `Live artifact created: ${liveArtifactEvent.title}`
@@ -280,8 +293,9 @@ export function LiveArtifactViewer({
       void fetchLiveArtifact(projectId, liveArtifact.artifactId).then((next) => {
         if (next) setDetail(next);
       });
+      void fetchLiveArtifactRefreshes(projectId, liveArtifact.artifactId).then(setRefreshHistory);
       setReloadKey((n) => n + 1);
-      return;
+      continue;
     }
 
     if (liveArtifactEvent.phase === 'started') {
@@ -289,7 +303,7 @@ export function LiveArtifactViewer({
       setRefreshError(null);
       setRefreshSuccess(null);
       setRefreshEvents((prev) => appendRefreshEvent(prev, { phase: 'started' }));
-      return;
+      continue;
     }
 
     if (liveArtifactEvent.phase === 'failed') {
@@ -304,7 +318,8 @@ export function LiveArtifactViewer({
       void fetchLiveArtifact(projectId, liveArtifact.artifactId).then((next) => {
         if (next) setDetail(next);
       });
-      return;
+      void fetchLiveArtifactRefreshes(projectId, liveArtifact.artifactId).then(setRefreshHistory);
+      continue;
     }
 
     setRefreshing(false);
@@ -323,8 +338,10 @@ export function LiveArtifactViewer({
     void fetchLiveArtifact(projectId, liveArtifact.artifactId).then((next) => {
       if (next) setDetail(next);
     });
+    void fetchLiveArtifactRefreshes(projectId, liveArtifact.artifactId).then(setRefreshHistory);
     setReloadKey((n) => n + 1);
-  }, [liveArtifactEvent, liveArtifact.artifactId, projectId, t]);
+    }
+  }, [liveArtifactEvents, liveArtifact.artifactId, projectId, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -334,6 +351,9 @@ export function LiveArtifactViewer({
       if (cancelled) return;
       setDetail(next);
       setLoading(false);
+    });
+    void fetchLiveArtifactRefreshes(projectId, liveArtifact.artifactId).then((next) => {
+      if (!cancelled) setRefreshHistory(next);
     });
     return () => {
       cancelled = true;
@@ -359,6 +379,7 @@ export function LiveArtifactViewer({
     try {
       const result = await refreshLiveArtifact(projectId, liveArtifact.artifactId);
       setDetail(result.artifact);
+      void fetchLiveArtifactRefreshes(projectId, liveArtifact.artifactId).then(setRefreshHistory);
       setReloadKey((n) => n + 1);
       setRefreshEvents((prev) =>
         appendRefreshEvent(prev, {
@@ -539,6 +560,7 @@ export function LiveArtifactViewer({
             fallbackLastRefreshedAt={liveArtifact.lastRefreshedAt}
             isRunning={isRunning}
             sessionEvents={refreshEvents}
+            persistedEvents={refreshHistory}
           />
         )}
       </div>
@@ -841,12 +863,14 @@ export function LiveArtifactRefreshHistoryPanel({
   fallbackLastRefreshedAt,
   isRunning,
   sessionEvents,
+  persistedEvents = [],
 }: {
   liveArtifact: LiveArtifact | null;
   fallbackRefreshStatus: LiveArtifactRefreshStatus;
   fallbackLastRefreshedAt?: string;
   isRunning: boolean;
   sessionEvents: LiveArtifactRefreshEvent[];
+  persistedEvents?: LiveArtifactRefreshLogEntry[];
 }) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -865,6 +889,7 @@ export function LiveArtifactRefreshHistoryPanel({
   const updatedAt = liveArtifact?.updatedAt;
   const documentSource = liveArtifact?.document?.sourceJson ?? null;
   const reversedEvents = [...sessionEvents].reverse();
+  const reversedPersistedEvents = [...persistedEvents].reverse().slice(0, 25);
   const rawDebugPayload = liveArtifact
     ? {
         refresh: liveArtifactRefreshPayload(liveArtifact),
@@ -920,6 +945,54 @@ export function LiveArtifactRefreshHistoryPanel({
           emptyLabel="Unknown"
           now={now}
         />
+      </section>
+
+      <section className="live-artifact-refresh-section">
+        <header className="live-artifact-refresh-section-header">
+          <h4>Persisted refresh history</h4>
+          <span className="live-artifact-refresh-hint">
+            Entries loaded from refreshes.jsonl
+          </span>
+        </header>
+        {reversedPersistedEvents.length === 0 ? (
+          <div className="live-artifact-refresh-empty">
+            No persisted refresh history yet.
+          </div>
+        ) : (
+          <ol className="live-artifact-refresh-timeline">
+            {reversedPersistedEvents.map((event) => {
+              const tone = event.status === 'succeeded'
+                ? 'success'
+                : event.status === 'running'
+                  ? 'running'
+                  : event.status === 'failed' || event.status === 'cancelled'
+                    ? 'error'
+                    : 'running';
+              const duration = formatDurationMs(event.durationMs);
+              return (
+                <li key={`${event.refreshId}:${event.sequence}`} className={`live-artifact-refresh-event tone-${tone}`}>
+                  <span className="live-artifact-refresh-event-dot" aria-hidden />
+                  <div className="live-artifact-refresh-event-body">
+                    <div className="live-artifact-refresh-event-row">
+                      <span className={`live-artifact-badge refresh-status tone-${tone}`}>
+                        {event.status}
+                      </span>
+                      <strong>{event.step}</strong>
+                      <span className="live-artifact-refresh-event-time">
+                        {formatRelativeTime(event.startedAt, now) ?? 'just now'}
+                      </span>
+                    </div>
+                    <div className="live-artifact-refresh-event-meta">
+                      <span>{event.refreshId}</span>
+                      {duration ? <span>{duration}</span> : null}
+                      {event.error?.message ? <span>{event.error.message}</span> : null}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </section>
 
       <section className="live-artifact-refresh-section">

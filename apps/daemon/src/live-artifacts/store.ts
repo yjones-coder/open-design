@@ -159,6 +159,10 @@ export interface MarkLiveArtifactRefreshCommittedOptions {
   refreshId: string;
 }
 
+export interface MarkLiveArtifactRefreshRunningOptions extends MarkLiveArtifactRefreshCommittedOptions {
+  now?: Date;
+}
+
 export interface CommitLiveArtifactRefreshCandidateOptions extends MarkLiveArtifactRefreshCommittedOptions {
   dataJson: BoundedJsonObject;
   provenanceJson?: LiveArtifactProvenance;
@@ -688,10 +692,10 @@ export async function createLiveArtifact(options: CreateLiveArtifactOptions): Pr
     refreshStatus: 'idle',
     createdAt: nowIso,
     updatedAt: nowIso,
+    document: input.document,
   };
   if (input.sessionId !== undefined) artifactBase.sessionId = input.sessionId;
   if (options.createdByRunId !== undefined) artifactBase.createdByRunId = options.createdByRunId;
-  if (input.document !== undefined) artifactBase.document = input.document;
   const persisted = validatePersistedLiveArtifact(artifactBase);
   if (!persisted.ok) throw new LiveArtifactStoreValidationError(persisted.error, persisted.issues);
 
@@ -843,6 +847,22 @@ export async function markLiveArtifactRefreshCommitted(
   };
   await writeLiveArtifactRefreshState(paths, nextState);
   return nextState;
+}
+
+export async function markLiveArtifactRefreshRunning(
+  options: MarkLiveArtifactRefreshRunningOptions,
+): Promise<LiveArtifactStoreRecord> {
+  const artifactId = validateLiveArtifactStorageId(options.artifactId);
+  const paths = await assertLiveArtifactRefreshLockScope(options.projectsRoot, options.projectId, artifactId);
+  const current = await readPersistedLiveArtifact(paths);
+  assertArtifactMatchesStorage(current, options.projectId, artifactId);
+  const nowIso = (options.now ?? new Date()).toISOString();
+  const artifact = await writePersistedLiveArtifact(paths, {
+    ...current,
+    refreshStatus: 'running',
+    updatedAt: nowIso,
+  });
+  return { artifact, paths };
 }
 
 function assertLiveArtifactRefreshCanCommit(

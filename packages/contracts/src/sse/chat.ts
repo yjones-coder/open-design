@@ -1,7 +1,7 @@
 import type { SseErrorPayload } from '../errors';
 import type { SseTransportEvent } from './common';
 
-export type LiveArtifactSseAction = 'created' | 'updated';
+export type LiveArtifactSseAction = 'created' | 'updated' | 'deleted';
 export type LiveArtifactRefreshSsePhase = 'started' | 'succeeded' | 'failed';
 
 export interface LiveArtifactSsePayload {

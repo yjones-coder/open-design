@@ -188,7 +188,7 @@ describe('FileViewer SVG artifacts', () => {
 });
 
 function baseLiveArtifact(overrides: Partial<LiveArtifact> = {}): LiveArtifact {
-  return {
+  const artifact: LiveArtifact = {
     schemaVersion: 1,
     id: 'la_1',
     projectId: 'proj_1',
@@ -200,8 +200,15 @@ function baseLiveArtifact(overrides: Partial<LiveArtifact> = {}): LiveArtifact {
     refreshStatus: 'idle',
     createdAt: '2026-04-29T12:00:00.000Z',
     updatedAt: '2026-04-29T12:00:00.000Z',
-    ...overrides,
+    document: {
+      format: 'html_template_v1',
+      templatePath: 'template.html',
+      generatedPreviewPath: 'index.html',
+      dataPath: 'data.json',
+      dataJson: { title: 'Launch Metrics' },
+    },
   };
+  return { ...artifact, ...overrides, document: overrides.document ?? artifact.document };
 }
 
 describe('LiveArtifactRefreshHistoryPanel', () => {

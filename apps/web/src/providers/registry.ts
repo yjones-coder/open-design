@@ -23,6 +23,7 @@ import type {
   DesignSystemDetail,
   DesignSystemSummary,
   LiveArtifact,
+  LiveArtifactRefreshLogEntry,
   LiveArtifactSummary,
   ProjectDeploymentsResponse,
   PromptTemplateDetail,
@@ -497,6 +498,22 @@ export async function refreshLiveArtifact(
   }
 
   return (await resp.json()) as LiveArtifactRefreshResult;
+}
+
+export async function fetchLiveArtifactRefreshes(
+  projectId: string,
+  artifactId: string,
+): Promise<LiveArtifactRefreshLogEntry[]> {
+  try {
+    const resp = await fetch(
+      `/api/live-artifacts/${encodeURIComponent(artifactId)}/refreshes?projectId=${encodeURIComponent(projectId)}`,
+    );
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as { refreshes?: LiveArtifactRefreshLogEntry[] };
+    return json.refreshes ?? [];
+  } catch {
+    return [];
+  }
 }
 
 export async function updateLiveArtifact(

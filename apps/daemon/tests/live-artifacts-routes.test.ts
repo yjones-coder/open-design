@@ -72,6 +72,15 @@ async function textFetch(url, init) {
   return { status: response.status, headers: response.headers, body: await response.text() };
 }
 
+async function createProject(projectId) {
+  const response = await fetch(`${baseUrl}/api/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: projectId, name: projectId }),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
 async function rawHttpJsonFetch(url, { headers = {}, method = 'GET' } = {}) {
   const parsed = new URL(url);
   return new Promise((resolve, reject) => {
@@ -118,6 +127,60 @@ async function writeProjectJson(projectId, name, value) {
   }
   if (wrote) return;
   throw lastError;
+}
+
+async function openProjectEvents(projectId) {
+  const response = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(projectId)}/events`, {
+    headers: { Accept: 'text/event-stream' },
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`failed to open project events stream: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const events = [];
+
+  const pump = (async () => {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary >= 0) {
+        const raw = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf('\n\n');
+        if (!raw.trim() || raw.startsWith(':')) continue;
+        const evt = { event: 'message', data: '' };
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('event: ')) evt.event = line.slice(7);
+          if (line.startsWith('data: ')) evt.data += line.slice(6);
+        }
+        try {
+          evt.data = JSON.parse(evt.data);
+        } catch {}
+        events.push(evt);
+      }
+    }
+  })();
+
+  return {
+    async waitFor(predicate, timeoutMs = 5_000) {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const match = events.find(predicate);
+        if (match) return match;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`timed out waiting for project event; seen=${JSON.stringify(events)}`);
+    },
+    async close() {
+      await reader.cancel().catch(() => {});
+      await pump.catch(() => {});
+    },
+  };
 }
 
 function mintToolToken(projectId, runId, overrides = {}) {
@@ -284,6 +347,134 @@ describe('live artifact tool routes', () => {
     expect(refresh.body.refresh).toMatchObject({ status: 'succeeded', refreshedSourceCount: 1 });
     expect(refresh.body.artifact.document.dataJson).toMatchObject({ title: 'Disabled Refresh Artifact' });
   });
+
+  it('returns persisted refresh history after a local_file refresh', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-refresh-history');
+    await writeProjectJson(projectId, 'artifact-metrics.json', {
+      summary: { owner: 'Disk source', status: 'ready' },
+      stats: { openBugs: 7 },
+    });
+
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: {
+          ...validCreateInput('Refresh History Artifact'),
+          document: {
+            ...validCreateInput('Refresh History Artifact').document,
+            dataJson: { title: 'Refresh History Artifact', summary: { owner: 'Agent' } },
+            sourceJson: {
+              type: 'local_file',
+              input: { path: 'artifact-metrics.json' },
+              outputMapping: {
+                dataPaths: [
+                  { from: 'json.summary', to: 'summary' },
+                  { from: 'json.stats', to: 'stats' },
+                ],
+                transform: 'identity',
+              },
+              refreshPermission: 'manual_refresh_granted_for_read_only',
+            },
+          },
+        },
+      }),
+    });
+    expect(create.status).toBe(200);
+
+    const refresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(refresh.status).toBe(200);
+    expect(refresh.body.artifact.document.dataJson).toMatchObject({
+      title: 'Refresh History Artifact',
+      summary: { owner: 'Disk source', status: 'ready' },
+      stats: { openBugs: 7 },
+    });
+
+    const refreshes = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refreshes?projectId=${encodeURIComponent(projectId)}`);
+    expect(refreshes.status).toBe(200);
+    expect(refreshes.body.refreshes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          projectId,
+          artifactId: create.body.artifact.id,
+          refreshId: refresh.body.refresh.id,
+          step: 'document',
+          status: 'succeeded',
+          source: expect.objectContaining({ sourceType: 'document' }),
+        }),
+      ]),
+    );
+  });
+
+  it('emits project SSE live artifact events for patch delete and refresh', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-route-test-project-sse');
+    await createProject(projectId);
+    await writeProjectJson(projectId, 'artifact-metrics.json', {
+      summary: { owner: 'Disk source', status: 'ready' },
+    });
+    const stream = await openProjectEvents(projectId);
+
+    try {
+      await stream.waitFor((evt) => evt.event === 'ready' && evt.data.projectId === projectId);
+
+      const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          input: {
+            ...validCreateInput('SSE Artifact'),
+            document: {
+              ...validCreateInput('SSE Artifact').document,
+              sourceJson: {
+                type: 'local_file',
+                input: { path: 'artifact-metrics.json' },
+                outputMapping: { dataPaths: [{ from: 'json.summary', to: 'summary' }], transform: 'identity' },
+                refreshPermission: 'manual_refresh_granted_for_read_only',
+              },
+            },
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const patch = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'SSE Artifact Updated' }),
+      });
+      expect(patch.status).toBe(200);
+      await stream.waitFor((evt) => evt.event === 'live_artifact'
+        && evt.data.action === 'updated'
+        && evt.data.artifactId === create.body.artifact.id
+        && evt.data.title === 'SSE Artifact Updated');
+
+      const refresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+        method: 'POST',
+      });
+      expect(refresh.status).toBe(200);
+      await stream.waitFor((evt) => evt.event === 'live_artifact_refresh'
+        && evt.data.phase === 'started'
+        && evt.data.artifactId === create.body.artifact.id);
+      await stream.waitFor((evt) => evt.event === 'live_artifact_refresh'
+        && evt.data.phase === 'succeeded'
+        && evt.data.artifactId === create.body.artifact.id
+        && evt.data.refreshId === refresh.body.refresh.id);
+
+      const deleted = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+      });
+      expect(deleted.status).toBe(200);
+      await stream.waitFor((evt) => evt.event === 'live_artifact'
+        && evt.data.action === 'deleted'
+        && evt.data.artifactId === create.body.artifact.id);
+    } finally {
+      await stream.close();
+    }
+  }, 15_000);
 
   it('rejects manual refresh requests with non-loopback host before refresh side effects', async () => {
     const projectId = uniqueProjectId();

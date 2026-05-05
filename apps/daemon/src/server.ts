@@ -111,6 +111,7 @@ import {
   LiveArtifactRefreshLockError,
   LiveArtifactStoreValidationError,
   listLiveArtifacts,
+  listLiveArtifactRefreshLogEntries,
   readLiveArtifactCode,
   recoverStaleLiveArtifactRefreshes,
   updateLiveArtifact,
@@ -376,6 +377,7 @@ const PROJECTS_DIR = path.join(RUNTIME_DATA_DIR, 'projects');
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 
 const activeChatAgentEventSinks = new Map();
+const activeProjectEventSinks = new Map();
 
 function emitChatAgentEvent(runId, payload) {
   const sink = activeChatAgentEventSinks.get(runId);
@@ -384,24 +386,44 @@ function emitChatAgentEvent(runId, payload) {
 }
 
 function emitLiveArtifactEvent(grant, action, artifact) {
-  if (!grant?.runId || !artifact?.id) return false;
-  return emitChatAgentEvent(grant.runId, {
+  if (!artifact?.id) return false;
+  const payload = {
     type: 'live_artifact',
     action,
     projectId: artifact.projectId ?? grant.projectId,
     artifactId: artifact.id,
     title: artifact.title ?? artifact.id,
     refreshStatus: artifact.refreshStatus,
-  });
+  };
+  let emitted = emitProjectLiveArtifactEvent(payload.projectId, payload);
+  if (grant?.runId) emitted = emitChatAgentEvent(grant.runId, payload) || emitted;
+  return emitted;
 }
 
 function emitLiveArtifactRefreshEvent(grant, payload) {
-  if (!grant?.runId || !payload?.artifactId) return false;
-  return emitChatAgentEvent(grant.runId, {
+  if (!payload?.artifactId) return false;
+  const event = {
     type: 'live_artifact_refresh',
     projectId: grant.projectId,
     ...payload,
-  });
+  };
+  let emitted = emitProjectLiveArtifactEvent(grant.projectId, event);
+  if (grant?.runId) emitted = emitChatAgentEvent(grant.runId, event) || emitted;
+  return emitted;
+}
+
+function emitProjectLiveArtifactEvent(projectId, payload) {
+  const sinks = activeProjectEventSinks.get(projectId);
+  if (!sinks || sinks.size === 0) return false;
+  for (const sink of Array.from(sinks)) {
+    try {
+      sink(payload);
+    } catch {
+      sinks.delete(sink);
+    }
+  }
+  if (sinks.size === 0) activeProjectEventSinks.delete(projectId);
+  return true;
 }
 
 // Windows ENAMETOOLONG mitigation constants
@@ -1460,6 +1482,15 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     let sub;
     try {
       const sse = createSseResponse(res);
+      const projectEventSink = (payload) => {
+        sse.send(payload.type, payload);
+      };
+      let sinks = activeProjectEventSinks.get(req.params.id);
+      if (!sinks) {
+        sinks = new Set();
+        activeProjectEventSinks.set(req.params.id, sinks);
+      }
+      sinks.add(projectEventSink);
       sub = subscribeFileEvents(PROJECTS_DIR, req.params.id, (evt) => {
         sse.send('file-changed', evt);
       });
@@ -1470,6 +1501,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           sub = null;
           Promise.resolve(unsubscribe()).catch(() => {});
         }
+        const currentSinks = activeProjectEventSinks.get(req.params.id);
+        currentSinks?.delete(projectEventSink);
+        if (currentSinks?.size === 0) activeProjectEventSinks.delete(req.params.id);
       };
       res.on('close', cleanup);
       res.on('finish', cleanup);
@@ -2144,6 +2178,24 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     }
   });
 
+  app.get('/api/live-artifacts/:artifactId/refreshes', async (req, res) => {
+    try {
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+      if (!projectId) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
+      }
+
+      const refreshes = await listLiveArtifactRefreshLogEntries({
+        projectsRoot: PROJECTS_DIR,
+        projectId,
+        artifactId: req.params.artifactId,
+      });
+      res.json({ refreshes });
+    } catch (err) {
+      sendLiveArtifactRouteError(res, err);
+    }
+  });
+
   app.post('/api/tools/live-artifacts/create', async (req, res) => {
     try {
       const toolGrant = authorizeToolRequest(req, res, 'live-artifacts:create');
@@ -2239,13 +2291,15 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         return sendApiError(res, 400, 'BAD_REQUEST', 'artifactId is required');
       }
 
-      emitLiveArtifactRefreshEvent(toolGrant, { phase: 'started', artifactId });
       let result;
       try {
         result = await refreshLiveArtifact({
           projectsRoot: PROJECTS_DIR,
           projectId: toolGrant.projectId,
           artifactId,
+          onStarted: ({ refreshId }) => {
+            emitLiveArtifactRefreshEvent(toolGrant, { phase: 'started', artifactId, refreshId });
+          },
         });
       } catch (refreshErr) {
         emitLiveArtifactRefreshEvent(toolGrant, {
@@ -2281,6 +2335,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         artifactId: req.params.artifactId,
         input: req.body ?? {},
       });
+      emitLiveArtifactEvent({ projectId }, 'updated', record.artifact);
       res.json({ artifact: record.artifact });
     } catch (err) {
       sendLiveArtifactRouteError(res, err);
@@ -2294,12 +2349,18 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
       }
 
+      const existing = await getLiveArtifact({
+        projectsRoot: PROJECTS_DIR,
+        projectId,
+        artifactId: req.params.artifactId,
+      });
       await deleteLiveArtifact({
         projectsRoot: PROJECTS_DIR,
         projectId,
         artifactId: req.params.artifactId,
       });
       updateProject(db, projectId, {});
+      emitLiveArtifactEvent({ projectId }, 'deleted', existing.artifact);
       res.json({ ok: true });
     } catch (err) {
       sendLiveArtifactRouteError(res, err);
@@ -2317,10 +2378,30 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
       }
 
-      const result = await refreshLiveArtifact({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
+      let result;
+      try {
+        result = await refreshLiveArtifact({
+          projectsRoot: PROJECTS_DIR,
+          projectId,
+          artifactId: req.params.artifactId,
+          onStarted: ({ refreshId }) => {
+            emitLiveArtifactRefreshEvent({ projectId }, { phase: 'started', artifactId: req.params.artifactId, refreshId });
+          },
+        });
+      } catch (refreshErr) {
+        emitLiveArtifactRefreshEvent({ projectId }, {
+          phase: 'failed',
+          artifactId: req.params.artifactId,
+          error: refreshErr instanceof Error ? refreshErr.message : String(refreshErr),
+        });
+        throw refreshErr;
+      }
+      emitLiveArtifactRefreshEvent({ projectId }, {
+        phase: 'succeeded',
         artifactId: req.params.artifactId,
+        refreshId: result.refresh.id,
+        title: result.artifact.title,
+        refreshedSourceCount: result.refresh.refreshedSourceCount,
       });
       res.json(result);
     } catch (err) {
