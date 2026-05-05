@@ -308,7 +308,7 @@ describe('connector execution policy', () => {
     )).rejects.toMatchObject({ code: 'CONNECTOR_INPUT_SCHEMA_MISMATCH' });
   });
 
-  it('does not require refresh approval when runtime scope classification changes', async () => {
+  it('rejects refresh execution when runtime scope classification is not auto read-only', async () => {
     const definition = externalConnector({
       tools: [{
         name: 'docs.search',
@@ -327,7 +327,7 @@ describe('connector execution policy', () => {
     await expect(service.execute(
       { connectorId: 'external_docs', toolName: 'docs.search', input: {} },
       { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
-    )).resolves.toMatchObject({ output: { rows: [] } });
+    )).rejects.toMatchObject({ code: 'CONNECTOR_SAFETY_DENIED' });
   });
 
   it('rejects connector-backed refresh when the connected account label drifted', async () => {
@@ -352,7 +352,7 @@ describe('connector execution policy', () => {
     )).rejects.toMatchObject({ code: 'CONNECTOR_NOT_CONNECTED' });
   });
 
-  it('runs allowed connector tools as artifact refreshes without extra approval gating', async () => {
+  it('rejects non-auto connector tools during artifact refresh', async () => {
     const definition = externalConnector({
       tools: [{
         name: 'docs.update_page',
@@ -371,7 +371,7 @@ describe('connector execution policy', () => {
     await expect(service.execute(
       { connectorId: 'external_docs', toolName: 'docs.update_page', input: {} },
       { projectsRoot: '/tmp/open-design-test', projectId: 'project-a', purpose: 'artifact_refresh' },
-    )).resolves.toMatchObject({ output: { updated: true } });
+    )).rejects.toMatchObject({ code: 'CONNECTOR_SAFETY_DENIED' });
   });
 
   it('redacts credential and provider-envelope fields from connector outputs', async () => {

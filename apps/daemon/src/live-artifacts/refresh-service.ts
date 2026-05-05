@@ -71,6 +71,10 @@ function isSupportedSource(source: LiveArtifactSource | undefined): source is Li
   return source.type === 'local_file' || source.type === 'daemon_tool' || source.type === 'connector_tool';
 }
 
+function hasRefreshPermission(source: LiveArtifactSource): boolean {
+  return source.refreshPermission === 'manual_refresh_granted_for_read_only';
+}
+
 async function executeRefreshSource(options: {
   projectsRoot: string;
   projectId: string;
@@ -152,6 +156,10 @@ export async function refreshLiveArtifact(options: RefreshLiveArtifactOptions): 
 
       if (!hasDocumentSource) {
         throw new LiveArtifactRefreshUnavailableError();
+      }
+
+      if (!hasRefreshPermission(documentSource)) {
+        throw new LiveArtifactRefreshUnavailableError('Refresh is disabled for this artifact source.');
       }
 
       const candidate = await withLiveArtifactRefreshRun(

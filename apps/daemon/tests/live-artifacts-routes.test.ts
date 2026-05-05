@@ -308,7 +308,7 @@ describe('live artifact tool routes', () => {
     );
   });
 
-  it('refreshes local sources even when refreshPermission is none', async () => {
+  it('rejects local refresh sources when refreshPermission is none', async () => {
     const projectId = uniqueProjectId();
     const token = mintToolToken(projectId, 'run-route-test-refresh-disabled');
 
@@ -343,9 +343,11 @@ describe('live artifact tool routes', () => {
     const refresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
       method: 'POST',
     });
-    expect(refresh.status).toBe(200);
-    expect(refresh.body.refresh).toMatchObject({ status: 'succeeded', refreshedSourceCount: 1 });
-    expect(refresh.body.artifact.document.dataJson).toMatchObject({ title: 'Disabled Refresh Artifact' });
+    expect(refresh.status).toBe(400);
+    expect(refresh.body.error).toMatchObject({
+      code: 'LIVE_ARTIFACT_REFRESH_UNAVAILABLE',
+      message: 'Refresh is disabled for this artifact source.',
+    });
   });
 
   it('returns persisted refresh history after a local_file refresh', async () => {
@@ -525,7 +527,7 @@ describe('live artifact tool routes', () => {
     expect(executeConnector).not.toHaveBeenCalled();
   });
 
-  it('refreshes connector sources even when refreshPermission is none', async () => {
+  it('rejects connector refresh sources when refreshPermission is none', async () => {
     const projectId = uniqueProjectId();
     const token = mintToolToken(projectId, 'run-route-test-refresh-default');
     const executeConnector = vi.spyOn(connectorService, 'execute').mockResolvedValueOnce({
@@ -572,10 +574,12 @@ describe('live artifact tool routes', () => {
     const refresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
       method: 'POST',
     });
-    expect(refresh.status).toBe(200);
-    expect(refresh.body.refresh).toMatchObject({ status: 'succeeded', refreshedSourceCount: 1 });
-    expect(refresh.body.artifact.document.dataJson).toMatchObject({ title: 'Default refresh', owner: '9' });
-    expect(executeConnector).toHaveBeenCalledTimes(1);
+    expect(refresh.status).toBe(400);
+    expect(refresh.body.error).toMatchObject({
+      code: 'LIVE_ARTIFACT_REFRESH_UNAVAILABLE',
+      message: 'Refresh is disabled for this artifact source.',
+    });
+    expect(executeConnector).not.toHaveBeenCalled();
   });
 
   it('rejects refresh requests when no refresh source exists', async () => {

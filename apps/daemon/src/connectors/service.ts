@@ -658,22 +658,13 @@ export class ConnectorService {
     }
     const runtimeSafety = runtimeSafetyForTool(tool);
     const effectiveApproval = stricterApproval(stricterApproval(definition.minimumApproval, tool.safety.approval), runtimeSafety.approval);
-    if (context.purpose !== 'artifact_refresh' && effectiveApproval !== 'auto') {
+    if (effectiveApproval !== 'auto' || runtimeSafety.sideEffect !== 'read') {
       throw new ConnectorServiceError('CONNECTOR_SAFETY_DENIED', 'connector tool is not auto-approved read-only by current safety policy', 403, {
         connectorId: request.connectorId,
         toolName: request.toolName,
         approvalPolicy: effectiveApproval ?? null,
         safety: { ...runtimeSafety },
       });
-    }
-    if (context.purpose === 'artifact_refresh') {
-      if (!definition.allowedToolNames.includes(tool.name)) {
-        throw new ConnectorServiceError('CONNECTOR_SAFETY_DENIED', 'connector tool is not eligible for artifact refresh', 403, {
-          connectorId: request.connectorId,
-          toolName: request.toolName,
-          safety: { ...runtimeSafety },
-        });
-      }
     }
     try {
       assertJsonSchemaMatches(request.input, tool.inputSchemaJson);
