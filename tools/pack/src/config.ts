@@ -87,8 +87,9 @@ function resolveToolPackMacCompression(value: string | undefined): ToolPackMacCo
 }
 
 function resolveToolPackWebOutputMode(platform: ToolPackPlatform, value: string | undefined): ToolPackWebOutputMode {
-  // Standalone web output is wired for mac first; other platforms fall back to server mode until their paths are enabled.
-  if (platform !== "mac") return "server";
+  // Standalone web output is wired for desktop packaged platforms; Linux stays on
+  // the existing server output until its AppImage resource path is optimized.
+  if (platform === "linux") return "server";
   if (value == null || value.length === 0) return "standalone";
   if (value === "server" || value === "standalone") return value;
   throw new Error(`unsupported OD_WEB_OUTPUT_MODE value: ${value}`);

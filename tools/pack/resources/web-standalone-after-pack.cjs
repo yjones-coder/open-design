@@ -108,7 +108,23 @@ function resolveAppPath(context) {
   if (typeof productFilename !== "string" || productFilename.length === 0) {
     throw new Error("[tools-pack web-standalone] electron-builder productFilename is missing");
   }
+  if (context.electronPlatformName === "win32") return context.appOutDir;
   return path.join(context.appOutDir, `${productFilename}.app`);
+}
+
+function resolveResourcesRoot(context, appPath) {
+  switch (context?.electronPlatformName) {
+    case "darwin":
+      return path.join(appPath, "Contents", "Resources");
+    case "win32":
+      return path.join(context.appOutDir, "resources");
+    default:
+      throw new Error(`[tools-pack web-standalone] unsupported platform: ${context?.electronPlatformName ?? "unknown"}`);
+  }
+}
+
+function resolveRootAppNodeModulesRoot(resourcesRoot) {
+  return path.join(resourcesRoot, "app", "node_modules");
 }
 
 async function sizePathBytes(filePath) {
@@ -129,22 +145,22 @@ async function sizePathBytes(filePath) {
   return total;
 }
 
-async function copyRequired(sourcePath, destinationPath) {
+async function copyRequired(sourcePath, destinationPath, options = {}) {
   if (!(await pathExists(sourcePath))) {
     throw new Error(`[tools-pack web-standalone] required source missing: ${sourcePath}`);
   }
   await rm(destinationPath, { force: true, recursive: true });
   await mkdir(path.dirname(destinationPath), { recursive: true });
   await cp(sourcePath, destinationPath, {
-    dereference: false,
+    dereference: options.dereference === true,
     recursive: true,
-    verbatimSymlinks: true,
+    verbatimSymlinks: options.dereference === true ? false : true,
   });
 }
 
-async function copyOptional(sourcePath, destinationPath) {
+async function copyOptional(sourcePath, destinationPath, options = {}) {
   if (!(await pathExists(sourcePath))) return false;
-  await copyRequired(sourcePath, destinationPath);
+  await copyRequired(sourcePath, destinationPath, options);
   return true;
 }
 
@@ -195,18 +211,19 @@ async function resolveStandaloneSourceWebRoot(standaloneSourceRoot) {
   throw new Error(`[tools-pack web-standalone] standalone server.js not found under ${standaloneSourceRoot}`);
 }
 
-async function installStandaloneResource(config, appPath) {
+async function installStandaloneResource(config, resourcesRoot, platformName) {
   const sourceWebRoot = await resolveStandaloneSourceWebRoot(config.standaloneSourceRoot);
-  const destinationRoot = path.join(appPath, "Contents", "Resources", config.resourceName);
+  const destinationRoot = path.join(resourcesRoot, config.resourceName);
   const destinationWebRoot = path.join(destinationRoot, "apps", "web");
+  const copyOptions = { dereference: platformName === "win32" };
 
   await rm(destinationRoot, { force: true, recursive: true });
   await mkdir(destinationWebRoot, { recursive: true });
 
-  await copyRequired(path.join(config.standaloneSourceRoot, "node_modules"), path.join(destinationRoot, "node_modules"));
+  await copyRequired(path.join(config.standaloneSourceRoot, "node_modules"), path.join(destinationRoot, "node_modules"), copyOptions);
   await copyRequired(path.join(sourceWebRoot, "server.js"), path.join(destinationWebRoot, "server.js"));
   await copyOptional(path.join(sourceWebRoot, "package.json"), path.join(destinationWebRoot, "package.json"));
-  const copiedNestedNodeModules = await copyOptional(path.join(sourceWebRoot, "node_modules"), path.join(destinationWebRoot, "node_modules"));
+  const copiedNestedNodeModules = await copyOptional(path.join(sourceWebRoot, "node_modules"), path.join(destinationWebRoot, "node_modules"), copyOptions);
   const linkedHoistEntries = await linkPnpmPublicHoist(destinationRoot);
   await copyRequired(path.join(sourceWebRoot, ".next"), path.join(destinationWebRoot, ".next"));
   const copiedStatic = await copyOptional(config.webStaticSourceRoot, path.join(destinationWebRoot, ".next", "static"));
@@ -300,9 +317,12 @@ async function pruneBrokenSymlinks(root, current = root, removedPaths = [], reas
   return removedPaths;
 }
 
-function isForbiddenCopiedEntry(relativePath) {
+function isForbiddenCopiedEntry(relativePath, platformName) {
   const normalized = relativePath.split(path.sep).join("/");
   const withRootSlash = `/${normalized}`;
+  const forbiddenSwc = platformName === "win32"
+    ? withRootSlash.includes("swc-darwin") || withRootSlash.includes("swc-linux")
+    : withRootSlash.includes("swc-darwin");
   return (
     withRootSlash.includes("/node_modules/.pnpm/sharp@") ||
     withRootSlash.includes("/node_modules/.pnpm/@img+colour@") ||
@@ -311,11 +331,11 @@ function isForbiddenCopiedEntry(relativePath) {
     withRootSlash.includes("/node_modules/@img/colour") ||
     withRootSlash.includes("/node_modules/@img/sharp-") ||
     withRootSlash.includes("sharp-libvips") ||
-    withRootSlash.includes("swc-darwin")
+    forbiddenSwc
   );
 }
 
-async function collectClosureStats(root, current = root, stats = { brokenSymlinks: [], forbiddenEntries: [], symlinks: 0 }) {
+async function collectClosureStats(root, current = root, stats = { brokenSymlinks: [], forbiddenEntries: [], symlinks: 0 }, platformName = process.platform) {
   let metadata;
   try {
     metadata = await lstat(current);
@@ -324,7 +344,7 @@ async function collectClosureStats(root, current = root, stats = { brokenSymlink
   }
 
   const relativePath = path.relative(root, current);
-  if (relativePath.length > 0 && isForbiddenCopiedEntry(relativePath)) {
+  if (relativePath.length > 0 && isForbiddenCopiedEntry(relativePath, platformName)) {
     stats.forbiddenEntries.push(relativePath.split(path.sep).join("/"));
   }
 
@@ -342,7 +362,7 @@ async function collectClosureStats(root, current = root, stats = { brokenSymlink
 
   const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
-    await collectClosureStats(root, path.join(current, entry.name), stats);
+    await collectClosureStats(root, path.join(current, entry.name), stats, platformName);
   }
   return stats;
 }
@@ -353,7 +373,7 @@ function assertResolvedInside(root, moduleName, resolvedPath) {
   }
 }
 
-async function auditCopiedStandalone(config, installResult) {
+async function auditCopiedStandalone(config, installResult, platformName) {
   const serverPath = path.join(installResult.destinationWebRoot, "server.js");
   const staticRoot = path.join(installResult.destinationWebRoot, ".next", "static");
   const publicRoot = path.join(installResult.destinationWebRoot, "public");
@@ -375,7 +395,7 @@ async function auditCopiedStandalone(config, installResult) {
     resolvedModules[moduleName] = resolvedPath;
   }
 
-  const closureStats = await collectClosureStats(installResult.destinationRoot);
+  const closureStats = await collectClosureStats(installResult.destinationRoot, installResult.destinationRoot, undefined, platformName);
   if (closureStats.brokenSymlinks.length > 0) {
     throw new Error(`[tools-pack web-standalone] copied standalone has broken symlinks: ${closureStats.brokenSymlinks.join(", ")}`);
   }
@@ -396,15 +416,17 @@ async function auditCopiedStandalone(config, installResult) {
   };
 }
 
-async function pruneRootNext(appPath) {
-  const appNodeModulesRoot = path.join(appPath, "Contents", "Resources", "app", "node_modules");
+async function pruneRootNext(appNodeModulesRoot, platformName) {
   const removedPaths = [];
 
   const nextScopeRoot = path.join(appNodeModulesRoot, "@next");
   const nextScopeEntries = await readdir(nextScopeRoot).catch(() => []);
   for (const entry of nextScopeEntries) {
-    if (entry.startsWith("swc-darwin-")) {
+    if (platformName === "darwin" && entry.startsWith("swc-darwin-")) {
       await removePathAndRecord(path.join(nextScopeRoot, entry), "root next darwin swc package", removedPaths);
+    }
+    if (platformName === "win32" && entry.startsWith("swc-") && !entry.startsWith("swc-win32-")) {
+      await removePathAndRecord(path.join(nextScopeRoot, entry), "root next non-win32 swc package", removedPaths);
     }
   }
 
@@ -417,8 +439,7 @@ async function pruneRootNext(appPath) {
   return removedPaths;
 }
 
-async function pruneRootSharp(appPath) {
-  const appNodeModulesRoot = path.join(appPath, "Contents", "Resources", "app", "node_modules");
+async function pruneRootSharp(appNodeModulesRoot) {
   const pnpmRoot = path.join(appNodeModulesRoot, ".pnpm");
   const removedPaths = [];
 
@@ -449,15 +470,20 @@ async function auditNoBrokenSymlinks(root, label) {
 }
 
 async function runWebStandaloneAfterPack(context) {
-  if (context?.electronPlatformName != null && context.electronPlatformName !== "darwin") return;
+  if (context?.electronPlatformName != null && context.electronPlatformName !== "darwin" && context.electronPlatformName !== "win32") return;
 
   const config = await readHookConfig();
   const appPath = resolveAppPath(context);
-  if (!(await pathExists(appPath))) {
+  const resourcesRoot = resolveResourcesRoot(context, appPath);
+  if (context.electronPlatformName === "darwin" && !(await pathExists(appPath))) {
     throw new Error(`[tools-pack web-standalone] app bundle not found: ${appPath}`);
   }
+  if (!(await pathExists(resourcesRoot))) {
+    throw new Error(`[tools-pack web-standalone] resources root not found: ${resourcesRoot}`);
+  }
 
-  const installResult = await installStandaloneResource(config, appPath);
+  const appNodeModulesRoot = resolveRootAppNodeModulesRoot(resourcesRoot);
+  const installResult = await installStandaloneResource(config, resourcesRoot, context.electronPlatformName);
   const copiedPrune = config.pruneCopiedSharp ? await pruneCopiedSharp(installResult.destinationRoot) : [];
   const brokenSymlinkPrune = await pruneBrokenSymlinks(
     installResult.destinationRoot,
@@ -465,17 +491,17 @@ async function runWebStandaloneAfterPack(context) {
     [],
     "copied broken symlink",
   );
-  const copiedAudit = await auditCopiedStandalone(config, installResult);
-  const rootPrune = config.pruneRootNext ? await pruneRootNext(appPath) : [];
-  const rootSharpPrune = config.pruneRootSharp ? await pruneRootSharp(appPath) : [];
+  const copiedAudit = await auditCopiedStandalone(config, installResult, context.electronPlatformName);
+  const rootPrune = config.pruneRootNext ? await pruneRootNext(appNodeModulesRoot, context.electronPlatformName) : [];
+  const rootSharpPrune = config.pruneRootSharp ? await pruneRootSharp(appNodeModulesRoot) : [];
   const rootBrokenSymlinkPrune = await pruneBrokenSymlinks(
-    path.join(appPath, "Contents", "Resources", "app", "node_modules"),
-    path.join(appPath, "Contents", "Resources", "app", "node_modules"),
+    appNodeModulesRoot,
+    appNodeModulesRoot,
     [],
     "root broken symlink",
   );
   const rootSymlinkAudit = await auditNoBrokenSymlinks(
-    path.join(appPath, "Contents", "Resources", "app", "node_modules"),
+    appNodeModulesRoot,
     "root app node_modules",
   );
   const report = {
@@ -484,6 +510,8 @@ async function runWebStandaloneAfterPack(context) {
     copiedAudit,
     copiedPrune,
     generatedAt: new Date().toISOString(),
+    platformName: context.electronPlatformName,
+    resourcesRoot,
     rootBrokenSymlinkPrune,
     rootPrune,
     rootSharpPrune,

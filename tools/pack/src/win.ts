@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, appendFile, chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, appendFile, chmod, cp, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
@@ -35,6 +35,8 @@ import { copyBundledResourceTrees, winResources } from "./resources.js";
 const execFileAsync = promisify(execFile);
 const PRODUCT_NAME = "Open Design";
 const DESKTOP_LOG_ECHO_ENV = "OD_DESKTOP_LOG_ECHO";
+const WEB_STANDALONE_HOOK_CONFIG_ENV = "OD_TOOLS_PACK_WEB_STANDALONE_HOOK_CONFIG";
+const WEB_STANDALONE_RESOURCE_NAME = "open-design-web-standalone";
 const NSIS_INSTALLER_LANGUAGE_BY_WEB_LOCALE = {
   en: "en_US",
   fa: "fa_IR",
@@ -85,6 +87,8 @@ type WinPaths = {
   uninstallMarkerPath: string;
   uninstallTimingPath: string;
   uninstallerPath: string;
+  webStandaloneHookAuditPath: string;
+  webStandaloneHookConfigPath: string;
   winIconPath: string;
   unpackedExePath: string;
   unpackedRoot: string;
@@ -97,8 +101,34 @@ export type WinPackResult = {
   outputRoot: string;
   resourceRoot: string;
   runtimeNamespaceRoot: string;
+  sizeReport: WinSizeReport;
   to: ToolPackConfig["to"];
   unpackedPath: string | null;
+  webStandaloneHookAuditPath: string | null;
+};
+
+export type WinSizeReport = {
+  builder: {
+    asar: boolean;
+    targets: Array<"dir" | "nsis">;
+    webOutputMode: ToolPackConfig["webOutputMode"];
+  };
+  generatedAt: string;
+  installerBytes: number | null;
+  outputRootBytes: number;
+  resourceRootBytes: number;
+  runtimeNamespaceRoot: string;
+  tracked: {
+    appNodeModulesBytes: number;
+    bundledNodeBytes: number;
+    sourcemapBytes: number;
+    tsbuildInfoBytes: number;
+    webCopiedStandaloneBytes: number;
+    webNextCacheBytes: number;
+    webPackageBytes: number;
+    webPackageStandaloneBytes: number;
+  };
+  unpackedBytes: number | null;
 };
 
 export type WinInstallResult = {
@@ -266,6 +296,8 @@ function resolveWinPaths(config: ToolPackConfig): WinPaths {
     uninstallMarkerPath: join(namespaceRoot, "logs", "uninstall.marker.json"),
     uninstallTimingPath: join(namespaceRoot, "logs", "uninstall.timing.json"),
     uninstallerPath: join(installDir, `Uninstall ${PRODUCT_NAME}.exe`),
+    webStandaloneHookAuditPath: join(namespaceRoot, "web-standalone-after-pack-audit.json"),
+    webStandaloneHookConfigPath: join(namespaceRoot, "web-standalone-after-pack-config.json"),
     winIconPath: join(namespaceRoot, "resources", "win", "icon.ico"),
     unpackedExePath: join(namespaceRoot, "builder", "win-unpacked", `${PRODUCT_NAME}.exe`),
     unpackedRoot: join(namespaceRoot, "builder", "win-unpacked"),
@@ -388,6 +420,33 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function toPosixPath(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
+async function sizePathBytes(
+  path: string,
+  options: { includeFile?: (path: string) => boolean } = {},
+): Promise<number> {
+  const metadata = await lstat(path).catch(() => null);
+  if (metadata == null) return 0;
+  if (!metadata.isDirectory()) {
+    return options.includeFile == null || options.includeFile(toPosixPath(path)) ? metadata.size : 0;
+  }
+
+  const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
+  let total = 0;
+  for (const entry of entries) {
+    total += await sizePathBytes(join(path, entry.name), options);
+  }
+  return total;
+}
+
+async function sizeExistingFileBytes(path: string): Promise<number | null> {
+  const metadata = await stat(path).catch(() => null);
+  return metadata == null ? null : metadata.size;
 }
 
 async function listChildDirectories(root: string): Promise<string[]> {
@@ -605,6 +664,49 @@ async function readPackagedVersion(config: ToolPackConfig): Promise<string> {
   return packageJson.version;
 }
 
+async function assertWebStandaloneOutput(config: ToolPackConfig): Promise<void> {
+  const webRoot = join(config.workspaceRoot, "apps", "web");
+  const standaloneSourceRoot = join(webRoot, ".next", "standalone");
+  const candidates = [
+    join(standaloneSourceRoot, "apps", "web", "server.js"),
+    join(standaloneSourceRoot, "server.js"),
+  ];
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) return;
+  }
+
+  throw new Error("Next.js standalone server output was not produced under apps/web/.next/standalone");
+}
+
+async function writeWebStandaloneHookConfig(config: ToolPackConfig, paths: WinPaths): Promise<string> {
+  const webRoot = join(config.workspaceRoot, "apps", "web");
+  await assertWebStandaloneOutput(config);
+
+  await mkdir(dirname(paths.webStandaloneHookConfigPath), { recursive: true });
+  await writeFile(
+    paths.webStandaloneHookConfigPath,
+    `${JSON.stringify(
+      {
+        auditReportPath: paths.webStandaloneHookAuditPath,
+        pruneCopiedSharp: true,
+        pruneRootNext: true,
+        pruneRootSharp: true,
+        resourceName: WEB_STANDALONE_RESOURCE_NAME,
+        standaloneSourceRoot: join(webRoot, ".next", "standalone"),
+        version: 1,
+        webPublicSourceRoot: join(webRoot, "public"),
+        webStaticSourceRoot: join(webRoot, ".next", "static"),
+        workspaceRoot: config.workspaceRoot,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return paths.webStandaloneHookConfigPath;
+}
+
 async function buildWorkspaceArtifacts(config: ToolPackConfig): Promise<void> {
   const webNextEnvPath = join(config.workspaceRoot, "apps", "web", "next-env.d.ts");
   const previousWebNextEnv = await readFile(webNextEnvPath, "utf8").catch(() => null);
@@ -614,7 +716,7 @@ async function buildWorkspaceArtifacts(config: ToolPackConfig): Promise<void> {
   await runPnpm(config, ["--filter", "@open-design/platform", "build"]);
   await runPnpm(config, ["--filter", "@open-design/daemon", "build"]);
   try {
-    await runPnpm(config, ["--filter", "@open-design/web", "build"], { OD_WEB_OUTPUT_MODE: "server" });
+    await runPnpm(config, ["--filter", "@open-design/web", "build"], { OD_WEB_OUTPUT_MODE: config.webOutputMode });
     await runPnpm(config, ["--filter", "@open-design/web", "build:sidecar"]);
   } finally {
     if (previousWebNextEnv == null) await rm(webNextEnvPath, { force: true });
@@ -699,6 +801,7 @@ async function writeAssembledApp(config: ToolPackConfig, paths: WinPaths, packed
         appVersion: packagedVersion,
         namespace: config.namespace,
         nodeCommandRelative: join("open-design", "bin", "node.exe"),
+        webOutputMode: config.webOutputMode,
         ...(config.portable ? {} : { namespaceBaseRoot: config.roots.runtime.namespaceBaseRoot }),
       },
       null,
@@ -725,8 +828,12 @@ function resolveWinTargets(to: ToolPackConfig["to"]): Array<"dir" | "nsis"> {
 async function runElectronBuilder(config: ToolPackConfig, paths: WinPaths): Promise<void> {
   const namespaceToken = sanitizeNamespace(config.namespace);
   const packagedVersion = await readPackagedVersion(config);
+  const webStandaloneHookConfigPath = config.webOutputMode === "standalone"
+    ? await writeWebStandaloneHookConfig(config, paths)
+    : null;
   const builderConfig = {
     appId: "io.open-design.desktop",
+    afterPack: webStandaloneHookConfigPath == null ? undefined : winResources.webStandaloneAfterPackHook,
     asar: false,
     buildDependenciesFromSource: false,
     compression: "maximum",
@@ -791,7 +898,11 @@ async function runElectronBuilder(config: ToolPackConfig, paths: WinPaths): Prom
       "never",
     ], {
       cwd: config.workspaceRoot,
-      env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+      env: {
+        ...process.env,
+        CSC_IDENTITY_AUTO_DISCOVERY: "false",
+        ...(webStandaloneHookConfigPath == null ? {} : { [WEB_STANDALONE_HOOK_CONFIG_ENV]: webStandaloneHookConfigPath }),
+      },
     });
   };
   await ensureNsisPersianLanguageAlias(config);
@@ -831,6 +942,34 @@ async function writeLocalLatestYml(config: ToolPackConfig, paths: WinPaths): Pro
   );
 }
 
+async function collectWinSizeReport(config: ToolPackConfig, paths: WinPaths): Promise<WinSizeReport> {
+  const appResourcesRoot = join(paths.unpackedRoot, "resources");
+  const appNodeModulesRoot = join(appResourcesRoot, "app", "node_modules");
+  return {
+    builder: {
+      asar: false,
+      targets: resolveWinTargets(config.to),
+      webOutputMode: config.webOutputMode,
+    },
+    generatedAt: new Date().toISOString(),
+    installerBytes: await sizeExistingFileBytes(paths.setupPath),
+    outputRootBytes: await sizePathBytes(config.roots.output.namespaceRoot),
+    resourceRootBytes: await sizePathBytes(paths.resourceRoot),
+    runtimeNamespaceRoot: config.roots.runtime.namespaceRoot,
+    tracked: {
+      appNodeModulesBytes: await sizePathBytes(appNodeModulesRoot),
+      bundledNodeBytes: await sizePathBytes(join(paths.resourceRoot, "bin", "node.exe")),
+      sourcemapBytes: await sizePathBytes(paths.unpackedRoot, { includeFile: (path) => path.endsWith(".map") }),
+      tsbuildInfoBytes: await sizePathBytes(paths.unpackedRoot, { includeFile: (path) => path.endsWith(".tsbuildinfo") }),
+      webCopiedStandaloneBytes: await sizePathBytes(join(appResourcesRoot, WEB_STANDALONE_RESOURCE_NAME)),
+      webNextCacheBytes: await sizePathBytes(join(appNodeModulesRoot, "@open-design", "web", ".next", "cache")),
+      webPackageBytes: await sizePathBytes(join(appNodeModulesRoot, "@open-design", "web")),
+      webPackageStandaloneBytes: await sizePathBytes(join(appNodeModulesRoot, "@open-design", "web", ".next", "standalone")),
+    },
+    unpackedBytes: (await pathExists(paths.unpackedRoot)) ? await sizePathBytes(paths.unpackedRoot) : null,
+  };
+}
+
 export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   const paths = resolveWinPaths(config);
   await buildWorkspaceArtifacts(config);
@@ -840,6 +979,7 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   await writeAssembledApp(config, paths, tarballs);
   await runElectronBuilder(config, paths);
   await writeLocalLatestYml(config, paths);
+  const sizeReport = await collectWinSizeReport(config, paths);
   return {
     blockmapPath: (await pathExists(paths.blockmapPath)) ? paths.blockmapPath : null,
     installerPath: (await pathExists(paths.setupPath)) ? paths.setupPath : null,
@@ -847,8 +987,10 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
     outputRoot: config.roots.output.namespaceRoot,
     resourceRoot: paths.resourceRoot,
     runtimeNamespaceRoot: config.roots.runtime.namespaceRoot,
+    sizeReport,
     to: config.to,
     unpackedPath: (await pathExists(paths.unpackedRoot)) ? paths.unpackedRoot : null,
+    webStandaloneHookAuditPath: (await pathExists(paths.webStandaloneHookAuditPath)) ? paths.webStandaloneHookAuditPath : null,
   };
 }
 
