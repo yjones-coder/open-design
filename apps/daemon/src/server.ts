@@ -31,6 +31,9 @@ import { listDesignSystems, readDesignSystem } from './design-systems.js';
 import { attachAcpSession } from './acp.js';
 import { attachPiRpcSession } from './pi-rpc.js';
 import { createClaudeStreamHandler } from './claude-stream.js';
+import { loadCritiqueConfigFromEnv } from './critique/config.js';
+import { reconcileStaleRuns } from './critique/persistence.js';
+import { runOrchestrator } from './critique/orchestrator.js';
 import { createCopilotStreamHandler } from './copilot-stream.js';
 import { createJsonEventStreamHandler } from './json-event-stream.js';
 import { subscribe as subscribeFileEvents } from './project-watchers.js';
@@ -435,6 +438,16 @@ const promptFileBootstrap = (fp) =>
   'Open that file first and follow every instruction in it exactly — ' +
   'it contains the system prompt, design system, skill workflow, and user request. ' +
   'Do not begin your response until you have read the entire file.';
+
+// Load Critique Theater config once at startup so a bad OD_CRITIQUE_* value
+// surfaces immediately as a boot-time RangeError instead of silently at
+// run time. Default: enabled=false (M0 dark launch).
+const critiqueCfg = loadCritiqueConfigFromEnv();
+// Tracks adapter streamFormat values that have already received a one-time
+// warning explaining why the Critique Theater orchestrator was bypassed.
+// Adapter denylist for orchestrator routing is implicit: anything that is
+// not the 'plain' streamFormat falls through to legacy single-pass.
+const critiqueWarnedAdapters = new Set<string>();
 export const SSE_KEEPALIVE_INTERVAL_MS = 25_000;
 
 export function createAgentRuntimeEnv(
@@ -1054,6 +1067,16 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   configureConnectorCredentialStore(new FileConnectorCredentialStore(RUNTIME_DATA_DIR));
   configureComposioConfigStore(RUNTIME_DATA_DIR);
   let daemonUrl = `http://127.0.0.1:${port}`;
+
+  // Boot reconcile: any critique_runs row left in 'running' state by a prior
+  // daemon crash gets flipped to 'interrupted' with rounds_json.recoveryReason
+  // = 'daemon_restart' so the spec's daemon-restart-mid-run failure mode is
+  // honored on every boot. staleAfterMs comes from CritiqueConfig, not a
+  // hardcoded constant.
+  const reconciledStaleRuns = reconcileStaleRuns(db, { staleAfterMs: critiqueCfg.totalTimeoutMs });
+  if (reconciledStaleRuns > 0) {
+    console.warn(`[critique] reconcileStaleRuns flipped ${reconciledStaleRuns} stale running row(s) to interrupted`);
+  }
 
   if (process.env.OD_CODEX_DISABLE_PLUGINS === '1') {
     console.log('[od] Codex plugins disabled via OD_CODEX_DISABLE_PLUGINS=1');
@@ -3692,6 +3715,87 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
+
+    // Critique Theater branch (M0 dark launch, default disabled).
+    // Only plain-stream adapters are routed through runOrchestrator in v1.
+    // Adapters that emit structured wrappers (claude-stream-json,
+    // copilot-stream-json, json-event-stream, acp-json-rpc, pi-rpc) fall
+    // through to the legacy single-pass code path below with a one-time
+    // stderr warning so the parser never sees wrapper bytes. Per-format
+    // decoding into the orchestrator is a v2 concern.
+    if (critiqueCfg.enabled) {
+      const adapterStreamFormat: string = def.streamFormat ?? 'plain';
+      if (adapterStreamFormat !== 'plain') {
+        if (!critiqueWarnedAdapters.has(adapterStreamFormat)) {
+          critiqueWarnedAdapters.add(adapterStreamFormat);
+          console.warn(`[critique] adapter format=${adapterStreamFormat} is not plain-stream; skipping orchestrator and falling through to legacy generation`);
+        }
+      } else {
+        const critiqueRunId = run.id;
+        // Per-run artifact directory keeps concurrent or sequential runs in the
+        // same project from overwriting each other's transcript or final HTML.
+        // Spec: artifacts/<projectId>/<runId>/transcript.ndjson(.gz).
+        const critiqueProjectKey = typeof projectId === 'string' && projectId ? projectId : critiqueRunId;
+        const critiqueArtifactDir = path.join(ARTIFACTS_DIR, critiqueProjectKey, critiqueRunId);
+        const stdoutIterable = (async function* () {
+          for await (const chunk of child.stdout) yield String(chunk);
+        })();
+        const critiqueBus = { emit: (e) => send('agent', e) };
+
+        // Stderr forwarding and child.on('error') must be wired BEFORE the
+        // orchestrator awaits stdout. Otherwise a CLI that floods stderr can
+        // fill the OS pipe and deadlock the run until the total timeout, and
+        // an early child error fired before the orchestrator returns has no
+        // listener. Both registrations are idempotent and the run lifecycle
+        // is owned solely by the orchestrator's awaited result below.
+        child.stderr.on('data', (chunk) => send('stderr', { chunk }));
+        child.on('error', (err) => {
+          send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
+        });
+
+        // Wrap the child's close event so the orchestrator can race child
+        // exit against parser completion, abort, and timeouts in one awaited
+        // flow. Without this the orchestrator can't tell a non-zero exit
+        // apart from a clean ship and may misclassify failures.
+        const childExitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+          child.once('close', (code, signal) => resolve({ code, signal }));
+        });
+        try {
+          const orchestratorResult = await runOrchestrator({
+            runId: critiqueRunId,
+            projectId: typeof projectId === 'string' ? projectId : '',
+            conversationId: typeof conversationId === 'string' ? conversationId : null,
+            artifactId: critiqueRunId,
+            artifactDir: critiqueArtifactDir,
+            adapter: typeof agentId === 'string' ? agentId : 'unknown',
+            cfg: critiqueCfg,
+            db,
+            bus: critiqueBus,
+            stdout: stdoutIterable,
+            child,
+            childExitPromise,
+          });
+          // Map the critique terminal status to the chat run lifecycle.
+          // 'shipped' and 'below_threshold' both ran to a ship decision and
+          // finalize as 'succeeded'; every other status (timed_out,
+          // interrupted, degraded, failed, legacy) is a failure path so the
+          // run reflects the real outcome instead of a misleading success.
+          const succeeded = orchestratorResult.status === 'shipped'
+            || orchestratorResult.status === 'below_threshold';
+          if (run.cancelRequested) {
+            design.runs.finish(run, 'canceled', 1, null);
+          } else if (succeeded) {
+            design.runs.finish(run, 'succeeded', 0, null);
+          } else {
+            design.runs.finish(run, 'failed', 1, null);
+          }
+        } catch (err) {
+          send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err instanceof Error ? err.message : String(err)));
+          design.runs.finish(run, 'failed', 1, null);
+        }
+        return;
+      }
+    }
 
     // Structured streams (Claude Code) go through a line-delimited JSON
     // parser that turns stream_event objects into UI-friendly events. For
