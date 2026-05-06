@@ -33,6 +33,7 @@ import {
 import { hashJson, hashPath, ToolPackCache, type CacheReport } from "./cache.js";
 import type { ToolPackConfig } from "./config.js";
 import { copyBundledResourceTrees, winResources } from "./resources.js";
+import { ensureWorkspaceBuildArtifacts } from "./workspace-build.js";
 
 const execFileAsync = promisify(execFile);
 const PRODUCT_NAME = "Open Design";
@@ -148,9 +149,15 @@ export type WinPackResult = {
   runtimeNamespaceRoot: string;
   cacheReport: CacheReport;
   sizeReport: WinSizeReport;
+  timings: WinPackTiming[];
   to: ToolPackConfig["to"];
   unpackedPath: string | null;
   webStandaloneHookAuditPath: string | null;
+};
+
+export type WinPackTiming = {
+  durationMs: number;
+  phase: string;
 };
 
 export type WinSizeReport = {
@@ -1305,15 +1312,39 @@ async function collectWinSizeReport(config: ToolPackConfig, paths: WinPaths): Pr
 export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   const paths = resolveWinPaths(config);
   const cache = new ToolPackCache(config.roots.cacheRoot);
-  await buildWorkspaceArtifacts(config);
-  await copyResourceTree(config, paths, cache);
-  await copyWinIcon(paths);
-  const tarballs = await collectWorkspaceTarballs(config, paths, cache);
-  const assembledApp = await writeAssembledApp(config, paths, tarballs, cache);
-  await rebuildWinNativeDependencies(config, paths, cache, assembledApp);
-  await runElectronBuilder(config, paths);
-  await writeLocalLatestYml(config, paths);
-  const sizeReport = await collectWinSizeReport(config, paths);
+  const timings: WinPackTiming[] = [];
+  const runPhase = async <T>(phase: string, task: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    try {
+      return await task();
+    } finally {
+      timings.push({ durationMs: Date.now() - startedAt, phase });
+    }
+  };
+
+  await runPhase("workspace-build", async () => {
+    await ensureWorkspaceBuildArtifacts(config, cache, async () => {
+      await buildWorkspaceArtifacts(config);
+    });
+  });
+  await runPhase("resource-tree", async () => {
+    await copyResourceTree(config, paths, cache);
+  });
+  await runPhase("win-icon", async () => {
+    await copyWinIcon(paths);
+  });
+  const tarballs = await runPhase("workspace-tarballs", async () => collectWorkspaceTarballs(config, paths, cache));
+  const assembledApp = await runPhase("assembled-app", async () => writeAssembledApp(config, paths, tarballs, cache));
+  await runPhase("native-rebuild", async () => {
+    await rebuildWinNativeDependencies(config, paths, cache, assembledApp);
+  });
+  await runPhase("electron-builder", async () => {
+    await runElectronBuilder(config, paths);
+  });
+  await runPhase("latest-yml", async () => {
+    await writeLocalLatestYml(config, paths);
+  });
+  const sizeReport = await runPhase("size-report", async () => collectWinSizeReport(config, paths));
   return {
     blockmapPath: (await pathExists(paths.blockmapPath)) ? paths.blockmapPath : null,
     installerPath: (await pathExists(paths.setupPath)) ? paths.setupPath : null,
@@ -1323,6 +1354,7 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
     runtimeNamespaceRoot: config.roots.runtime.namespaceRoot,
     cacheReport: cache.report(),
     sizeReport,
+    timings,
     to: config.to,
     unpackedPath: (await pathExists(paths.unpackedRoot)) ? paths.unpackedRoot : null,
     webStandaloneHookAuditPath: (await pathExists(paths.webStandaloneHookAuditPath)) ? paths.webStandaloneHookAuditPath : null,
