@@ -1,0 +1,289 @@
+import { execFile } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+
+import { hashJson, hashPath, ToolPackCache } from "../cache.js";
+import type { ToolPackConfig } from "../config.js";
+import { winResources } from "../resources.js";
+import {
+  ELECTRON_BUILDER_ASAR,
+  ELECTRON_BUILDER_BUILD_DEPENDENCIES_FROM_SOURCE,
+  ELECTRON_BUILDER_FILE_PATTERNS,
+  ELECTRON_BUILDER_NODE_GYP_REBUILD,
+  ELECTRON_BUILDER_NPM_REBUILD,
+  NSIS_INSTALLER_LANGUAGE_BY_WEB_LOCALE,
+  PRODUCT_NAME,
+  WEB_STANDALONE_HOOK_CONFIG_ENV,
+  WEB_STANDALONE_RESOURCE_NAME,
+} from "./constants.js";
+import { pathExists, removeTree } from "./fs.js";
+import {
+  readPackagedVersion,
+  writeBuiltAppManifest,
+  writePackagedConfig,
+} from "./manifest.js";
+import { ensureNsisPersianLanguageAlias, writeNsisInclude } from "./nsis.js";
+import { sanitizeNamespace } from "./paths.js";
+import { resolveWinTargets } from "./report.js";
+import type { ResourceTreeResult } from "./resources.js";
+import type {
+  ElectronBuilderDirCacheMetadata,
+  ElectronReadyAppCacheResult,
+  WinPaths,
+} from "./types.js";
+
+const execFileAsync = promisify(execFile);
+
+async function assertWebStandaloneOutput(config: ToolPackConfig): Promise<void> {
+  const webRoot = join(config.workspaceRoot, "apps", "web");
+  const standaloneSourceRoot = join(webRoot, ".next", "standalone");
+  const candidates = [
+    join(standaloneSourceRoot, "apps", "web", "server.js"),
+    join(standaloneSourceRoot, "server.js"),
+  ];
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) return;
+  }
+
+  throw new Error("Next.js standalone server output was not produced under apps/web/.next/standalone");
+}
+
+async function writeWebStandaloneHookConfig(config: ToolPackConfig, paths: WinPaths): Promise<string> {
+  const webRoot = join(config.workspaceRoot, "apps", "web");
+  await assertWebStandaloneOutput(config);
+
+  await mkdir(dirname(paths.webStandaloneHookConfigPath), { recursive: true });
+  await writeFile(
+    paths.webStandaloneHookConfigPath,
+    `${JSON.stringify(
+      {
+        auditReportPath: paths.webStandaloneHookAuditPath,
+        pruneCopiedSharp: true,
+        pruneRootNext: true,
+        pruneRootSharp: true,
+        resourceName: WEB_STANDALONE_RESOURCE_NAME,
+        standaloneSourceRoot: join(webRoot, ".next", "standalone"),
+        version: 1,
+        webPublicSourceRoot: join(webRoot, "public"),
+        webStaticSourceRoot: join(webRoot, ".next", "static"),
+        workspaceRoot: config.workspaceRoot,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return paths.webStandaloneHookConfigPath;
+}
+
+async function runElectronBuilderRaw(config: ToolPackConfig, paths: WinPaths, projectDir: string): Promise<void> {
+  const namespaceToken = sanitizeNamespace(config.namespace);
+  const packagedVersion = await readPackagedVersion(config);
+  const webStandaloneHookConfigPath = config.webOutputMode === "standalone"
+    ? await writeWebStandaloneHookConfig(config, paths)
+    : null;
+  const builderConfig = {
+    appId: "io.open-design.desktop",
+    afterPack: webStandaloneHookConfigPath == null ? undefined : winResources.webStandaloneAfterPackHook,
+    asar: ELECTRON_BUILDER_ASAR,
+    buildDependenciesFromSource: ELECTRON_BUILDER_BUILD_DEPENDENCIES_FROM_SOURCE,
+    compression: "maximum",
+    directories: { output: paths.appBuilderOutputRoot },
+    electronDist: config.electronDistPath,
+    electronVersion: config.electronVersion,
+    executableName: PRODUCT_NAME,
+    extraMetadata: {
+      main: "./main.cjs",
+      name: "open-design-packaged-app",
+      productName: PRODUCT_NAME,
+      version: packagedVersion,
+    },
+    extraResources: [
+      { from: paths.resourceRoot, to: "open-design" },
+      { from: paths.packagedConfigPath, to: "open-design-config.json" },
+    ],
+    files: [...ELECTRON_BUILDER_FILE_PATTERNS],
+    forceCodeSigning: false,
+    icon: paths.winIconPath,
+    nodeGypRebuild: ELECTRON_BUILDER_NODE_GYP_REBUILD,
+    npmRebuild: ELECTRON_BUILDER_NPM_REBUILD,
+    nsis: {
+      allowElevation: false,
+      allowToChangeInstallationDirectory: true,
+      artifactName: `${PRODUCT_NAME}-${namespaceToken}-setup.\${ext}`,
+      createDesktopShortcut: true,
+      createStartMenuShortcut: true,
+      deleteAppDataOnUninstall: false,
+      displayLanguageSelector: false,
+      include: paths.nsisIncludePath,
+      installerLanguages: Object.values(NSIS_INSTALLER_LANGUAGE_BY_WEB_LOCALE),
+      language: "1033",
+      multiLanguageInstaller: true,
+      oneClick: false,
+      perMachine: false,
+      shortcutName: PRODUCT_NAME,
+      warningsAsErrors: false,
+    },
+    productName: PRODUCT_NAME,
+    publish: [{ provider: "generic", url: "https://updates.invalid/open-design" }],
+    win: {
+      artifactName: `${PRODUCT_NAME}-${namespaceToken}.\${ext}`,
+      icon: paths.winIconPath,
+      target: resolveWinTargets(config.to).map((target) => ({ arch: ["x64"], target })),
+    },
+  };
+
+  await removeTree(paths.appBuilderOutputRoot);
+  await mkdir(dirname(paths.appBuilderConfigPath), { recursive: true });
+  await writeNsisInclude(config, paths);
+  await writeFile(paths.appBuilderConfigPath, `${JSON.stringify(builderConfig, null, 2)}\n`, "utf8");
+  const build = async () => {
+    await execFileAsync(process.execPath, [
+      config.electronBuilderCliPath,
+      "--win",
+      "--projectDir",
+      projectDir,
+      "--config",
+      paths.appBuilderConfigPath,
+      "--publish",
+      "never",
+    ], {
+      cwd: config.workspaceRoot,
+      env: {
+        ...process.env,
+        CSC_IDENTITY_AUTO_DISCOVERY: "false",
+        ...(webStandaloneHookConfigPath == null ? {} : { [WEB_STANDALONE_HOOK_CONFIG_ENV]: webStandaloneHookConfigPath }),
+      },
+    });
+  };
+  await ensureNsisPersianLanguageAlias(config);
+  try {
+    await build();
+  } catch (error) {
+    const output = `${(error as { stdout?: unknown }).stdout ?? ""}\n${(error as { stderr?: unknown }).stderr ?? ""}`;
+    if (output.includes("Persian.nlf") && await ensureNsisPersianLanguageAlias(config)) {
+      await build();
+      return;
+    }
+    throw error;
+  }
+}
+
+function createCacheLocalWinPaths(paths: WinPaths, entryRoot: string): WinPaths {
+  return {
+    ...paths,
+    appBuilderConfigPath: join(entryRoot, "builder-config.json"),
+    appBuilderOutputRoot: join(entryRoot, "builder"),
+    nsisIncludePath: join(entryRoot, "nsis", "installer.nsh"),
+    webStandaloneHookAuditPath: join(entryRoot, "web-standalone-after-pack-audit.json"),
+    webStandaloneHookConfigPath: join(entryRoot, "web-standalone-after-pack-config.json"),
+  };
+}
+
+function rewriteAuditPaths(value: unknown, fromRoot: string, toRoot: string): unknown {
+  if (typeof value === "string") return value.split(fromRoot).join(toRoot);
+  if (Array.isArray(value)) return value.map((entry) => rewriteAuditPaths(entry, fromRoot, toRoot));
+  if (value == null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, rewriteAuditPaths(entry, fromRoot, toRoot)]),
+  );
+}
+
+async function materializeCachedElectronBuilderAudit(entryRoot: string, paths: WinPaths): Promise<void> {
+  if (!(await pathExists(join(entryRoot, "web-standalone-after-pack-audit.json")))) return;
+  const raw = JSON.parse(await readFile(join(entryRoot, "web-standalone-after-pack-audit.json"), "utf8")) as unknown;
+  const appPath = typeof (raw as { appPath?: unknown }).appPath === "string"
+    ? (raw as { appPath: string }).appPath
+    : null;
+  const sourceBuilderRoot = appPath == null ? join(entryRoot, "builder") : dirname(appPath);
+  await mkdir(dirname(paths.webStandaloneHookAuditPath), { recursive: true });
+  await writeFile(
+    paths.webStandaloneHookAuditPath,
+    `${JSON.stringify(rewriteAuditPaths(raw, sourceBuilderRoot, paths.appBuilderOutputRoot), null, 2)}\n`,
+    "utf8",
+  );
+}
+
+export async function runElectronBuilder(
+  config: ToolPackConfig,
+  paths: WinPaths,
+  cache: ToolPackCache,
+  electronReadyApp: ElectronReadyAppCacheResult,
+  resourceTree: ResourceTreeResult,
+): Promise<void> {
+  if (config.to !== "dir") {
+    await runElectronBuilderRaw(config, paths, electronReadyApp.appRoot);
+    if (await pathExists(paths.unpackedExePath)) {
+      await writeBuiltAppManifest(paths, {
+        appBuilderOutputRoot: paths.appBuilderOutputRoot,
+        cacheEntryPath: null,
+        configPath: join(paths.unpackedRoot, "resources", "open-design-config.json"),
+        executablePath: paths.unpackedExePath,
+        source: "namespace",
+        unpackedRoot: paths.unpackedRoot,
+        webStandaloneHookAuditPath: (await pathExists(paths.webStandaloneHookAuditPath)) ? paths.webStandaloneHookAuditPath : null,
+      });
+    }
+    return;
+  }
+
+  const packagedVersion = await readPackagedVersion(config);
+  const key = hashJson({
+    afterPackHook: config.webOutputMode === "standalone" ? await hashPath(winResources.webStandaloneAfterPackHook) : null,
+    asar: ELECTRON_BUILDER_ASAR,
+    buildDependenciesFromSource: ELECTRON_BUILDER_BUILD_DEPENDENCIES_FROM_SOURCE,
+    electronBuilderCliPath: config.electronBuilderCliPath,
+    electronReadyAppKey: electronReadyApp.key,
+    electronVersion: config.electronVersion,
+    filePatterns: ELECTRON_BUILDER_FILE_PATTERNS,
+    node: "win.electron-builder-dir",
+    nodeGypRebuild: ELECTRON_BUILDER_NODE_GYP_REBUILD,
+    npmRebuild: ELECTRON_BUILDER_NPM_REBUILD,
+    packagedConfigSchemaVersion: 1,
+    portable: config.portable,
+    packagedVersion,
+    platform: "win32",
+    resourceTreeKey: resourceTree.key,
+    schemaVersion: 1,
+    target: "dir",
+    webOutputMode: config.webOutputMode,
+    winIcon: await hashPath(winResources.icon),
+  });
+  const auditOutput = "web-standalone-after-pack-audit.json";
+  const node = {
+    id: "win.electron-builder-dir",
+    key,
+    outputs: ["builder", ...(config.webOutputMode === "standalone" ? [auditOutput] : [])],
+    invalidate: async () => null,
+    build: async ({ entryRoot }: { entryRoot: string }): Promise<ElectronBuilderDirCacheMetadata> => {
+      await runElectronBuilderRaw(
+        config,
+        { ...createCacheLocalWinPaths(paths, entryRoot), resourceRoot: resourceTree.resourceRoot },
+        electronReadyApp.appRoot,
+      );
+      return { electronReadyAppKey: electronReadyApp.key, packagedVersion };
+    },
+  };
+  const manifest = await cache.acquire({
+    materialize: [],
+    node,
+  });
+
+  const cachedBuilderRoot = join(manifest.entryPath, "builder");
+  const cachedUnpackedRoot = join(cachedBuilderRoot, "win-unpacked");
+  const cachedExecutablePath = join(cachedUnpackedRoot, `${PRODUCT_NAME}.exe`);
+  await removeTree(paths.appBuilderOutputRoot);
+  await writePackagedConfig(config, paths, packagedVersion);
+  await materializeCachedElectronBuilderAudit(manifest.entryPath, paths);
+  await writeBuiltAppManifest(paths, {
+    appBuilderOutputRoot: cachedBuilderRoot,
+    cacheEntryPath: manifest.entryPath,
+    configPath: paths.packagedConfigPath,
+    executablePath: cachedExecutablePath,
+    source: "cache",
+    unpackedRoot: cachedUnpackedRoot,
+    webStandaloneHookAuditPath: (await pathExists(paths.webStandaloneHookAuditPath)) ? paths.webStandaloneHookAuditPath : null,
+  });
+}

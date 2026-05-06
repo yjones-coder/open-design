@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
@@ -26,6 +26,7 @@ import {
 import type { ToolPackConfig } from "../config.js";
 import { DESKTOP_LOG_ECHO_ENV } from "./constants.js";
 import { listDirectories, pathExists, removeTree } from "./fs.js";
+import { readBuiltAppManifest } from "./manifest.js";
 import { invokeNsis, runTimed } from "./nsis.js";
 import {
   createWinRemovalPlan,
@@ -35,7 +36,6 @@ import {
 } from "./paths.js";
 import { cleanupWinRegistryResidues, queryWinRegistryEntries } from "./registry.js";
 import type {
-  WinBuiltAppManifest,
   WinCleanupResult,
   WinInspectResult,
   WinInstallResult,
@@ -142,21 +142,10 @@ export async function installPackedWinApp(config: ToolPackConfig): Promise<WinIn
   };
 }
 
-async function readBuiltAppManifest(paths: WinPaths): Promise<WinBuiltAppManifest | null> {
-  try {
-    const manifest = JSON.parse(await readFile(paths.builtManifestPath, "utf8")) as WinBuiltAppManifest;
-    if (manifest.version !== 1) return null;
-    if (!(await pathExists(manifest.executablePath))) return null;
-    return manifest;
-  } catch {
-    return null;
-  }
-}
-
 async function resolveStartTarget(config: ToolPackConfig): Promise<{ configPath: string | null; executablePath: string; source: "built" | "installed" }> {
   const paths = resolveWinPaths(config);
   if (await pathExists(paths.installedExePath)) return { configPath: null, executablePath: paths.installedExePath, source: "installed" };
-  const builtManifest = await readBuiltAppManifest(paths);
+  const builtManifest = await readBuiltAppManifest(paths, { requireExecutable: true });
   if (builtManifest != null) return { configPath: builtManifest.configPath, executablePath: builtManifest.executablePath, source: "built" };
   if (await pathExists(paths.unpackedExePath)) return { configPath: null, executablePath: paths.unpackedExePath, source: "built" };
   throw new Error(`no windows app executable found for namespace=${config.namespace}; run tools-pack win build first or tools-pack win install after building an NSIS installer`);
@@ -323,7 +312,7 @@ export async function listPackedWinNamespaces(config: ToolPackConfig): Promise<W
   const registryEntries = await queryWinRegistryEntries(paths);
   const productNamespaceRoot = resolveWinProductNamespaceRoot(config);
   const productUserDataRoot = resolveWinProductUserDataRoot();
-  const builtManifest = await readBuiltAppManifest(paths);
+  const builtManifest = await readBuiltAppManifest(paths, { requireExecutable: true });
   return {
     current: {
       builtExecutableExists: builtManifest != null || await pathExists(paths.unpackedExePath),
