@@ -15,6 +15,8 @@ export type PackagedWebOutputMode = "server" | "standalone";
 
 export type RawPackagedConfig = {
   appVersion?: string;
+  daemonCliEntryRelative?: string;
+  daemonSidecarEntryRelative?: string;
   namespace?: string;
   namespaceBaseRoot?: string;
   nodeCommandRelative?: string;
@@ -26,6 +28,8 @@ export type RawPackagedConfig = {
 
 export type PackagedConfig = {
   appVersion: string | null;
+  daemonCliEntry: string | null;
+  daemonSidecarEntry: string | null;
   namespace: string;
   namespaceBaseRoot: string;
   nodeCommand: string | null;
@@ -136,10 +140,14 @@ export async function readPackagedConfig(): Promise<PackagedConfig> {
       ? process.env[PACKAGED_WEB_STANDALONE_ROOT_ENV] ?? raw.webStandaloneRoot
       : raw.webStandaloneRoot,
   );
+  const daemonCliEntry = await resolvePackagedRelativeEntry(raw.daemonCliEntryRelative);
+  const daemonSidecarEntry = await resolvePackagedRelativeEntry(raw.daemonSidecarEntryRelative);
   const webSidecarEntry = await resolvePackagedRelativeEntry(raw.webSidecarEntryRelative);
 
   return {
     appVersion: cleanOptionalString(raw.appVersion),
+    daemonCliEntry,
+    daemonSidecarEntry,
     namespace,
     namespaceBaseRoot,
     nodeCommand,

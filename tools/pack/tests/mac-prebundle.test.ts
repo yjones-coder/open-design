@@ -5,8 +5,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  MAC_DAEMON_PREBUNDLE_ESM_REQUIRE_BANNER,
   MAC_PREBUNDLE_ESBUILD_TARGET,
   MAC_PREBUNDLE_POLICIES,
+  MAC_PREBUNDLE_RUNTIME_DEPENDENCIES,
+  MAC_PREBUNDLED_DAEMON_CLI_RELATIVE_PATH,
+  MAC_PREBUNDLED_DAEMON_SIDECAR_RELATIVE_PATH,
   MAC_PREBUNDLED_WEB_SIDECAR_RELATIVE_PATH,
   assertMacPrebundleMetafile,
   findForbiddenMacPrebundleInputs,
@@ -36,31 +40,36 @@ describe("mac standalone prebundle policy", () => {
     ).toBe(true);
   });
 
-  it("excludes only packages replaced by mac standalone prebundles", () => {
-    expect(
-      shouldInstallInternalPackageForMacPrebundle({
-        packageName: "@open-design/web",
-        webOutputMode: "standalone",
-      }),
-    ).toBe(false);
-    expect(
-      shouldInstallInternalPackageForMacPrebundle({
-        packageName: "@open-design/packaged",
-        webOutputMode: "standalone",
-      }),
-    ).toBe(false);
-    expect(
-      shouldInstallInternalPackageForMacPrebundle({
-        packageName: "@open-design/daemon",
-        webOutputMode: "standalone",
-      }),
-    ).toBe(true);
+  it("excludes internal packages replaced by mac standalone prebundles", () => {
+    for (const packageName of [
+      "@open-design/contracts",
+      "@open-design/daemon",
+      "@open-design/desktop",
+      "@open-design/packaged",
+      "@open-design/platform",
+      "@open-design/sidecar",
+      "@open-design/sidecar-proto",
+      "@open-design/web",
+    ]) {
+      expect(
+        shouldInstallInternalPackageForMacPrebundle({
+          packageName,
+          webOutputMode: "standalone",
+        }),
+      ).toBe(false);
+    }
   });
 
   it("documents the explicit code-level bundle boundaries", () => {
     expect(MAC_PREBUNDLE_ESBUILD_TARGET).toBe("node24");
     expect(MAC_PREBUNDLE_POLICIES.packagedMain.externals).toEqual(["electron"]);
+    expect(MAC_PREBUNDLE_POLICIES.daemonCli.externals).toEqual(["better-sqlite3"]);
+    expect(MAC_PREBUNDLE_POLICIES.daemonSidecar.externals).toEqual(["better-sqlite3"]);
     expect(MAC_PREBUNDLE_POLICIES.webSidecar.externals).toEqual([]);
+    expect(MAC_DAEMON_PREBUNDLE_ESM_REQUIRE_BANNER).toContain("createRequire");
+    expect(MAC_PREBUNDLE_RUNTIME_DEPENDENCIES).toEqual({ "better-sqlite3": "12.9.0" });
+    expect(MAC_PREBUNDLED_DAEMON_CLI_RELATIVE_PATH).toBe("app/prebundled/daemon/daemon-cli.mjs");
+    expect(MAC_PREBUNDLED_DAEMON_SIDECAR_RELATIVE_PATH).toBe("app/prebundled/daemon/daemon-sidecar.mjs");
     expect(MAC_PREBUNDLED_WEB_SIDECAR_RELATIVE_PATH).toBe("app/prebundled/web-sidecar.mjs");
   });
 });

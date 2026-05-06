@@ -30,10 +30,15 @@ import {
 
 import type { ToolPackBuildOutput, ToolPackConfig } from "./config.js";
 import {
+  MAC_DAEMON_PREBUNDLE_ESM_REQUIRE_BANNER,
   MAC_PREBUNDLE_ESBUILD_TARGET,
+  MAC_PREBUNDLE_ENTRYPOINTS_DIR_NAME,
   MAC_PREBUNDLE_META_DIR_NAME,
   MAC_PREBUNDLE_POLICIES,
+  MAC_PREBUNDLE_RUNTIME_DEPENDENCIES,
   MAC_PREBUNDLED_APP_DIR_NAME,
+  MAC_PREBUNDLED_DAEMON_CLI_RELATIVE_PATH,
+  MAC_PREBUNDLED_DAEMON_SIDECAR_RELATIVE_PATH,
   MAC_PREBUNDLED_PACKAGED_MAIN_RELATIVE_PATH,
   MAC_PREBUNDLED_WEB_SIDECAR_RELATIVE_PATH,
   assertMacPrebundleMetafile,
@@ -70,6 +75,12 @@ type MacPaths = {
   assembledMainEntryPath: string;
   assembledPackageJsonPath: string;
   assembledPrebundledRoot: string;
+  daemonCliPrebundleEntrypointPath: string;
+  daemonCliPrebundlePath: string;
+  daemonPrebundleMetaPath: string;
+  daemonPrebundleRoot: string;
+  daemonSidecarPrebundleEntrypointPath: string;
+  daemonSidecarPrebundlePath: string;
   dmgPath: string;
   installApplicationsRoot: string;
   installedAppPath: string;
@@ -269,6 +280,12 @@ function resolveMacPaths(config: ToolPackConfig): MacPaths {
     assembledMainEntryPath: join(namespaceRoot, "assembled", "app", "main.cjs"),
     assembledPackageJsonPath: join(namespaceRoot, "assembled", "app", "package.json"),
     assembledPrebundledRoot: join(namespaceRoot, "assembled", "app", MAC_PREBUNDLED_APP_DIR_NAME),
+    daemonCliPrebundleEntrypointPath: join(namespaceRoot, MAC_PREBUNDLE_ENTRYPOINTS_DIR_NAME, "daemon-cli.js"),
+    daemonCliPrebundlePath: join(namespaceRoot, "assembled", MAC_PREBUNDLED_DAEMON_CLI_RELATIVE_PATH),
+    daemonPrebundleMetaPath: join(namespaceRoot, MAC_PREBUNDLE_META_DIR_NAME, "daemon.meta.json"),
+    daemonPrebundleRoot: join(namespaceRoot, "assembled", "app", MAC_PREBUNDLED_APP_DIR_NAME, "daemon"),
+    daemonSidecarPrebundleEntrypointPath: join(namespaceRoot, MAC_PREBUNDLE_ENTRYPOINTS_DIR_NAME, "daemon-sidecar.js"),
+    daemonSidecarPrebundlePath: join(namespaceRoot, "assembled", MAC_PREBUNDLED_DAEMON_SIDECAR_RELATIVE_PATH),
     dmgPath: join(namespaceRoot, "dmg", `${PRODUCT_NAME}-${namespaceToken}.dmg`),
     installApplicationsRoot,
     installedAppPath,
@@ -300,6 +317,11 @@ async function pathExists(path: string): Promise<boolean> {
 
 function toPosixPath(value: string): string {
   return value.replaceAll("\\", "/");
+}
+
+function toRelativeImportSpecifier(fromDirectory: string, targetPath: string): string {
+  const specifier = toPosixPath(relative(fromDirectory, targetPath));
+  return specifier.startsWith(".") ? specifier : `./${specifier}`;
 }
 
 async function sizePathBytes(
@@ -367,7 +389,7 @@ async function runEsbuild(config: ToolPackConfig, args: string[]): Promise<void>
   await runPnpm(config, ["--filter", "@open-design/packaged", "exec", "esbuild", ...args]);
 }
 
-async function buildPrebundledStandaloneWebRuntime(
+async function buildPrebundledStandaloneRuntime(
   config: ToolPackConfig,
   paths: MacPaths,
 ): Promise<void> {
@@ -401,6 +423,59 @@ async function buildPrebundledStandaloneWebRuntime(
   await assertMacPrebundleMetafile({
     metafilePath: paths.webSidecarPrebundleMetaPath,
     policyName: "webSidecar",
+  });
+
+  await mkdir(dirname(paths.daemonSidecarPrebundleEntrypointPath), { recursive: true });
+  await writeFile(
+    paths.daemonSidecarPrebundleEntrypointPath,
+    `import ${JSON.stringify(
+      toRelativeImportSpecifier(
+        dirname(paths.daemonSidecarPrebundleEntrypointPath),
+        join(config.workspaceRoot, "apps", "daemon", "dist", "sidecar", "index.js"),
+      ),
+    )};\n`,
+    "utf8",
+  );
+  await writeFile(
+    paths.daemonCliPrebundleEntrypointPath,
+    [
+      'import { fileURLToPath } from "node:url";',
+      "const selfPath = fileURLToPath(import.meta.url);",
+      "process.env.OD_BIN ??= selfPath;",
+      "process.env.OD_DAEMON_CLI_PATH ??= selfPath;",
+      `await import(${JSON.stringify(
+        toRelativeImportSpecifier(
+          dirname(paths.daemonCliPrebundleEntrypointPath),
+          join(config.workspaceRoot, "apps", "daemon", "dist", "cli.js"),
+        ),
+      )});`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await runEsbuild(config, [
+    paths.daemonSidecarPrebundleEntrypointPath,
+    paths.daemonCliPrebundleEntrypointPath,
+    "--bundle",
+    "--splitting",
+    "--platform=node",
+    "--format=esm",
+    `--target=${MAC_PREBUNDLE_ESBUILD_TARGET}`,
+    `--banner:js=${MAC_DAEMON_PREBUNDLE_ESM_REQUIRE_BANNER}`,
+    ...MAC_PREBUNDLE_POLICIES.daemonSidecar.externals.map((dependency) => `--external:${dependency}`),
+    `--outdir=${paths.daemonPrebundleRoot}`,
+    "--entry-names=[name]",
+    "--chunk-names=chunks/[name]-[hash]",
+    "--out-extension:.js=.mjs",
+    `--metafile=${paths.daemonPrebundleMetaPath}`,
+  ]);
+  await assertMacPrebundleMetafile({
+    metafilePath: paths.daemonPrebundleMetaPath,
+    policyName: "daemonSidecar",
+  });
+  await assertMacPrebundleMetafile({
+    metafilePath: paths.daemonPrebundleMetaPath,
+    policyName: "daemonCli",
   });
 }
 
@@ -503,6 +578,15 @@ async function collectWorkspaceTarballs(
   const packedTarballs: PackedTarballInfo[] = [];
 
   for (const packageInfo of INTERNAL_PACKAGES) {
+    if (
+      !shouldInstallInternalPackageForMacPrebundle({
+        packageName: packageInfo.name,
+        webOutputMode: config.webOutputMode,
+      })
+    ) {
+      continue;
+    }
+
     const beforeEntries = new Set(await readdir(paths.tarballsRoot));
     await runPnpm(config, [
       "-C",
@@ -533,7 +617,8 @@ async function writeAssembledApp(
   const tarballByPackage = Object.fromEntries(
     packedTarballs.map((entry) => [entry.packageName, entry.fileName] as const),
   );
-  const dependencies = Object.fromEntries(
+  const usePrebundledStandaloneWeb = shouldUseMacStandalonePrebundle(config.webOutputMode);
+  const internalDependencies = Object.fromEntries(
     INTERNAL_PACKAGES.filter((packageInfo) =>
       shouldInstallInternalPackageForMacPrebundle({
         packageName: packageInfo.name,
@@ -545,7 +630,10 @@ async function writeAssembledApp(
       return [packageInfo.name, `file:${relative(paths.assembledAppRoot, join(paths.tarballsRoot, tarball))}`];
     }),
   );
-  const usePrebundledStandaloneWeb = shouldUseMacStandalonePrebundle(config.webOutputMode);
+  const dependencies = {
+    ...internalDependencies,
+    ...(usePrebundledStandaloneWeb ? MAC_PREBUNDLE_RUNTIME_DEPENDENCIES : {}),
+  };
 
   await writeFile(
     paths.assembledPackageJsonPath,
@@ -565,7 +653,7 @@ async function writeAssembledApp(
     "utf8",
   );
   if (usePrebundledStandaloneWeb) {
-    await buildPrebundledStandaloneWebRuntime(config, paths);
+    await buildPrebundledStandaloneRuntime(config, paths);
   }
   await writeFile(
     paths.assembledMainEntryPath,
@@ -577,6 +665,8 @@ async function writeAssembledApp(
     `${JSON.stringify(
       {
         appVersion: packagedVersion,
+        ...(usePrebundledStandaloneWeb ? { daemonCliEntryRelative: MAC_PREBUNDLED_DAEMON_CLI_RELATIVE_PATH } : {}),
+        ...(usePrebundledStandaloneWeb ? { daemonSidecarEntryRelative: MAC_PREBUNDLED_DAEMON_SIDECAR_RELATIVE_PATH } : {}),
         namespace: config.namespace,
         nodeCommandRelative: "open-design/bin/node",
         ...(usePrebundledStandaloneWeb ? { webSidecarEntryRelative: MAC_PREBUNDLED_WEB_SIDECAR_RELATIVE_PATH } : {}),

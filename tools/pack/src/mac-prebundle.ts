@@ -6,11 +6,26 @@ export const MAC_PREBUNDLED_APP_DIR_NAME = "prebundled";
 export const MAC_PREBUNDLE_META_DIR_NAME = "prebundle-meta";
 export const MAC_PREBUNDLED_PACKAGED_MAIN_RELATIVE_PATH = "app/prebundled/packaged-main.mjs";
 export const MAC_PREBUNDLED_WEB_SIDECAR_RELATIVE_PATH = "app/prebundled/web-sidecar.mjs";
+export const MAC_PREBUNDLED_DAEMON_CLI_RELATIVE_PATH = "app/prebundled/daemon/daemon-cli.mjs";
+export const MAC_PREBUNDLED_DAEMON_SIDECAR_RELATIVE_PATH = "app/prebundled/daemon/daemon-sidecar.mjs";
 export const MAC_PREBUNDLE_ESBUILD_TARGET = "node24";
+export const MAC_DAEMON_PREBUNDLE_ESM_REQUIRE_BANNER =
+  'import { createRequire as __odCreateRequire } from "node:module"; const require = __odCreateRequire(import.meta.url);';
+export const MAC_PREBUNDLE_ENTRYPOINTS_DIR_NAME = "prebundle-entrypoints";
+
+export const MAC_PREBUNDLE_RUNTIME_DEPENDENCIES = {
+  "better-sqlite3": "12.9.0",
+} as const;
 
 export const MAC_STANDALONE_PREBUNDLE_EXCLUDED_INTERNAL_PACKAGES = [
-  "@open-design/web",
+  "@open-design/contracts",
+  "@open-design/daemon",
+  "@open-design/desktop",
   "@open-design/packaged",
+  "@open-design/platform",
+  "@open-design/sidecar",
+  "@open-design/sidecar-proto",
+  "@open-design/web",
 ] as const;
 
 export const MAC_PREBUNDLE_POLICIES = {
@@ -25,6 +40,32 @@ export const MAC_PREBUNDLE_POLICIES = {
       "/node_modules/react-dom/",
     ],
     label: "packaged main",
+  },
+  daemonCli: {
+    externals: ["better-sqlite3"],
+    forbiddenInputs: [
+      "/node_modules/@open-design/daemon/",
+      "/node_modules/better-sqlite3/",
+      "/node_modules/electron/",
+      "/node_modules/next/",
+      "/node_modules/openai/",
+      "/node_modules/react/",
+      "/node_modules/react-dom/",
+    ],
+    label: "daemon cli",
+  },
+  daemonSidecar: {
+    externals: ["better-sqlite3"],
+    forbiddenInputs: [
+      "/node_modules/@open-design/daemon/",
+      "/node_modules/better-sqlite3/",
+      "/node_modules/electron/",
+      "/node_modules/next/",
+      "/node_modules/openai/",
+      "/node_modules/react/",
+      "/node_modules/react-dom/",
+    ],
+    label: "daemon sidecar",
   },
   webSidecar: {
     externals: [],
