@@ -291,6 +291,36 @@ async function pruneCopiedSharp(destinationRoot) {
   return removedPaths;
 }
 
+async function dedupeCopiedStandaloneNext(destinationRoot, destinationWebRoot, platformName) {
+  if (platformName !== "win32") return null;
+
+  const nodeModulesRoot = path.join(destinationRoot, "node_modules");
+  const rootNextRoot = path.join(nodeModulesRoot, "next");
+  const pnpmHoistedNextRoot = path.join(nodeModulesRoot, ".pnpm", "node_modules", "next");
+  const webNextRoot = path.join(destinationWebRoot, "node_modules", "next");
+  const removedPaths = [];
+
+  if (!(await pathExists(path.join(webNextRoot, "package.json")))) {
+    throw new Error(`[tools-pack web-standalone] copied standalone app-local Next package missing: ${webNextRoot}`);
+  }
+
+  await removePathAndRecord(
+    rootNextRoot,
+    "copied standalone root next public-hoist duplicate",
+    removedPaths,
+  );
+  await removePathAndRecord(
+    pnpmHoistedNextRoot,
+    "copied standalone pnpm-hoisted next duplicate superseded by app-local next",
+    removedPaths,
+  );
+
+  return {
+    removedPaths,
+    retainedPath: webNextRoot,
+  };
+}
+
 async function pruneBrokenSymlinks(root, current = root, removedPaths = [], reason = "broken symlink") {
   let metadata;
   try {
@@ -463,6 +493,46 @@ async function auditCopiedStandalone(config, installResult, platformName) {
   };
 }
 
+async function auditCopiedStandaloneNextDedupe(installResult, platformName) {
+  if (platformName !== "win32") return null;
+
+  const serverPath = path.join(installResult.destinationWebRoot, "server.js");
+  const retainedNextRoot = path.join(installResult.destinationWebRoot, "node_modules", "next");
+  const retainedNextPackagePath = path.join(retainedNextRoot, "package.json");
+  const checkedPaths = [
+    path.join(installResult.destinationRoot, "node_modules", "next"),
+    path.join(installResult.destinationRoot, "node_modules", ".pnpm", "node_modules", "next"),
+  ];
+  const remainingPaths = [];
+
+  for (const checkedPath of checkedPaths) {
+    if (await pathExists(checkedPath)) remainingPaths.push(checkedPath);
+  }
+  if (remainingPaths.length > 0) {
+    throw new Error(
+      `[tools-pack web-standalone] copied standalone next dedupe audit found remaining duplicate paths: ${remainingPaths.join(", ")}`,
+    );
+  }
+
+  if (!(await pathExists(retainedNextPackagePath))) {
+    throw new Error(`[tools-pack web-standalone] copied standalone retained app-local next missing: ${retainedNextPackagePath}`);
+  }
+
+  const resolvedNextPackagePath = createRequire(serverPath).resolve("next/package.json");
+  if (!isWithin(retainedNextRoot, resolvedNextPackagePath)) {
+    throw new Error(
+      `[tools-pack web-standalone] copied standalone next resolved outside retained app-local next: ${resolvedNextPackagePath}`,
+    );
+  }
+
+  return {
+    checkedPaths,
+    remainingPaths,
+    resolvedNextPackagePath,
+    retainedNextRoot,
+  };
+}
+
 async function pruneRootNext(appNodeModulesRoot, platformName) {
   const removedPaths = [];
 
@@ -596,6 +666,11 @@ async function runWebStandaloneAfterPack(context) {
   const appNodeModulesRoot = resolveRootAppNodeModulesRoot(resourcesRoot);
   const installResult = await installStandaloneResource(config, resourcesRoot, context.electronPlatformName);
   const copiedPrune = config.pruneCopiedSharp ? await pruneCopiedSharp(installResult.destinationRoot) : [];
+  const copiedNextDedupe = await dedupeCopiedStandaloneNext(
+    installResult.destinationRoot,
+    installResult.destinationWebRoot,
+    context.electronPlatformName,
+  );
   const copiedBuildResiduePrune = context.electronPlatformName === "win32"
     ? await pruneSourceBuildResidue(installResult.destinationRoot, "copied standalone source/build residue")
     : [];
@@ -604,6 +679,10 @@ async function runWebStandaloneAfterPack(context) {
     installResult.destinationRoot,
     [],
     "copied broken symlink",
+  );
+  const copiedNextDedupeAudit = await auditCopiedStandaloneNextDedupe(
+    installResult,
+    context.electronPlatformName,
   );
   const copiedAudit = await auditCopiedStandalone(config, installResult, context.electronPlatformName);
   const rootPrune = config.pruneRootNext ? await pruneRootNext(appNodeModulesRoot, context.electronPlatformName) : [];
@@ -635,6 +714,8 @@ async function runWebStandaloneAfterPack(context) {
     brokenSymlinkPrune,
     copiedAudit,
     copiedBuildResiduePrune,
+    copiedNextDedupe,
+    copiedNextDedupeAudit,
     copiedPrune,
     generatedAt: new Date().toISOString(),
     platformName: context.electronPlatformName,

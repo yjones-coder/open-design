@@ -161,6 +161,7 @@ export type WinSizeReport = {
     copiedStandaloneNextBytes: number;
     copiedStandaloneNextSwcBytes: number;
     copiedStandaloneNodeModulesBytes: number;
+    copiedStandalonePnpmHoistedNextBytes: number;
     copiedStandaloneSharpLibvipsBytes: number;
     copiedStandaloneSourcemapBytes: number;
     copiedStandaloneTsbuildInfoBytes: number;
@@ -1082,6 +1083,9 @@ async function collectWinSizeReport(config: ToolPackConfig, paths: WinPaths): Pr
         await sumChildDirectorySizes(join(copiedStandaloneNodeModulesRoot, "@next"), (name) => name.startsWith("swc-win32-")) +
         await sumChildDirectorySizes(join(copiedStandaloneWebNodeModulesRoot, "@next"), (name) => name.startsWith("swc-win32-")),
       copiedStandaloneNodeModulesBytes: await sizePathBytes(copiedStandaloneNodeModulesRoot),
+      copiedStandalonePnpmHoistedNextBytes: await sizePathBytes(
+        join(copiedStandaloneNodeModulesRoot, ".pnpm", "node_modules", "next"),
+      ),
       copiedStandaloneSharpLibvipsBytes: await sizePathBytes(
         join(copiedStandaloneNodeModulesRoot, "@img", "sharp-libvips-win32-x64"),
       ),
