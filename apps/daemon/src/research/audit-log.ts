@@ -50,11 +50,26 @@ interface AuditOptions {
   dataDir?: string;           // OD_DATA_DIR override
 }
 
+// Mirrors `isSafeId` in apps/daemon/src/projects.ts. Inlined to keep this
+// research starter free of imports from server-internal modules; the planned
+// `GET /api/projects/:id/audit` route will take `:id` from a URL parameter,
+// so this guard must run before any path join / mkdirSync.
+function isSafeProjectId(id: string): boolean {
+  return typeof id === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(id);
+}
+
 function auditFile(projectId: string, opts: AuditOptions): string {
+  if (!isSafeProjectId(projectId)) throw new Error('invalid project id');
   const root = opts.dataDir
     ? path.resolve(opts.dataDir)
     : path.join(opts.projectRoot, '.od');
-  const dir = path.join(root, 'projects', projectId);
+  const projectsRoot = path.resolve(root, 'projects');
+  const dir = path.resolve(projectsRoot, projectId);
+  // Defense in depth: even if a future `isSafeProjectId` change loosens the
+  // allowlist, refuse to operate outside `<root>/projects/`.
+  if (dir !== projectsRoot && !dir.startsWith(projectsRoot + path.sep)) {
+    throw new Error('project id escapes projects root');
+  }
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, 'audit.jsonl');
 }
