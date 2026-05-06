@@ -1,0 +1,49 @@
+{
+  "sources": [
+    {
+      "type": "github_api",
+      "description": "GitHub REST API v3",
+      "endpoints": [
+        "GET /repos/nexu-io/open-design",
+        "GET /repos/nexu-io/open-design/contributors",
+        "GET /repos/nexu-io/open-design/issues",
+        "GET /repos/nexu-io/open-design/pulls"
+      ],
+      "fetchedAt": "2026-05-06T09:30:00Z"
+    }
+  ],
+  "transformations": [
+    {
+      "step": "Data normalization",
+      "description": "Converted GitHub API responses to compact dashboard format",
+      "operations": [
+        "Formatted large numbers with comma separators",
+        "Calculated star and fork growth trends",
+        "Extracted top 5 contributors by contribution count",
+        "Selected most recent 5 issues and pull requests",
+        "Generated chart data for star growth and fork trends"
+      ]
+    },
+    {
+      "step": "Privacy filtering",
+      "description": "Applied safe data practices",
+      "operations": [
+        "Preserved only public GitHub profile information",
+        "Used public avatar URLs",
+        "Excluded sensitive or internal repository metadata"
+      ]
+    }
+  ],
+  "notes": [
+    "All data sourced from public GitHub API endpoints",
+    "No authentication tokens or credentials stored",
+    "Star growth calculated based on repository creation date (8 days old)",
+    "Fork growth estimated from recent activity patterns",
+    "Chart heights normalized to percentages for responsive display"
+  ],
+  "refreshPolicy": {
+    "recommended": "hourly",
+    "minInterval": "15 minutes",
+    "note": "GitHub API has rate limits; recommend caching for production use"
+  }
+}
