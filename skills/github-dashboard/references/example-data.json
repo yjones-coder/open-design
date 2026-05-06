@@ -2,6 +2,7 @@
   "repository": {
     "name": "open-design",
     "fullName": "nexu-io/open-design",
+    "url": "https://github.com/nexu-io/open-design",
     "description": "Local-first, open-source alternative to Anthropic's Claude Design. 19 Skills · 71 brand-grade Design Systems · Generate web/desktop/mobile prototypes · slides · images · videos",
     "language": "TypeScript",
     "license": "Apache-2.0",
@@ -81,7 +82,8 @@
   ],
   "recentActivity": [
     {
-      "isPR": true,
+      "typeText": "PR",
+      "typeClass": "pr",
       "title": "Add Alipay merchant onboarding skill",
       "label": "feature",
       "labelClass": "feature-pill",
@@ -90,7 +92,8 @@
       "updated": "2 hours ago"
     },
     {
-      "isPR": false,
+      "typeText": "ISSUE",
+      "typeClass": "issue",
       "title": "Add clear success feedback after saving API keys in Settings",
       "label": "bug",
       "labelClass": "danger-pill",
@@ -99,7 +102,8 @@
       "updated": "2 hours ago"
     },
     {
-      "isPR": false,
+      "typeText": "ISSUE",
+      "typeClass": "issue",
       "title": "hermes json-rpc id 2: Invalid params",
       "label": "bug",
       "labelClass": "danger-pill",
@@ -108,7 +112,8 @@
       "updated": "3 hours ago"
     },
     {
-      "isPR": true,
+      "typeText": "PR",
+      "typeClass": "pr",
       "title": "fix: 修复0.4.0版本聊天窗口宽度溢出问题",
       "label": "bug-fix",
       "labelClass": "active-pill",
@@ -117,7 +122,8 @@
       "updated": "4 hours ago"
     },
     {
-      "isPR": false,
+      "typeText": "ISSUE",
+      "typeClass": "issue",
       "title": "Fix Open Design not reading the latest model list from Codex CLI",
       "label": "bug",
       "labelClass": "danger-pill",

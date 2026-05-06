@@ -27,7 +27,9 @@ od:
   outputs:
     primary: index.html
     secondary:
+      - template.html
       - data.json
+      - artifact.json
       - provenance.json
   capabilities_required:
     - shell
@@ -48,12 +50,13 @@ github-dashboard/
 └── references/
     ├── template.html                    ← live-artifact-compatible HTML template
     ├── example-data.json                ← normalized public GitHub data shape
+    ├── artifact-example.json            ← minimal live-artifact create input
     └── provenance-example.json          ← safe source/provenance example
 ```
 
 ## When to use this skill
 
-Use this when the user asks for a dashboard or report about one or more GitHub repositories, for example:
+Use this when the user asks for a dashboard or report about a single GitHub repository, for example:
 
 - repository growth dashboard
 - open-source project health report
@@ -66,19 +69,25 @@ If the user asks for refreshability, source auditability, or scheduled updates, 
 ## Workflow
 
 1. **Resolve repository scope**
-   - Parse `owner/repo` from the brief. If multiple repositories are requested, decide whether to show them as a comparison table or an aggregate org dashboard.
+   - Parse `owner/repo` from the brief.
+   - This v1 skill is scoped to one repository. If multiple repositories are requested, ask the user to pick the primary repository or create one dashboard per repository.
    - If the repo is missing, ask one concise question for the GitHub URL or `owner/repo`.
 
 2. **Collect public GitHub data**
    - Prefer GitHub CLI/API for public repository data when available.
-   - Useful read-only endpoints: `GET /repos/{owner}/{repo}`, `GET /repos/{owner}/{repo}/contributors`, `GET /repos/{owner}/{repo}/issues`, `GET /repos/{owner}/{repo}/pulls`, and `GET /repos/{owner}/{repo}/stats/participation`.
+   - Current stars/forks/watchers/open issue count: `GET /repos/{owner}/{repo}` (`stargazers_count`, `forks_count`, `watchers_count`, `open_issues_count`).
+   - Contributors: paginate `GET /repos/{owner}/{repo}/contributors?per_page=100&page=N`, sort by `contributions` descending, and take the top N used by the dashboard. If only page 1 is available, label totals as first-page estimates.
+   - Issues: use GitHub Search API (`repo:{owner}/{repo} is:issue`) for total counts, or paginate `GET /repos/{owner}/{repo}/issues?state=all` and filter out items with a `pull_request` field.
+   - Pull requests: use GitHub Search API (`repo:{owner}/{repo} is:pr`) for total counts, or paginate `GET /repos/{owner}/{repo}/pulls?state=all` and count pages via the `Link` header.
+   - Recent activity: combine the newest issues and pull requests, normalize them into display-ready rows, and cap the preview list at 5–10 items.
+   - Growth/delta metrics: GitHub REST does not expose complete historical star/fork deltas. Use GraphQL, stargazer event snapshots, the Events API where available, or explicitly mark deltas as estimated/synthetic in `provenance.json`.
    - Do not store auth tokens, raw HTTP envelopes, cookies, rate-limit headers, or private metadata.
 
 3. **Normalize into dashboard data**
-   - Required `repository`: `name`, `fullName`, `description`, `language`, `license`, `created`, `lastUpdated`.
+   - Required `repository`: `name`, `fullName`, `url`, `description`, `language`, `license`, `created`, `lastUpdated`.
    - Required `metrics`: stars, forks, contributors, issues, pull requests. Store display-ready totals plus small deltas or growth notes.
    - Required `contributors`: top 5–8 contributors with `login`, `avatar`, and `contributions`.
-   - Required `recentActivity`: recent issues/PRs with title, type, author, avatar, status label, and relative timestamp.
+   - Required `recentActivity`: display-ready rows with `title`, `typeText`, `typeClass`, `label`, `labelClass`, `author`, `authorAvatar`, and `updated`. Do not rely on template conditionals for issue/PR switching.
    - Chart data can be synthetic only when GitHub does not expose the exact history; document the transformation in provenance.
 
 4. **Apply the visual system**
