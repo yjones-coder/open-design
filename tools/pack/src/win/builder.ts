@@ -230,7 +230,7 @@ export async function runElectronBuilder(
     portable: config.portable,
     platform: "win32",
     resourceTreeKey: resourceTree.key,
-    schemaVersion: 2,
+    schemaVersion: 3,
     target: "dir",
     webOutputMode: config.webOutputMode,
     winIcon: await hashPath(winResources.icon),

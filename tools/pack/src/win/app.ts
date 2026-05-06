@@ -160,7 +160,7 @@ async function createWorkspaceTarballsCacheKey(config: ToolPackConfig): Promise<
     packageHashes,
     packageManager: rootPackageJson.packageManager,
     pnpmLock: await hashPath(join(config.workspaceRoot, "pnpm-lock.yaml")),
-    schemaVersion: 2,
+    schemaVersion: 3,
   });
 }
 
@@ -253,7 +253,7 @@ async function createAssembledAppCacheKey(
     node: "win.assembled-app",
     packedTarballs,
     platform: "win32",
-    schemaVersion: 4,
+    schemaVersion: 5,
     tarballsKey,
     webOutputMode: config.webOutputMode,
   });
