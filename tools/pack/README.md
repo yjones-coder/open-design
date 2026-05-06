@@ -80,21 +80,6 @@ Packaged runtime state is namespace-scoped under `.tmp/tools-pack/runtime/win/na
 `--to dir` may point `built-app.json` at an immutable cached `win-unpacked` executable while keeping
 namespace-local config and runtime paths outside that cache entry.
 
-### FAQ: Why should Windows NSIS smoke namespaces stay short?
-
-Windows installer smoke tests should use short namespaces such as `rg`, `smoke`, or `nsis-a` when validating
-`tools-pack win install/start/inspect/cleanup`. NSIS extracts deeply nested Next.js standalone files under the
-namespace-scoped install directory; long namespaces can push installed paths past the traditional Windows 260-character
-limit even when the builder `win-unpacked` output is correct.
-
-Observed example: namespace `regression-merge-nsis` installed successfully but the installed app failed to start because
-`next/dist/server/route-matcher-providers/helpers/cached-route-matcher-provider.js` was present in the builder output and
-missing from the installed directory. The installed path was 264 characters. Re-running the same NSIS smoke with namespace
-`rg` passed `install`, `start`, `inspect`, `logs`, `stop`, and `cleanup`.
-
-Use a long namespace only when intentionally testing installer path-length behavior. For ordinary capability regression,
-keep the namespace short so the smoke validates packaging/runtime behavior rather than Windows path-length tolerance.
-
 ## Linux
 
 Local lifecycle commands:
