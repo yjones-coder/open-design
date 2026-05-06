@@ -40,6 +40,8 @@ export const macResources = {
 
 export const winResources = {
   icon: join(resourcesRoot, "win", "icon.ico"),
+  sevenZipDll: join(resourcesRoot, "win", "7zip", "7z.dll"),
+  sevenZipExe: join(resourcesRoot, "win", "7zip", "7z.exe"),
   webStandaloneAfterPackHook: join(resourcesRoot, "web-standalone-after-pack.cjs"),
 } as const;
 

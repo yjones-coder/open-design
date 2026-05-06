@@ -26,6 +26,8 @@ export function resolveWinPaths(config: ToolPackConfig): WinPaths {
     exePath: join(namespaceRoot, "builder", `${PRODUCT_NAME}-${namespaceToken}.exe`),
     installDir,
     installedExePath: join(installDir, `${PRODUCT_NAME}.exe`),
+    installerPayloadPath: join(namespaceRoot, "installer", "payload.7z"),
+    installerScriptPath: join(namespaceRoot, "installer", "installer.nsi"),
     publicDesktopShortcutPath: join(process.env.PUBLIC ?? join(dirname(homedir()), "Public"), "Desktop", shortcutName),
     installMarkerPath: join(namespaceRoot, "logs", "install.marker.json"),
     installTimingPath: join(namespaceRoot, "logs", "install.timing.json"),

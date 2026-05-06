@@ -175,7 +175,12 @@ export async function runTimed<T>(timingPath: string, action: string, task: () =
 export async function invokeNsis(paths: WinPaths, command: string, args: string[], action: "install" | "uninstall"): Promise<void> {
   await appendNsisLog(paths, `${action} started`, { args, command });
   try {
-    await execFileAsync(command, args, { cwd: dirname(command), windowsHide: true });
+    const directoryArg = args.at(-1);
+    if (process.platform === "win32" && directoryArg?.startsWith("/D=")) {
+      await execFileAsync(command, args, { cwd: dirname(command), windowsHide: true, windowsVerbatimArguments: true });
+    } else {
+      await execFileAsync(command, args, { cwd: dirname(command), windowsHide: true });
+    }
     await appendNsisLog(paths, `${action} finished`, { code: 0, command });
   } catch (error) {
     const failure = error as { code?: unknown; stderr?: unknown; stdout?: unknown };

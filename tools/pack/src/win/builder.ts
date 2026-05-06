@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { hashJson, hashPath, ToolPackCache } from "../cache.js";
 import type { ToolPackConfig } from "../config.js";
 import { winResources } from "../resources.js";
+import { buildCustomWinNsisInstaller } from "./custom-installer.js";
 import {
   ELECTRON_BUILDER_ASAR,
   ELECTRON_BUILDER_BUILD_DEPENDENCIES_FROM_SOURCE,
@@ -213,22 +214,6 @@ export async function runElectronBuilder(
   electronReadyApp: ElectronReadyAppCacheResult,
   resourceTree: ResourceTreeResult,
 ): Promise<void> {
-  if (config.to !== "dir") {
-    await runElectronBuilderRaw(config, paths, electronReadyApp.appRoot);
-    if (await pathExists(paths.unpackedExePath)) {
-      await writeBuiltAppManifest(paths, {
-        appBuilderOutputRoot: paths.appBuilderOutputRoot,
-        cacheEntryPath: null,
-        configPath: join(paths.unpackedRoot, "resources", "open-design-config.json"),
-        executablePath: paths.unpackedExePath,
-        source: "namespace",
-        unpackedRoot: paths.unpackedRoot,
-        webStandaloneHookAuditPath: (await pathExists(paths.webStandaloneHookAuditPath)) ? paths.webStandaloneHookAuditPath : null,
-      });
-    }
-    return;
-  }
-
   const packagedVersion = await readPackagedVersion(config);
   const key = hashJson({
     afterPackHook: config.webOutputMode === "standalone" ? await hashPath(winResources.webStandaloneAfterPackHook) : null,
@@ -259,7 +244,7 @@ export async function runElectronBuilder(
     invalidate: async () => null,
     build: async ({ entryRoot }: { entryRoot: string }): Promise<ElectronBuilderDirCacheMetadata> => {
       await runElectronBuilderRaw(
-        config,
+        { ...config, to: "dir" },
         { ...createCacheLocalWinPaths(paths, entryRoot), resourceRoot: resourceTree.resourceRoot },
         electronReadyApp.appRoot,
       );
@@ -286,4 +271,16 @@ export async function runElectronBuilder(
     unpackedRoot: cachedUnpackedRoot,
     webStandaloneHookAuditPath: (await pathExists(paths.webStandaloneHookAuditPath)) ? paths.webStandaloneHookAuditPath : null,
   });
+  if (config.to === "nsis" || config.to === "all") {
+    await buildCustomWinNsisInstaller(config, paths, {
+      appBuilderOutputRoot: cachedBuilderRoot,
+      cacheEntryPath: manifest.entryPath,
+      configPath: paths.packagedConfigPath,
+      executablePath: cachedExecutablePath,
+      source: "cache",
+      unpackedRoot: cachedUnpackedRoot,
+      version: 1,
+      webStandaloneHookAuditPath: (await pathExists(paths.webStandaloneHookAuditPath)) ? paths.webStandaloneHookAuditPath : null,
+    });
+  }
 }

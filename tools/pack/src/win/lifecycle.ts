@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
@@ -39,6 +39,7 @@ import type {
   WinCleanupResult,
   WinInspectResult,
   WinInstallResult,
+  WinInstallPayloadReport,
   WinListResult,
   WinResetResult,
   WinResidueObservation,
@@ -90,6 +91,44 @@ async function writeJsonMarker(filePath: string, payload: Record<string, unknown
   await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
 
+async function collectFileTreeStats(root: string): Promise<{ fileCount: number; totalBytes: number }> {
+  const metadata = await stat(root).catch(() => null);
+  if (metadata == null) return { fileCount: 0, totalBytes: 0 };
+  if (!metadata.isDirectory()) return { fileCount: 1, totalBytes: metadata.size };
+
+  const children = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const childStats = await Promise.all(children.map((child) => collectFileTreeStats(join(root, child.name))));
+  return childStats.reduce(
+    (total, entry) => ({
+      fileCount: total.fileCount + entry.fileCount,
+      totalBytes: total.totalBytes + entry.totalBytes,
+    }),
+    { fileCount: 0, totalBytes: 0 },
+  );
+}
+
+async function collectInstallPayloadReport(paths: WinPaths): Promise<WinInstallPayloadReport> {
+  const topLevelEntries = await readdir(paths.installDir, { withFileTypes: true }).catch(() => []);
+  const topLevel = await Promise.all(
+    topLevelEntries.map(async (entry) => {
+      const entryPath = join(paths.installDir, entry.name);
+      const stats = await collectFileTreeStats(entryPath);
+      return { bytes: stats.totalBytes, fileCount: stats.fileCount, path: entry.name };
+    }),
+  );
+  const totals = topLevel.reduce(
+    (total, entry) => ({
+      fileCount: total.fileCount + entry.fileCount,
+      totalBytes: total.totalBytes + entry.bytes,
+    }),
+    { fileCount: 0, totalBytes: 0 },
+  );
+  return {
+    ...totals,
+    topLevel: topLevel.sort((left, right) => right.bytes - left.bytes || right.fileCount - left.fileCount),
+  };
+}
+
 async function observeWinResidues(config: ToolPackConfig, paths = resolveWinPaths(config)): Promise<WinResidueObservation> {
   return {
     installDirExists: await pathExists(paths.installDir),
@@ -120,9 +159,11 @@ export async function installPackedWinApp(config: ToolPackConfig): Promise<WinIn
   });
   if (!(await pathExists(paths.installedExePath))) throw new Error(`installer completed but executable is missing at ${paths.installedExePath}`);
   const registryEntries = await queryWinRegistryEntries(paths);
+  const installPayload = await collectInstallPayloadReport(paths);
   await writeJsonMarker(paths.installMarkerPath, {
     installedAt: new Date().toISOString(),
     installDir: paths.installDir,
+    installPayload,
     namespace: config.namespace,
     registryEntries: registryEntries.map((entry) => entry.keyPath),
   });
@@ -131,6 +172,7 @@ export async function installPackedWinApp(config: ToolPackConfig): Promise<WinIn
     desktopShortcutPath: paths.userDesktopShortcutPath,
     installDir: paths.installDir,
     installerPath: paths.setupPath,
+    installPayload,
     markerPath: paths.installMarkerPath,
     namespace: config.namespace,
     nsisLogPath: paths.nsisLogPath,

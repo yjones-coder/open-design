@@ -75,6 +75,8 @@ export type WinPaths = {
   exePath: string;
   installDir: string;
   installedExePath: string;
+  installerPayloadPath: string;
+  installerScriptPath: string;
   publicDesktopShortcutPath: string;
   latestYmlPath: string;
   installMarkerPath: string;
@@ -181,6 +183,7 @@ export type WinInstallResult = {
   desktopShortcutPath: string;
   installDir: string;
   installerPath: string;
+  installPayload: WinInstallPayloadReport;
   markerPath: string;
   namespace: string;
   nsisLogPath: string;
@@ -189,6 +192,16 @@ export type WinInstallResult = {
   startMenuShortcutPath: string;
   timingPath: string;
   uninstallerPath: string;
+};
+
+export type WinInstallPayloadReport = {
+  fileCount: number;
+  totalBytes: number;
+  topLevel: Array<{
+    bytes: number;
+    fileCount: number;
+    path: string;
+  }>;
 };
 
 export type WinStartResult = {

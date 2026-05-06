@@ -214,21 +214,128 @@ jobs:
         with:
           node-version: 24
 
+      - name: Compute Windows tools-pack cache key
+        id: win_tools_pack_cache_key
+        shell: pwsh
+        run: |
+          $epoch = (Get-Date).ToUniversalTime().ToString("yyyy-MM")
+          "epoch=$epoch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Restore Windows tools-pack cache
+        id: win_tools_pack_cache_restore
+        uses: actions/cache/restore@v5
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/tools-pack-cache
+          key: tools-pack-win-v1-${{ runner.os }}-${{ steps.win_tools_pack_cache_key.outputs.epoch }}
+          restore-keys: |
+            tools-pack-win-v1-${{ runner.os }}-
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Setup NSIS
+        shell: pwsh
+        run: |
+          if ((Get-Command makensis.exe -ErrorAction SilentlyContinue) -or (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe")) {
+            exit 0
+          }
+          choco install nsis -y --no-progress
 
       - name: Apply beta package version
         run: npm pkg set "version=${{ needs.metadata.outputs.beta_version }}" --prefix apps/packaged
 
       - name: Build beta windows artifacts
         shell: pwsh
-        run: >-
-          pnpm exec tools-pack win build
-          --dir "${{ runner.temp }}/tools-pack"
-          --namespace release-beta-win
-          --portable
-          --to nsis
-          --json
+        run: |
+          $ErrorActionPreference = "Stop"
+          $toolsPackDir = "${{ runner.temp }}/tools-pack"
+          $cacheDir = "${{ runner.temp }}/tools-pack-cache"
+          $buildArgs = @(
+            "exec", "tools-pack", "win", "build",
+            "--dir", $toolsPackDir,
+            "--cache-dir", $cacheDir,
+            "--namespace", "release-beta-win",
+            "--portable",
+            "--to", "nsis",
+            "--json"
+          )
+          try {
+            pnpm @buildArgs
+          } catch {
+            Write-Warning "Windows tools-pack cached build failed; removing restored cache and retrying without cache."
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $cacheDir
+            pnpm exec tools-pack win build `
+              --dir $toolsPackDir `
+              --namespace release-beta-win `
+              --portable `
+              --to nsis `
+              --json
+          }
+
+      - name: Smoke beta windows packaged runtime
+        working-directory: e2e
+        env:
+          OD_PACKAGED_E2E_WIN: "1"
+          OD_PACKAGED_E2E_NAMESPACE: release-beta-win
+          OD_PACKAGED_E2E_TOOLS_PACK_DIR: ${{ runner.temp }}/tools-pack
+          OD_PACKAGED_E2E_SCREENSHOT_PATH: ${{ runner.temp }}/open-design-win-smoke.png
+        run: pnpm test specs/win.spec.ts
+
+      - name: Prune Windows tools-pack cache
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $cacheRoot = Join-Path $env:RUNNER_TEMP "tools-pack-cache"
+          if (!(Test-Path $cacheRoot)) {
+            "tools-pack cache root does not exist; nothing to prune"
+            exit 0
+          }
+
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $cacheRoot "locks")
+
+          $maxBytes = 6GB
+          $entryRoot = Join-Path $cacheRoot "entries"
+          if (!(Test-Path $entryRoot)) {
+            "tools-pack cache entries root does not exist; nothing to prune"
+            exit 0
+          }
+
+          $entries = Get-ChildItem -Path $entryRoot -Directory -Recurse |
+            Where-Object { Test-Path (Join-Path $_.FullName "manifest.json") } |
+            ForEach-Object {
+              $size = (Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+              [pscustomobject]@{
+                Path = $_.FullName
+                Size = [int64]($size ?? 0)
+                LastWriteTimeUtc = $_.LastWriteTimeUtc
+              }
+            } |
+            Sort-Object LastWriteTimeUtc -Descending
+
+          $keptBytes = 0L
+          $removedBytes = 0L
+          $removedCount = 0
+          foreach ($entry in $entries) {
+            if (($keptBytes + $entry.Size) -le $maxBytes) {
+              $keptBytes += $entry.Size
+              continue
+            }
+            Remove-Item -Recurse -Force -LiteralPath $entry.Path
+            $removedBytes += $entry.Size
+            $removedCount += 1
+          }
+
+          "keptBytes=$keptBytes removedBytes=$removedBytes removedCount=$removedCount maxBytes=$maxBytes"
+
+      - name: Save Windows tools-pack cache
+        if: ${{ success() && steps.win_tools_pack_cache_restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/tools-pack-cache
+          key: tools-pack-win-v1-${{ runner.os }}-${{ steps.win_tools_pack_cache_key.outputs.epoch }}
 
       - name: Prepare windows beta assets
         shell: pwsh
@@ -237,20 +344,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 
           $sourceInstaller = Join-Path $env:RUNNER_TEMP "tools-pack/out/win/namespaces/release-beta-win/builder/Open Design-release-beta-win-setup.exe"
-          $sourceBlockmap = Join-Path $env:RUNNER_TEMP "tools-pack/out/win/namespaces/release-beta-win/builder/Open Design-release-beta-win-setup.exe.blockmap"
           if (!(Test-Path $sourceInstaller)) {
             throw "expected installer not found at $sourceInstaller"
-          }
-          if (!(Test-Path $sourceBlockmap)) {
-            throw "expected blockmap not found at $sourceBlockmap"
           }
 
           $windowsAssetSuffix = ".unsigned"
           $versionedInstaller = "open-design-${{ needs.metadata.outputs.beta_version }}$windowsAssetSuffix-win-x64-setup.exe"
-          $versionedBlockmap = "open-design-${{ needs.metadata.outputs.beta_version }}$windowsAssetSuffix-win-x64-setup.exe.blockmap"
           $checksumFile = "$versionedInstaller.sha256"
           Copy-Item $sourceInstaller (Join-Path $releaseDir $versionedInstaller)
-          Copy-Item $sourceBlockmap (Join-Path $releaseDir $versionedBlockmap)
 
           $installerPath = Join-Path $releaseDir $versionedInstaller
           $hash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -547,7 +648,7 @@ jobs:
               echo "- mac assets: open-design-${{ needs.metadata.outputs.beta_version }}${{ needs.metadata.outputs.asset_version_suffix }}-mac-arm64.dmg, open-design-${{ needs.metadata.outputs.beta_version }}${{ needs.metadata.outputs.asset_version_suffix }}-mac-arm64.zip"
             fi
             if [ "$ENABLE_WIN" = "true" ]; then
-              echo "- win assets: open-design-${{ needs.metadata.outputs.beta_version }}.unsigned-win-x64-setup.exe, open-design-${{ needs.metadata.outputs.beta_version }}.unsigned-win-x64-setup.exe.blockmap"
+              echo "- win assets: open-design-${{ needs.metadata.outputs.beta_version }}.unsigned-win-x64-setup.exe"
             fi
             if [ "$ENABLE_LINUX" = "true" ]; then
               echo "- linux assets: open-design-${{ needs.metadata.outputs.beta_version }}.unsigned-linux-x64.AppImage"
