@@ -53,23 +53,23 @@ interface AuditOptions {
 // Mirrors `isSafeId` in apps/daemon/src/projects.ts. Inlined to keep this
 // research starter free of imports from server-internal modules; the planned
 // `GET /api/projects/:id/audit` route will take `:id` from a URL parameter,
-// so this guard must run before any path join / mkdirSync.
+// so this guard must run before any path join / mkdirSync. The character
+// allowlist matches `_` `-` `.` `0-9A-Za-z`, which on its own would still
+// accept `"."` / `".."`; reject those explicitly so the resolver cannot land
+// on the projects root or its parent (PR #617 review, P2).
 function isSafeProjectId(id: string): boolean {
-  return typeof id === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(id);
-}
-
-interface ResolvedAuditPath {
-  dir: string;
-  file: string;
+  if (typeof id !== 'string') return false;
+  if (id === '.' || id === '..') return false;
+  return /^[A-Za-z0-9._-]{1,128}$/.test(id);
 }
 
 /**
- * Resolve the audit directory and file for a project. Pure function: does
- * NOT touch the filesystem (no mkdir, no stat). Read paths must use this
- * directly so simply querying the audit log can never create directories
- * outside the project tree (PR #617 review, P1).
+ * Pure resolver for the project's audit file path. Does NOT touch the
+ * filesystem (no mkdir, no stat). Read paths must use this directly so
+ * simply querying the audit log can never create directories outside the
+ * project tree (PR #617 review, P1).
  */
-function resolveAuditPath(projectId: string, opts: AuditOptions): ResolvedAuditPath {
+function auditFilePath(projectId: string, opts: AuditOptions): string {
   if (!isSafeProjectId(projectId)) throw new Error('invalid project id');
   const root = opts.dataDir
     ? path.resolve(opts.dataDir)
@@ -77,11 +77,13 @@ function resolveAuditPath(projectId: string, opts: AuditOptions): ResolvedAuditP
   const projectsRoot = path.resolve(root, 'projects');
   const dir = path.resolve(projectsRoot, projectId);
   // Defense in depth: even if a future `isSafeProjectId` change loosens the
-  // allowlist, refuse to operate outside `<root>/projects/`.
-  if (dir !== projectsRoot && !dir.startsWith(projectsRoot + path.sep)) {
+  // allowlist, refuse to operate at or outside `<root>/projects/`. The
+  // strict-prefix check rejects `dir === projectsRoot` (would write
+  // `audit.jsonl` directly into the projects root) as well as siblings.
+  if (!dir.startsWith(projectsRoot + path.sep)) {
     throw new Error('project id escapes projects root');
   }
-  return { dir, file: path.join(dir, 'audit.jsonl') };
+  return path.join(dir, 'audit.jsonl');
 }
 
 /**
@@ -89,8 +91,8 @@ function resolveAuditPath(projectId: string, opts: AuditOptions): ResolvedAuditP
  * write path only (`appendAuditEntry`), never on reads.
  */
 function ensureAuditFile(projectId: string, opts: AuditOptions): string {
-  const { dir, file } = resolveAuditPath(projectId, opts);
-  fs.mkdirSync(dir, { recursive: true });
+  const file = auditFilePath(projectId, opts);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   return file;
 }
 
@@ -188,7 +190,7 @@ export async function readAuditEntries(
   opts: ReadOptions,
 ): Promise<AuditEntry[]> {
   // Reads must not create directories — use the side-effect-free resolver.
-  const { file } = resolveAuditPath(projectId, opts);
+  const file = auditFilePath(projectId, opts);
   if (!fs.existsSync(file)) return [];
   const limit = Math.min(opts.limit ?? 50, 1000);
   const since = opts.since ?? 0;
