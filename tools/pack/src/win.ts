@@ -87,6 +87,26 @@ type PackedTarballsCacheMetadata = {
   tarballs: PackedTarballInfo[];
 };
 
+type PackedTarballsCacheResult = PackedTarballsCacheMetadata & {
+  key: string;
+};
+
+type AssembledAppCacheMetadata = {
+  packagedVersion: string;
+};
+
+type AssembledAppCacheResult = AssembledAppCacheMetadata & {
+  key: string;
+};
+
+type NativeRebuildCacheMetadata = {
+  modules: readonly string[];
+};
+
+type ResourceTreeCacheMetadata = {
+  resourceName: "open-design";
+};
+
 type WinPaths = {
   appBuilderConfigPath: string;
   appBuilderOutputRoot: string;
@@ -733,18 +753,18 @@ async function runNpmInstall(appRoot: string): Promise<void> {
   });
 }
 
-async function rebuildWinNativeDependencies(config: ToolPackConfig, paths: WinPaths): Promise<void> {
+async function runElectronRebuild(config: ToolPackConfig, appRoot: string): Promise<void> {
   const foundModules = new Set<string>();
   const rebuildResult = rebuild({
     arch: "x64",
     buildFromSource: ELECTRON_BUILDER_BUILD_DEPENDENCIES_FROM_SOURCE,
-    buildPath: paths.assembledAppRoot,
+    buildPath: appRoot,
     electronVersion: config.electronVersion,
     force: true,
     mode: ELECTRON_REBUILD_MODE,
     onlyModules: [...ELECTRON_REBUILD_NATIVE_MODULES],
     platform: "win32",
-    projectRootPath: paths.assembledAppRoot,
+    projectRootPath: appRoot,
   });
   rebuildResult.lifecycle.on("modules-found", (modules: string[]) => {
     for (const moduleName of modules) foundModules.add(moduleName);
@@ -755,6 +775,42 @@ async function rebuildWinNativeDependencies(config: ToolPackConfig, paths: WinPa
   if (missingModules.length > 0) {
     throw new Error(`Electron ABI rebuild did not discover required native module(s): ${missingModules.join(", ")}`);
   }
+}
+
+function nativeRebuildOutputPath(appRoot: string): string {
+  return join(appRoot, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node");
+}
+
+async function rebuildWinNativeDependencies(
+  config: ToolPackConfig,
+  paths: WinPaths,
+  cache: ToolPackCache,
+  assembledApp: AssembledAppCacheResult,
+): Promise<void> {
+  const node = {
+    id: "win.native-rebuild",
+    key: hashJson({
+      arch: "x64",
+      assembledAppKey: assembledApp.key,
+      electronVersion: config.electronVersion,
+      modules: ELECTRON_REBUILD_NATIVE_MODULES,
+      platform: "win32",
+      schemaVersion: 1,
+    }),
+    outputs: ["better_sqlite3.node"],
+    invalidate: async () => null,
+    build: async ({ entryRoot }: { entryRoot: string }): Promise<NativeRebuildCacheMetadata> => {
+      const stagingAppRoot = join(entryRoot, "app");
+      await cp(paths.assembledAppRoot, stagingAppRoot, { recursive: true });
+      await runElectronRebuild(config, stagingAppRoot);
+      await cp(nativeRebuildOutputPath(stagingAppRoot), join(entryRoot, "better_sqlite3.node"));
+      return { modules: ELECTRON_REBUILD_NATIVE_MODULES };
+    },
+  };
+  await cache.acquire({
+    materialize: [{ from: "better_sqlite3.node", to: nativeRebuildOutputPath(paths.assembledAppRoot) }],
+    node,
+  });
 }
 
 async function readPackagedVersion(config: ToolPackConfig): Promise<string> {
@@ -829,12 +885,38 @@ async function buildWorkspaceArtifacts(config: ToolPackConfig): Promise<void> {
   await runPnpm(config, ["--filter", "@open-design/packaged", "build"]);
 }
 
-async function copyResourceTree(config: ToolPackConfig, paths: WinPaths): Promise<void> {
-  await removeTree(paths.resourceRoot);
-  await mkdir(paths.resourceRoot, { recursive: true });
-  await copyBundledResourceTrees({
-    workspaceRoot: config.workspaceRoot,
-    resourceRoot: paths.resourceRoot,
+async function createResourceTreeCacheKey(config: ToolPackConfig): Promise<string> {
+  return hashJson({
+    assetsCommunityPets: await hashPath(join(config.workspaceRoot, "assets", "community-pets")),
+    assetsFrames: await hashPath(join(config.workspaceRoot, "assets", "frames")),
+    craft: await hashPath(join(config.workspaceRoot, "craft")),
+    designSystems: await hashPath(join(config.workspaceRoot, "design-systems")),
+    node: "win.resource-tree",
+    promptTemplates: await hashPath(join(config.workspaceRoot, "prompt-templates")),
+    schemaVersion: 1,
+    skills: await hashPath(join(config.workspaceRoot, "skills")),
+  });
+}
+
+async function copyResourceTree(config: ToolPackConfig, paths: WinPaths, cache: ToolPackCache): Promise<void> {
+  const node = {
+    id: "win.resource-tree",
+    key: await createResourceTreeCacheKey(config),
+    outputs: ["open-design"],
+    invalidate: async () => null,
+    build: async ({ entryRoot }: { entryRoot: string }): Promise<ResourceTreeCacheMetadata> => {
+      const resourceRoot = join(entryRoot, "open-design");
+      await mkdir(resourceRoot, { recursive: true });
+      await copyBundledResourceTrees({
+        workspaceRoot: config.workspaceRoot,
+        resourceRoot,
+      });
+      return { resourceName: "open-design" };
+    },
+  };
+  await cache.acquire({
+    materialize: [{ from: "open-design", to: paths.resourceRoot }],
+    node,
   });
 }
 
@@ -867,10 +949,11 @@ async function collectWorkspaceTarballs(
   config: ToolPackConfig,
   paths: WinPaths,
   cache: ToolPackCache,
-): Promise<PackedTarballInfo[]> {
+): Promise<PackedTarballsCacheResult> {
+  const key = await createWorkspaceTarballsCacheKey(config);
   const node = {
     id: "win.workspace-tarballs",
-    key: await createWorkspaceTarballsCacheKey(config),
+    key,
     outputs: ["tarballs"],
     invalidate: async () => null,
     build: async ({ entryRoot }: { entryRoot: string }): Promise<PackedTarballsCacheMetadata> => {
@@ -893,27 +976,48 @@ async function collectWorkspaceTarballs(
     materialize: [{ from: "tarballs", to: paths.tarballsRoot }],
     node,
   });
-  return manifest.payloadMetadata.tarballs;
+  return { key, tarballs: manifest.payloadMetadata.tarballs };
 }
 
-async function writeAssembledApp(config: ToolPackConfig, paths: WinPaths, packedTarballs: PackedTarballInfo[]): Promise<void> {
-  const packagedVersion = await readPackagedVersion(config);
+async function writePackagedConfig(config: ToolPackConfig, paths: WinPaths, packagedVersion: string): Promise<void> {
+  await writeFile(
+    paths.packagedConfigPath,
+    `${JSON.stringify(
+      {
+        appVersion: packagedVersion,
+        namespace: config.namespace,
+        webOutputMode: config.webOutputMode,
+        ...(config.portable ? {} : { namespaceBaseRoot: config.roots.runtime.namespaceBaseRoot }),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+function createAssembledAppDependencies(paths: WinPaths, packedTarballs: PackedTarballInfo[]): Record<string, string> {
   const tarballByPackage = Object.fromEntries(packedTarballs.map((entry) => [entry.packageName, entry.fileName] as const));
-  const dependencies = Object.fromEntries(
+  return Object.fromEntries(
     INTERNAL_PACKAGES.map((packageInfo) => {
       const tarball = tarballByPackage[packageInfo.name];
       if (tarball == null) throw new Error(`missing tarball for ${packageInfo.name}`);
       return [packageInfo.name, `file:${relative(paths.assembledAppRoot, join(paths.tarballsRoot, tarball))}`];
     }),
   );
+}
 
-  await removeTree(join(config.roots.output.namespaceRoot, "assembled"));
+async function writeAssembledAppEntrypoints(
+  paths: WinPaths,
+  packedTarballs: PackedTarballInfo[],
+  packagedVersion: string,
+): Promise<void> {
   await mkdir(paths.assembledAppRoot, { recursive: true });
   await writeFile(
     paths.assembledPackageJsonPath,
     `${JSON.stringify(
       {
-        dependencies,
+        dependencies: createAssembledAppDependencies(paths, packedTarballs),
         description: "Open Design packaged runtime",
         main: "./main.cjs",
         name: "open-design-packaged-app",
@@ -931,21 +1035,59 @@ async function writeAssembledApp(config: ToolPackConfig, paths: WinPaths, packed
     'import("@open-design/packaged").catch((error) => {\n  console.error("packaged entry failed", error);\n  process.exit(1);\n});\n',
     "utf8",
   );
-  await writeFile(
-    paths.packagedConfigPath,
-    `${JSON.stringify(
-      {
-        appVersion: packagedVersion,
-        namespace: config.namespace,
-        webOutputMode: config.webOutputMode,
-        ...(config.portable ? {} : { namespaceBaseRoot: config.roots.runtime.namespaceBaseRoot }),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  await runNpmInstall(paths.assembledAppRoot);
+}
+
+async function createAssembledAppCacheKey(
+  config: ToolPackConfig,
+  tarballsKey: string,
+  packedTarballs: PackedTarballInfo[],
+  packagedVersion: string,
+): Promise<string> {
+  return hashJson({
+    electronVersion: config.electronVersion,
+    node: "win.assembled-app",
+    packagedVersion,
+    packedTarballs,
+    platform: "win32",
+    schemaVersion: 1,
+    tarballsKey,
+    webOutputMode: config.webOutputMode,
+  });
+}
+
+async function writeAssembledApp(
+  config: ToolPackConfig,
+  paths: WinPaths,
+  tarballs: PackedTarballsCacheResult,
+  cache: ToolPackCache,
+): Promise<AssembledAppCacheResult> {
+  const packagedVersion = await readPackagedVersion(config);
+  await removeTree(join(config.roots.output.namespaceRoot, "assembled"));
+  const packedTarballs = tarballs.tarballs;
+  const key = await createAssembledAppCacheKey(config, tarballs.key, packedTarballs, packagedVersion);
+  const node = {
+    id: "win.assembled-app",
+    key,
+    outputs: ["app"],
+    invalidate: async () => null,
+    build: async ({ entryRoot }: { entryRoot: string }): Promise<AssembledAppCacheMetadata> => {
+      const assembledAppRoot = join(entryRoot, "app");
+      await writeAssembledAppEntrypoints(
+        { ...paths, assembledAppRoot, assembledMainEntryPath: join(assembledAppRoot, "main.cjs"), assembledPackageJsonPath: join(assembledAppRoot, "package.json") },
+        packedTarballs,
+        packagedVersion,
+      );
+      await runNpmInstall(assembledAppRoot);
+      return { packagedVersion };
+    },
+  };
+  await cache.acquire({
+    materialize: [{ from: "app", to: paths.assembledAppRoot }],
+    node,
+  });
+  await writeAssembledAppEntrypoints(paths, packedTarballs, packagedVersion);
+  await writePackagedConfig(config, paths, packagedVersion);
+  return { key, packagedVersion };
 }
 
 function resolveWinTargets(to: ToolPackConfig["to"]): Array<"dir" | "nsis"> {
@@ -1164,11 +1306,11 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   const paths = resolveWinPaths(config);
   const cache = new ToolPackCache(config.roots.cacheRoot);
   await buildWorkspaceArtifacts(config);
-  await copyResourceTree(config, paths);
+  await copyResourceTree(config, paths, cache);
   await copyWinIcon(paths);
   const tarballs = await collectWorkspaceTarballs(config, paths, cache);
-  await writeAssembledApp(config, paths, tarballs);
-  await rebuildWinNativeDependencies(config, paths);
+  const assembledApp = await writeAssembledApp(config, paths, tarballs, cache);
+  await rebuildWinNativeDependencies(config, paths, cache, assembledApp);
   await runElectronBuilder(config, paths);
   await writeLocalLatestYml(config, paths);
   const sizeReport = await collectWinSizeReport(config, paths);

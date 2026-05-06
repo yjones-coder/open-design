@@ -125,6 +125,7 @@ export class ToolPackCache {
     let status: CacheAcquireReport["status"] = "hit";
     let reason: string | null = null;
 
+    const materialized: CacheAcquireReport["materialized"] = [];
     const manifest = await withDirectoryLock(join(this.root, "locks"), "global", async () => {
       await mkdir(dirname(entryPath), { recursive: true });
       const existingManifest = await readManifest<TMetadata>(manifestPath);
@@ -146,45 +147,48 @@ export class ToolPackCache {
               ? { reason: "key mismatch" }
               : outputInvalid ?? customInvalid;
 
-      if (existingManifest != null && invalidation == null) {
-        return existingManifest;
-      }
+      const manifest = existingManifest != null && invalidation == null
+        ? existingManifest
+        : null;
 
-      status = existingManifest == null ? "miss" : "stale";
-      reason = invalidation?.reason ?? "missing manifest";
-      const stagingPath = join(dirname(entryPath), `${basename(entryPath)}.tmp-${process.pid}-${randomUUID()}`);
-      await rm(stagingPath, { force: true, recursive: true });
-      await mkdir(stagingPath, { recursive: true });
-      try {
-        const payloadMetadata = await node.build({ entryRoot: stagingPath });
-        const missingOutput = await assertOutputsExist(stagingPath, outputs);
-        if (missingOutput != null) throw new Error(`cache node ${node.id} build did not produce ${missingOutput.reason}`);
-        const nextManifest: CacheManifest<TMetadata> = {
-          createdAt: new Date().toISOString(),
-          key: node.key,
-          nodeId: node.id,
-          outputs,
-          payloadMetadata,
-          schemaVersion: CACHE_SCHEMA_VERSION,
-        };
-        await writeManifest(join(stagingPath, "manifest.json"), nextManifest);
-        await rm(entryPath, { force: true, recursive: true });
-        await rename(stagingPath, entryPath);
-        return nextManifest;
-      } catch (error) {
+      const nextManifest = manifest ?? await (async () => {
+        status = existingManifest == null ? "miss" : "stale";
+        reason = invalidation?.reason ?? "missing manifest";
+        const stagingPath = join(dirname(entryPath), `${basename(entryPath)}.tmp-${process.pid}-${randomUUID()}`);
         await rm(stagingPath, { force: true, recursive: true });
-        throw error;
-      }
-    });
+        await mkdir(stagingPath, { recursive: true });
+        try {
+          const payloadMetadata = await node.build({ entryRoot: stagingPath });
+          const missingOutput = await assertOutputsExist(stagingPath, outputs);
+          if (missingOutput != null) throw new Error(`cache node ${node.id} build did not produce ${missingOutput.reason}`);
+          const builtManifest: CacheManifest<TMetadata> = {
+            createdAt: new Date().toISOString(),
+            key: node.key,
+            nodeId: node.id,
+            outputs,
+            payloadMetadata,
+            schemaVersion: CACHE_SCHEMA_VERSION,
+          };
+          await writeManifest(join(stagingPath, "manifest.json"), builtManifest);
+          await rm(entryPath, { force: true, recursive: true });
+          await rename(stagingPath, entryPath);
+          return builtManifest;
+        } catch (error) {
+          await rm(stagingPath, { force: true, recursive: true });
+          throw error;
+        }
+      })();
 
-    const materialized: CacheAcquireReport["materialized"] = [];
-    for (const target of materialize) {
-      const sourcePath = join(entryPath, target.from);
-      await rm(target.to, { force: true, recursive: true });
-      await mkdir(dirname(target.to), { recursive: true });
-      await cp(sourcePath, target.to, { recursive: true });
-      materialized.push({ from: normalizeRelativePath(target.from), to: target.to });
-    }
+      for (const target of materialize) {
+        const sourcePath = join(entryPath, target.from);
+        await rm(target.to, { force: true, recursive: true });
+        await mkdir(dirname(target.to), { recursive: true });
+        await cp(sourcePath, target.to, { recursive: true });
+        materialized.push({ from: normalizeRelativePath(target.from), to: target.to });
+      }
+
+      return nextManifest;
+    });
 
     this.#entries.push({
       durationMs: Date.now() - startedAt,
