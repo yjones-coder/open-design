@@ -4,8 +4,7 @@ import { join } from "node:path";
 
 import { hashJson, hashPath, ToolPackCache } from "./cache.js";
 import type { ToolPackConfig } from "./config.js";
-
-const WORKSPACE_BUILD_CACHE_SCHEMA_VERSION = 1;
+import { hashPackageSourcePath } from "./package-source-hash.js";
 
 const WORKSPACE_BUILD_PACKAGES = [
   { directory: "packages/contracts", name: "@open-design/contracts" },
@@ -58,9 +57,7 @@ async function readPackageManager(workspaceRoot: string): Promise<unknown> {
 async function createWorkspaceBuildCacheKey(config: ToolPackConfig): Promise<string> {
   const packageHashes: Record<string, string> = {};
   for (const packageInfo of WORKSPACE_BUILD_PACKAGES) {
-    packageHashes[packageInfo.name] = await hashPath(join(config.workspaceRoot, packageInfo.directory), {
-      ignoreDirectoryNames: [".next", ".od", "dist", "node_modules", "out"],
-    });
+    packageHashes[packageInfo.name] = await hashPackageSourcePath(join(config.workspaceRoot, packageInfo.directory));
   }
 
   return hashJson({
@@ -71,7 +68,7 @@ async function createWorkspaceBuildCacheKey(config: ToolPackConfig): Promise<str
     packageManager: await readPackageManager(config.workspaceRoot),
     platform: config.platform,
     pnpmLock: await hashPath(join(config.workspaceRoot, "pnpm-lock.yaml")),
-    schemaVersion: WORKSPACE_BUILD_CACHE_SCHEMA_VERSION,
+    schemaVersion: 2,
     webOutputMode: config.webOutputMode,
   });
 }

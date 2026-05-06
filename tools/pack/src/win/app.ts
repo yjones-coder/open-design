@@ -8,6 +8,7 @@ import { createCommandInvocation, createPackageManagerInvocation } from "@open-d
 
 import { hashJson, hashPath, ToolPackCache } from "../cache.js";
 import type { ToolPackConfig } from "../config.js";
+import { hashPackageSourcePath } from "../package-source-hash.js";
 import { ensureWorkspaceBuildArtifacts } from "../workspace-build.js";
 import {
   ELECTRON_BUILDER_BUILD_DEPENDENCIES_FROM_SOURCE,
@@ -148,9 +149,7 @@ export async function ensureWinWorkspaceBuild(config: ToolPackConfig, cache: Too
 async function createWorkspaceTarballsCacheKey(config: ToolPackConfig): Promise<string> {
   const packageHashes: Record<string, string> = {};
   for (const packageInfo of INTERNAL_PACKAGES) {
-    packageHashes[packageInfo.name] = await hashPath(join(config.workspaceRoot, packageInfo.directory), {
-      ignoreDirectoryNames: [".next", "dist", "node_modules"],
-    });
+    packageHashes[packageInfo.name] = await hashPackageSourcePath(join(config.workspaceRoot, packageInfo.directory));
   }
   const rootPackageJson = JSON.parse(await readFile(join(config.workspaceRoot, "package.json"), "utf8")) as {
     packageManager?: unknown;
@@ -161,7 +160,7 @@ async function createWorkspaceTarballsCacheKey(config: ToolPackConfig): Promise<
     packageHashes,
     packageManager: rootPackageJson.packageManager,
     pnpmLock: await hashPath(join(config.workspaceRoot, "pnpm-lock.yaml")),
-    schemaVersion: 1,
+    schemaVersion: 2,
   });
 }
 
@@ -248,15 +247,13 @@ async function createAssembledAppCacheKey(
   config: ToolPackConfig,
   tarballsKey: string,
   packedTarballs: PackedTarballInfo[],
-  packagedVersion: string,
 ): Promise<string> {
   return hashJson({
     electronVersion: config.electronVersion,
     node: "win.assembled-app",
-    packagedVersion,
     packedTarballs,
     platform: "win32",
-    schemaVersion: 3,
+    schemaVersion: 4,
     tarballsKey,
     webOutputMode: config.webOutputMode,
   });
@@ -271,7 +268,7 @@ export async function writeAssembledApp(
   const packagedVersion = await readPackagedVersion(config);
   await removeTree(join(config.roots.output.namespaceRoot, "assembled"));
   const packedTarballs = tarballs.tarballs;
-  const key = await createAssembledAppCacheKey(config, tarballs.key, packedTarballs, packagedVersion);
+  const key = await createAssembledAppCacheKey(config, tarballs.key, packedTarballs);
   const node = {
     id: "win.assembled-app",
     key,
