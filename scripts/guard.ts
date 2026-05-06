@@ -77,6 +77,9 @@ const residualAllowedPathPrefixes = [
   "skills/hyperframes/scripts/",
   // Vendored upstream html-ppt skill runtime assets (lewislulu/html-ppt-skill).
   "skills/html-ppt/assets/",
+  // Vendored upstream Zara template runtimes — one skill per template, name prefix
+  // `html-ppt-zhangzara-` (zarazhangrui/beautiful-html-templates).
+  "skills/html-ppt-zhangzara-",
   "test-results/",
   "vendor/",
 ];
