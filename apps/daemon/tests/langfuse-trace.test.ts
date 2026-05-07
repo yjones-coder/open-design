@@ -116,7 +116,7 @@ describe('buildTracePayload', () => {
     expect(trace.output).toMatch(/landing page draft/);
   });
 
-  it('truncates prompt at 8 KB and output at 16 KB', () => {
+  it('truncates ASCII prompt at 8 KB and output at 16 KB (bytes == chars)', () => {
     const longPrompt = 'a'.repeat(20_000);
     const longOutput = 'b'.repeat(40_000);
     const batch = buildTracePayload(
@@ -130,8 +130,32 @@ describe('buildTracePayload', () => {
       }),
     );
     const trace = (batch[0] as any).body;
-    expect(trace.input.length).toBe(8 * 1024);
-    expect(trace.output.length).toBe(16 * 1024);
+    expect(Buffer.byteLength(trace.input, 'utf8')).toBe(8 * 1024);
+    expect(Buffer.byteLength(trace.output, 'utf8')).toBe(16 * 1024);
+  });
+
+  it('truncates by UTF-8 bytes, not by JS string length, for multi-byte text', () => {
+    // Each CJK character is 3 bytes in UTF-8 but 1 unit in String.length.
+    // 4096 chars × 3 bytes = 12_288 bytes, well over the 8 KB input cap.
+    const longCJK = '设'.repeat(4096);
+    expect(longCJK.length).toBe(4096);
+    expect(Buffer.byteLength(longCJK, 'utf8')).toBe(12_288);
+    const batch = buildTracePayload(
+      makeCtx({
+        message: { messageId: 'msg-1', prompt: longCJK, output: '' },
+        prefs: { metrics: true, content: true, artifactManifest: false },
+      }),
+    );
+    const trace = (batch[0] as any).body;
+    expect(Buffer.byteLength(trace.input, 'utf8')).toBeLessThanOrEqual(8 * 1024);
+    // Boundary safety: the trimmed result must still be valid UTF-8 (no
+    // half-encoded characters). Round-tripping through Buffer should be
+    // lossless if the cut landed correctly.
+    expect(Buffer.from(trace.input as string, 'utf8').toString('utf8')).toBe(
+      trace.input,
+    );
+    // And every character is still '设', i.e. we didn't mangle the encoding.
+    expect(/^设+$/.test(trace.input as string)).toBe(true);
   });
 
   it('omits artifacts when manifest gate is off', () => {
@@ -343,5 +367,53 @@ describe('reportRunCompleted', () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Ingestion failed 429'),
     );
+  });
+
+  it('warns when 207 Multi-Status body lists per-event errors', async () => {
+    // Langfuse legacy ingestion always responds with 207. response.ok is
+    // true, but malformed events show up in body.errors instead of as a
+    // top-level non-2xx. Without parsing them they'd be silently dropped.
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          successes: [{ id: 'a', status: 201 }],
+          errors: [
+            {
+              id: 'b',
+              status: 400,
+              message: 'invalid generation usage shape',
+            },
+          ],
+        }),
+        { status: 207 },
+      ),
+    );
+    await reportRunCompleted(makeCtx(), {
+      config: TEST_CONFIG,
+      fetchImpl: fetchSpy as any,
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Per-event errors (1)'),
+    );
+  });
+
+  it('does not warn when 207 body has empty errors array', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          successes: [
+            { id: 'a', status: 201 },
+            { id: 'b', status: 201 },
+          ],
+          errors: [],
+        }),
+        { status: 207 },
+      ),
+    );
+    await reportRunCompleted(makeCtx(), {
+      config: TEST_CONFIG,
+      fetchImpl: fetchSpy as any,
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

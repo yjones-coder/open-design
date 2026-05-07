@@ -24,8 +24,8 @@ import type { TelemetryPrefs } from './app-config.js';
 // See specs/change/20260507-langfuse-telemetry/spec.md Q3.
 const DEFAULT_BASE_URL = 'https://us.cloud.langfuse.com';
 
-const INPUT_MAX_CHARS = 8 * 1024;
-const OUTPUT_MAX_CHARS = 16 * 1024;
+const INPUT_MAX_BYTES = 8 * 1024;
+const OUTPUT_MAX_BYTES = 16 * 1024;
 const ARTIFACTS_MAX_ITEMS = 50;
 const SESSION_ID_MAX = 200; // Langfuse drops sessionIds longer than this.
 const HARD_BATCH_MAX_BYTES = 1024 * 1024;
@@ -103,9 +103,21 @@ export function readLangfuseConfig(
   return { authHeader, baseUrl };
 }
 
-function truncate(value: string | undefined, max: number): string | undefined {
+// Byte-aware UTF-8 truncation. JS String.length counts UTF-16 code units,
+// not bytes — non-ASCII text (CJK, emoji) can occupy 2-4× as many bytes as
+// characters, so a `value.length > max` cap silently lets oversized prompts
+// through. We truncate on a UTF-8 byte boundary so the result is still
+// valid Unicode (no half-encoded characters).
+function truncate(value: string | undefined, maxBytes: number): string | undefined {
   if (!value) return undefined;
-  return value.length > max ? value.slice(0, max) : value;
+  const buf = Buffer.from(value, 'utf8');
+  if (buf.length <= maxBytes) return value;
+  let cut = maxBytes;
+  // UTF-8 continuation bytes have the bit pattern 10xxxxxx. Walk backwards
+  // until we land on a leading byte (0xxxxxxx, 110xxxxx, 1110xxxx, 11110xxx)
+  // so the slice doesn't end mid-character.
+  while (cut > 0 && (buf[cut]! & 0xc0) === 0x80) cut -= 1;
+  return buf.subarray(0, cut).toString('utf8');
 }
 
 function buildTagList(ctx: ReportContext): string[] {
@@ -127,10 +139,10 @@ export function buildTracePayload(ctx: ReportContext): unknown[] {
   const nowIso = new Date().toISOString();
 
   const inputText = wantsContent
-    ? truncate(ctx.message.prompt, INPUT_MAX_CHARS)
+    ? truncate(ctx.message.prompt, INPUT_MAX_BYTES)
     : undefined;
   const outputText = wantsContent
-    ? truncate(ctx.message.output, OUTPUT_MAX_CHARS)
+    ? truncate(ctx.message.output, OUTPUT_MAX_BYTES)
     : undefined;
 
   const artifactsList = wantsArtifacts
@@ -230,6 +242,29 @@ async function postLangfuseBatch(
       console.warn(
         `[langfuse-trace] Ingestion failed ${response.status}: ${body.slice(0, 200)}`,
       );
+      return;
+    }
+    // Langfuse legacy ingestion responds with HTTP 207 Multi-Status whose
+    // body shape is `{ successes: [...], errors: [...] }`. `response.ok`
+    // is true for 207, so per-event validation errors slip through unless
+    // we look at the body. Surface them so a malformed payload doesn't
+    // silently disappear server-side.
+    const body = await response.text().catch(() => '');
+    if (!body) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return;
+    }
+    const errors =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as { errors?: unknown }).errors
+        : undefined;
+    if (Array.isArray(errors) && errors.length > 0) {
+      console.warn(
+        `[langfuse-trace] Per-event errors (${errors.length}): ${JSON.stringify(errors).slice(0, 500)}`,
+      );
     }
   } catch (error) {
     console.warn(`[langfuse-trace] Fetch error: ${String(error)}`);
@@ -255,9 +290,13 @@ export async function reportRunCompleted(
   }
 
   const serialized = JSON.stringify({ batch });
-  if (serialized.length > HARD_BATCH_MAX_BYTES) {
+  // Compare actual UTF-8 byte length, not String.length (UTF-16 code units),
+  // so the cap matches the byte-oriented contract documented in the spec
+  // (and the byte-oriented limit Langfuse enforces server-side).
+  const serializedBytes = Buffer.byteLength(serialized, 'utf8');
+  if (serializedBytes > HARD_BATCH_MAX_BYTES) {
     console.warn(
-      `[langfuse-trace] Batch too large (${serialized.length}B > ${HARD_BATCH_MAX_BYTES}B), dropping trace ${ctx.run.runId}`,
+      `[langfuse-trace] Batch too large (${serializedBytes}B > ${HARD_BATCH_MAX_BYTES}B), dropping trace ${ctx.run.runId}`,
     );
     return;
   }

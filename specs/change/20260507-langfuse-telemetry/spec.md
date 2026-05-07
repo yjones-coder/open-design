@@ -390,6 +390,7 @@ Each step touches a bounded surface; a partial landing leaves the system in
 | Q5 | Random v4 uuid `installationId` generated at consent time, persisted in `app-config.json`. No machine-id / hardware fingerprint. | See §Identifier. |
 | Q8 | Owner: project owner (`lefarcen`). Holds Langfuse org admin, billing, key rotation. | Step 9 unblocked. |
 | Q10 | Right-to-deletion = "rotate `installationId` locally + let Langfuse retention expire". No active trace-deletion API call. **Implicitly binds us to a short retention promise** (see Q9 follow-up and R7). | See §Right to Deletion. |
+| Q4 | Use Langfuse legacy ingestion (`POST /api/public/ingestion`) for the first version. The OTel endpoint (`/api/public/otel`) is the recommended path going forward but has no announced deprecation date for legacy (L3); choosing legacy avoids pulling in `@langfuse/tracing` + `@langfuse/otel` + an OTLP exporter. The bridge module is small enough that swapping to OTel later is a contained refactor (R4). | Step 2 unblocked. |
 
 ## Open Questions
 
@@ -399,7 +400,6 @@ mock fetch); they need answers before later steps.
 | # | Question | Default proposal | Blocks step |
 |---|---|---|---|
 | Q2 | Should artifact bodies (HTML/JSX/PPTX JSON) ever be uploaded? | Out of scope for this spec; would require a follow-up object-storage spec. | n/a (excluded) |
-| Q4 | Legacy ingestion or OTel for the first version? | Legacy (L3 has no deprecation date; one fewer dep). | 2 |
 | Q6 | README disclosure: do we say "official builds report usage data by default after first-run consent; toggle in Settings → Privacy"? | Yes — pre-empts community reaction (C2). | 8 |
 | Q7 | Hobby tier 50k events/month (L5). With `content=on` after consent, expect 2 events per turn (trace + generation), so ~830 turns/day across the whole user base before capping. Upgrade, sample, or self-host? | Decide based on early traffic. Build in a hard cap (`OD_LANGFUSE_DAILY_CAP`) and a sampling factor as escape hatches. | 9 (capacity) |
 | Q9 | What retention do we promise in `docs/privacy.md`? Hobby gives 30 days only (L5); paid or self-host can be longer. | Match whatever tier the owner picks; default to 30 days until then. | 8 |
@@ -445,9 +445,12 @@ mock fetch); they need answers before later steps.
   defensible as undue-delay-free. Hobby's 30 days (L5) is borderline OK;
   Pro's 3-year retention is **not**. Mitigation: if we ever upgrade past
   Hobby for capacity reasons (Q7), Q10 must be re-opened to add an
-  active `POST /api/public/trace/{id}` deletion call. Add a tripwire
-  test that asserts `docs/privacy.md` retention number and the actual
-  Langfuse org retention setting agree.
+  active call to Langfuse's trace deletion API —
+  `DELETE /api/public/traces/{traceId}` for a single trace, or
+  `DELETE /api/public/traces` with `{ traceIds: [...] }` for batch
+  ([Data Deletion docs](https://langfuse.com/docs/administration/data-deletion)).
+  Add a tripwire test that asserts `docs/privacy.md` retention number
+  and the actual Langfuse org retention setting agree.
 
 ## References
 

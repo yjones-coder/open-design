@@ -1937,6 +1937,32 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     });
     // Bump the parent project's updatedAt so the project list re-orders.
     updateProject(db, req.params.id, {});
+    // Forward to Langfuse only after the message has been persisted in its
+    // terminal shape (web sets runStatus + producedFiles in onDone /
+    // onError / cancel before calling PUT). Tying the trigger to the
+    // persistence path — instead of the daemon-internal run-close hook —
+    // guarantees the SQLite read inside the bridge sees the final
+    // assistant content and produced-file manifest.
+    if (
+      saved &&
+      saved.runId &&
+      typeof saved.runStatus === 'string' &&
+      TERMINAL_RUN_STATUSES.has(saved.runStatus) &&
+      !reportedRuns.has(saved.runId)
+    ) {
+      const run = design.runs.get(saved.runId);
+      if (run) {
+        reportedRuns.add(saved.runId);
+        // Auto-evict so the Set doesn't accumulate forever in long-running
+        // daemons. Same TTL as the runs map cleanup in runs.ts.
+        setTimeout(() => reportedRuns.delete(saved.runId), 30 * 60 * 1000).unref?.();
+        void reportRunCompletedFromDaemon({
+          db,
+          dataDir: RUNTIME_DATA_DIR,
+          run,
+        });
+      }
+    }
     res.json({ message: saved });
   });
 
@@ -3523,22 +3549,15 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   );
 
   const design = {
-    runs: createChatRunService({
-      createSseResponse,
-      createSseErrorPayload,
-      // Forwards completed agent runs to Langfuse when LANGFUSE_PUBLIC_KEY /
-      // _SECRET_KEY are set in the daemon env AND the user has opted into
-      // metrics in Settings → Privacy. Always async, always wrapped in
-      // try/catch by the bridge — never blocks or fails a run.
-      onTerminate: (run) => {
-        void reportRunCompletedFromDaemon({
-          db,
-          dataDir: RUNTIME_DATA_DIR,
-          run,
-        });
-      },
-    }),
+    runs: createChatRunService({ createSseResponse, createSseErrorPayload }),
   };
+
+  // Tracks runs whose completion has already been forwarded to Langfuse so
+  // that repeated PUT /messages/:id calls (web buffers + retries) only emit
+  // one trace per run. Entries are scrubbed when the run's TTL window
+  // expires (30 min, mirrors runs.ts).
+  const reportedRuns = new Set();
+  const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
 
   const composeDaemonSystemPrompt = async ({
     agentId,
