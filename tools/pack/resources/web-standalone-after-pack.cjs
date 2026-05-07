@@ -150,8 +150,7 @@ async function ensureRelativeSymlink(linkPath, target, changes) {
   changes.push({ linkPath, target });
 }
 
-async function normalizeDarwinElectronFramework(appPath) {
-  const frameworkRoot = path.join(appPath, "Contents", "Frameworks", "Electron Framework.framework");
+async function normalizeDarwinFramework(frameworkRoot) {
   const versionsRoot = path.join(frameworkRoot, "Versions");
   const versionRoot = path.join(versionsRoot, "A");
 
@@ -166,20 +165,44 @@ async function normalizeDarwinElectronFramework(appPath) {
   const changes = [];
   await ensureRelativeSymlink(path.join(versionsRoot, "Current"), "A", changes);
 
-  for (const entryName of ["Electron Framework", "Resources", "Libraries", "Helpers"]) {
-    if (await pathLstatExists(path.join(versionRoot, entryName))) {
-      await ensureRelativeSymlink(
-        path.join(frameworkRoot, entryName),
-        path.join("Versions", "Current", entryName),
-        changes,
-      );
-    }
+  const versionEntries = (await readdir(versionRoot, { withFileTypes: true }))
+    .map((entry) => entry.name)
+    .sort();
+  for (const entryName of versionEntries) {
+    await ensureRelativeSymlink(
+      path.join(frameworkRoot, entryName),
+      path.join("Versions", "Current", entryName),
+      changes,
+    );
   }
 
   return {
     changes,
     frameworkRoot,
     skipped: false,
+  };
+}
+
+async function normalizeDarwinElectronFrameworks(appPath) {
+  const frameworksRoot = path.join(appPath, "Contents", "Frameworks");
+  const frameworkEntries = (await readdir(frameworksRoot, { withFileTypes: true }).catch(() => []))
+    .filter((entry) => entry.isDirectory() && entry.name.endsWith(".framework"))
+    .map((entry) => entry.name)
+    .sort();
+  const frameworks = [];
+  const changes = [];
+
+  for (const frameworkName of frameworkEntries) {
+    const result = await normalizeDarwinFramework(path.join(frameworksRoot, frameworkName));
+    frameworks.push(result);
+    changes.push(...result.changes);
+  }
+
+  return {
+    changes,
+    frameworkRoot: path.join(frameworksRoot, "Electron Framework.framework"),
+    frameworks,
+    skipped: frameworks.length === 0 || frameworks.every((framework) => framework.skipped),
   };
 }
 
@@ -809,7 +832,7 @@ async function runWebStandaloneAfterPack(context) {
     throw new Error(`[tools-pack web-standalone] app bundle not found: ${appPath}`);
   }
   const macElectronFrameworkNormalize = context.electronPlatformName === "darwin"
-    ? await normalizeDarwinElectronFramework(appPath)
+    ? await normalizeDarwinElectronFrameworks(appPath)
     : null;
   if (!(await pathExists(resourcesRoot))) {
     throw new Error(`[tools-pack web-standalone] resources root not found: ${resourcesRoot}`);

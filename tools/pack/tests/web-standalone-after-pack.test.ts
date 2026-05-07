@@ -46,21 +46,18 @@ async function writeRootWebPackage(resourcesRoot: string): Promise<void> {
   await writeFile(join(webPackageRoot, "dist", "sidecar", "index.js"), "module.exports = {};\n", "utf8");
 }
 
-async function writeFlattenedElectronFramework(appOutDir: string): Promise<string> {
-  const frameworkRoot = join(
-    appOutDir,
-    "Open Design.app",
-    "Contents",
-    "Frameworks",
-    "Electron Framework.framework",
-  );
-  const entries = ["Electron Framework", "Resources", "Libraries", "Helpers"];
+async function writeFlattenedDarwinFramework(
+  frameworksRoot: string,
+  frameworkName: string,
+  entries: string[],
+): Promise<string> {
+  const frameworkRoot = join(frameworksRoot, frameworkName);
 
   for (const root of [frameworkRoot, join(frameworkRoot, "Versions", "A"), join(frameworkRoot, "Versions", "Current")]) {
     await mkdir(root, { recursive: true });
     for (const entry of entries) {
       const entryPath = join(root, entry);
-      if (entry === "Electron Framework") {
+      if (!["Resources", "Libraries", "Helpers"].includes(entry)) {
         await writeFile(entryPath, "binary\n", "utf8");
       } else {
         await mkdir(entryPath, { recursive: true });
@@ -70,6 +67,19 @@ async function writeFlattenedElectronFramework(appOutDir: string): Promise<strin
   }
 
   return frameworkRoot;
+}
+
+async function writeFlattenedDarwinFrameworks(appOutDir: string): Promise<string> {
+  const frameworksRoot = join(appOutDir, "Open Design.app", "Contents", "Frameworks");
+  const electronFrameworkRoot = await writeFlattenedDarwinFramework(
+    frameworksRoot,
+    "Electron Framework.framework",
+    ["Electron Framework", "Resources", "Libraries", "Helpers"],
+  );
+  await writeFlattenedDarwinFramework(frameworksRoot, "Mantle.framework", ["Mantle", "Resources"]);
+  await writeFlattenedDarwinFramework(frameworksRoot, "ReactiveObjC.framework", ["ReactiveObjC", "Resources"]);
+  await writeFlattenedDarwinFramework(frameworksRoot, "Squirrel.framework", ["Squirrel", "Resources"]);
+  return electronFrameworkRoot;
 }
 
 async function writeStandaloneFixture(
@@ -140,7 +150,7 @@ async function runFixture(options: {
 
   await mkdir(resourcesRoot, { recursive: true });
   if (platformName === "darwin") {
-    await writeFlattenedElectronFramework(appOutDir);
+    await writeFlattenedDarwinFrameworks(appOutDir);
   }
   await writeRootWebPackage(resourcesRoot);
   await writeFile(
@@ -242,7 +252,11 @@ describe("web standalone afterPack hook", () => {
     try {
       const report = JSON.parse(await readFile(fixture.auditReportPath, "utf8")) as {
         copiedAudit: { externalSymlinks: string[]; resolvedModules: Record<string, string> };
-        macElectronFrameworkNormalize: { changes: Array<{ target: string }>; skipped: boolean };
+        macElectronFrameworkNormalize: {
+          changes: Array<{ target: string }>;
+          frameworks: Array<{ frameworkRoot: string; skipped: boolean }>;
+          skipped: boolean;
+        };
       };
       const copiedNextLink = join(fixture.destinationRoot, "apps", "web", "node_modules", "next");
       const nextTarget = await readlink(copiedNextLink);
@@ -260,13 +274,31 @@ describe("web standalone afterPack hook", () => {
         join("Versions", "Current", "Electron Framework"),
       );
       await expect(readlink(join(frameworkRoot, "Resources"))).resolves.toBe(join("Versions", "Current", "Resources"));
+      await expect(
+        readlink(join(fixture.appOutDir, "Open Design.app", "Contents", "Frameworks", "Mantle.framework", "Mantle")),
+      ).resolves.toBe(join("Versions", "Current", "Mantle"));
       expect(report.macElectronFrameworkNormalize.skipped).toBe(false);
+      expect(report.macElectronFrameworkNormalize.frameworks.map((entry) => path.basename(entry.frameworkRoot))).toEqual([
+        "Electron Framework.framework",
+        "Mantle.framework",
+        "ReactiveObjC.framework",
+        "Squirrel.framework",
+      ]);
       expect(report.macElectronFrameworkNormalize.changes.map((entry) => entry.target)).toEqual([
         "A",
         join("Versions", "Current", "Electron Framework"),
-        join("Versions", "Current", "Resources"),
-        join("Versions", "Current", "Libraries"),
         join("Versions", "Current", "Helpers"),
+        join("Versions", "Current", "Libraries"),
+        join("Versions", "Current", "Resources"),
+        "A",
+        join("Versions", "Current", "Mantle"),
+        join("Versions", "Current", "Resources"),
+        "A",
+        join("Versions", "Current", "ReactiveObjC"),
+        join("Versions", "Current", "Resources"),
+        "A",
+        join("Versions", "Current", "Resources"),
+        join("Versions", "Current", "Squirrel"),
       ]);
       expect(report.copiedAudit.externalSymlinks).toEqual([]);
       expect(report.copiedAudit.resolvedModules["next/package.json"].split(path.sep).join("/")).toMatch(
