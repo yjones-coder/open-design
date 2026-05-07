@@ -90,8 +90,8 @@ describe("buildDockerArgs", () => {
     const args = buildDockerArgs(makeConfig(), { uid: 1000, gid: 1000 });
     const last = args[args.length - 1];
     expect(last).toMatch(/node-v24\.14\.1-linux-x64/);
-    expect(last).toMatch(/npm exec --yes --package pnpm@\d+\.\d+\.\d+ -- pnpm install --frozen-lockfile/);
-    expect(last).toMatch(/npm exec --yes --package pnpm@\d+\.\d+\.\d+ -- pnpm tools-pack linux build --to all --namespace default/);
+    expect(last).toMatch(/corepack pnpm@\d+\.\d+\.\d+ install --frozen-lockfile/);
+    expect(last).toMatch(/corepack pnpm@\d+\.\d+\.\d+ tools-pack linux build --to all --namespace default/);
     expect(last).not.toMatch(/--containerized/);
   });
 
@@ -99,10 +99,13 @@ describe("buildDockerArgs", () => {
     const args = buildDockerArgs(makeConfig(), { uid: 1000, gid: 1000 });
     const last = args[args.length - 1];
     expect(last).toMatch(/curl -fsSL "https:\/\/nodejs\.org\/dist\/v24\.14\.1\/node-v24\.14\.1-linux-x64\.tar\.xz"/);
+    expect(last).toMatch(/node_dir="\$HOME\/\.node\/node-v24\.14\.1-linux-x64"/);
+    expect(last).toMatch(/tar -xJf "\$tmp_dir\/node\.tar\.xz" -C "\$HOME\/\.node"/);
+    expect(last).not.toMatch(/node_dir="\$HOME\/\.cache\//);
     expect(last).toMatch(/export PATH="\$node_dir\/bin:\$PATH"/);
-    expect(last).not.toMatch(/corepack/);
     expect(last).not.toMatch(/\bnpx\b/);
-    expect(last).toMatch(/npm exec --yes --package pnpm@/);
+    expect(last).not.toMatch(/npm exec/);
+    expect(last).toMatch(/corepack pnpm@/);
   });
 
   it("hardcoded pnpm version stays in lockstep with root package.json `packageManager`", () => {
@@ -119,7 +122,7 @@ describe("buildDockerArgs", () => {
 
     const args = buildDockerArgs(makeConfig(), { uid: 1000, gid: 1000 });
     const last = args[args.length - 1];
-    expect(last).toContain(`npm exec --yes --package pnpm@${expectedVersion} -- pnpm`);
+    expect(last).toContain(`corepack pnpm@${expectedVersion}`);
   });
 
   it("hardcoded Node major stays in lockstep with root package.json `engines.node`", () => {
