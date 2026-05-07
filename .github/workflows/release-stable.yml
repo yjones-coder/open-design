@@ -302,7 +302,7 @@ jobs:
     # Linux AppImage packaging is temporarily excluded from stable releases.
     # Keep the job definition in place so the Linux lane can be re-enabled once
     # the containerized pnpm bootstrap is fixed and reviewed.
-    if: ${{ false }}
+    if: ${{ vars.ENABLE_STABLE_LINUX == 'true' }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
