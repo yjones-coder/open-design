@@ -186,6 +186,7 @@ test('connectors search supports empty results and keyboard-closeable details', 
 });
 
 test('saving a Composio key from Settings unlocks the connectors gate immediately', async ({ page }) => {
+  const { accountLabel: _unusedAccountLabel, ...slackConnector } = CONNECTORS[1]!;
   await routeConnectors(page, [
     {
       ...CONNECTORS[0]!,
@@ -193,9 +194,8 @@ test('saving a Composio key from Settings unlocks the connectors gate immediatel
       auth: { provider: 'composio', configured: false },
     },
     {
-      ...CONNECTORS[1]!,
+      ...slackConnector,
       status: 'available',
-      accountLabel: undefined,
       auth: { provider: 'composio', configured: false },
     },
   ]);
