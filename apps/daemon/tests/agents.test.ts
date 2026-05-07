@@ -1534,11 +1534,57 @@ test('spawnEnvForAgent applies configured Codex env without mutating the base en
   const base = { PATH: '/usr/bin' };
   const env = spawnEnvForAgent('codex', base, {
     CODEX_HOME: '/Users/test/.codex-alt',
+    CODEX_BIN: '/Users/test/bin/codex',
   });
 
   assert.equal(env.CODEX_HOME, '/Users/test/.codex-alt');
+  assert.equal(env.CODEX_BIN, '/Users/test/bin/codex');
   assert.equal(env.PATH, '/usr/bin');
   assert.equal('CODEX_HOME' in base, false);
+  assert.equal('CODEX_BIN' in base, false);
+});
+
+test('resolveAgentExecutable prefers a configured CODEX_BIN override over PATH resolution', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-codex-bin-'));
+  try {
+    const configured = join(dir, 'codex-custom');
+    writeFileSync(configured, '#!/bin/sh\nexit 0\n');
+    chmodSync(configured, 0o755);
+    process.env.PATH = '';
+    process.env.OD_AGENT_HOME = dir;
+
+    const resolved = resolveAgentExecutable(
+      { id: 'codex', bin: 'codex' },
+      { CODEX_BIN: configured },
+    );
+
+    assert.equal(resolved, configured);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveAgentExecutable ignores relative CODEX_BIN overrides', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-codex-bin-rel-'));
+  const oldCwd = process.cwd();
+  try {
+    const configured = 'codex-custom';
+    writeFileSync(join(dir, configured), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(dir, configured), 0o755);
+    process.chdir(dir);
+    process.env.PATH = '';
+    process.env.OD_AGENT_HOME = dir;
+
+    const resolved = resolveAgentExecutable(
+      { id: 'codex', bin: 'codex' },
+      { CODEX_BIN: configured },
+    );
+
+    assert.equal(resolved, null);
+  } finally {
+    process.chdir(oldCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('detectAgents applies configured env while probing the CLI', async () => {

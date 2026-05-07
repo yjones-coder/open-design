@@ -128,6 +128,7 @@ export const ptBR: Dict = {
     'Set non-secret config directories for packaged app runs and agent detection.',
   'settings.cliEnvClaudeConfigDir': 'Claude Code config dir',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.modelCustom': 'Personalizado (digite abaixo)…',
   'settings.modelCustomLabel': 'Id do modelo personalizado',
   'settings.modelCustomPlaceholder': 'ex.: anthropic/claude-sonnet-4-6',
@@ -850,6 +851,7 @@ export const ptBR: Dict = {
   'sketch.clear': 'Limpar',
   'sketch.close': 'Fechar',
   'sketch.textPrompt': 'Texto:',
+  'sketch.textModalTitle': 'Adicionar texto',
 
   'pet.title': 'Bichinhos',
   'pet.tabBuiltIn': 'Inclusos',

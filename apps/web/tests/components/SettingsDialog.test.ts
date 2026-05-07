@@ -253,6 +253,27 @@ describe('SettingsDialog agent CLI env settings', () => {
     });
   });
 
+  it('updates additional Codex CLI env values without dropping sibling Codex fields', () => {
+    const config: AppConfig = {
+      ...baseConfig,
+      mode: 'daemon',
+      agentCliEnv: {
+        codex: { CODEX_HOME: '~/.codex-alt' },
+      },
+    };
+
+    const next = updateAgentCliEnvValue(
+      config,
+      'codex',
+      'CODEX_BIN',
+      '  ~/bin/codex-next  ',
+    );
+
+    expect(next.agentCliEnv).toEqual({
+      codex: { CODEX_HOME: '~/.codex-alt', CODEX_BIN: '~/bin/codex-next' },
+    });
+  });
+
   it('removes empty per-agent CLI env entries', () => {
     const config: AppConfig = {
       ...baseConfig,

@@ -89,6 +89,7 @@ const agentCapabilities = new Map();
 // documented, non-secret runtime knobs that belong to the adapter contract.
 
 const DEFAULT_MODEL_OPTION = { id: 'default', label: 'Default (CLI config)' };
+const AGENT_BIN_ENV_KEYS = new Map([['codex', 'CODEX_BIN']]);
 
 // Map a user-picked reasoning effort to one the chosen model will accept.
 // Codex's CLI accepts `none | minimal | low | medium | high | xhigh`, but
@@ -887,8 +888,20 @@ export function resolveOnPath(bin) {
 // agents whose forks ship under a different binary name but speak the
 // exact same CLI (Claude Code → OpenClaude, issue #235). Returns null
 // when no candidate is on PATH.
-export function resolveAgentExecutable(def) {
+function configuredExecutableOverride(def, configuredEnv = {}) {
+  const envKey = AGENT_BIN_ENV_KEYS.get(def?.id);
+  if (!envKey) return null;
+  const raw = configuredEnv?.[envKey];
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+  const expanded = expandHomePath(raw.trim());
+  if (!path.isAbsolute(expanded)) return null;
+  return existsSync(expanded) ? expanded : null;
+}
+
+export function resolveAgentExecutable(def, configuredEnv = {}) {
   if (!def?.bin) return null;
+  const configured = configuredExecutableOverride(def, configuredEnv);
+  if (configured) return configured;
   const candidates = [
     def.bin,
     ...(Array.isArray(def.fallbackBins) ? def.fallbackBins : []),
@@ -932,7 +945,7 @@ async function fetchModels(def, resolvedBin, env) {
 }
 
 async function probe(def, configuredEnv = {}) {
-  const resolved = resolveAgentExecutable(def);
+  const resolved = resolveAgentExecutable(def, configuredEnv);
   if (!resolved) {
     return {
       ...stripFns(def),
@@ -1251,10 +1264,10 @@ export function checkWindowsDirectExeCommandLineBudget(def, resolvedBin, args) {
 // Used by the chat handler so spawn() gets the same executable that
 // detection reported as available — fixes Windows ENOENT when the bare
 // bin name isn't on the child process's PATH (issue #10).
-export function resolveAgentBin(id) {
+export function resolveAgentBin(id, configuredEnv = {}) {
   const def = getAgentDef(id);
   if (!def?.bin) return null;
-  return resolveAgentExecutable(def);
+  return resolveAgentExecutable(def, configuredEnv);
 }
 
 // Build the env passed to spawn() for a given agent adapter.

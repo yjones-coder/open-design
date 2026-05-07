@@ -127,6 +127,7 @@ export const zhCN: Dict = {
     '为打包版应用运行和 agent 检测设置非敏感配置目录。',
   'settings.cliEnvClaudeConfigDir': 'Claude Code 配置目录',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex 可执行文件路径',
   'settings.modelCustom': '自定义（在下方填写）…',
   'settings.modelCustomLabel': '自定义模型 id',
   'settings.modelCustomPlaceholder': '例如 anthropic/claude-sonnet-4-6',
@@ -832,6 +833,7 @@ export const zhCN: Dict = {
   'sketch.clear': '清空',
   'sketch.close': '关闭',
   'sketch.textPrompt': '请输入文本：',
+  'sketch.textModalTitle': '添加文本',
 
   'pet.title': '宠物',
   'pet.tabBuiltIn': '内置',

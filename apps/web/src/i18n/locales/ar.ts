@@ -130,6 +130,7 @@ export const ar: Dict = {
     'Set non-secret config directories for packaged app runs and agent detection.',
   'settings.cliEnvClaudeConfigDir': 'Claude Code config dir',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.modelCustom': 'مخصص (اكتب أدناه)...',
   'settings.modelCustomLabel': 'معرف النموذج المخصص',
   'settings.modelCustomPlaceholder': 'مثلاً: anthropic/claude-sonnet-4-6',
@@ -818,6 +819,7 @@ export const ar: Dict = {
   'sketch.clear': 'مسح',
   'sketch.close': 'إغلاق',
   'sketch.textPrompt': 'النص:',
+  'sketch.textModalTitle': 'إضافة نص',
 
   'pet.title': 'الحيوانات الأليفة',
   'pet.subtitle': 'تبنَّ رفيقاً صغيراً يطفو فوق مساحة عملك.',

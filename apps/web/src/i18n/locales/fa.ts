@@ -128,6 +128,7 @@ export const fa: Dict = {
     'Set non-secret config directories for packaged app runs and agent detection.',
   'settings.cliEnvClaudeConfigDir': 'Claude Code config dir',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.modelCustom': 'سفارشی (در زیر تایپ کنید)…',
   'settings.modelCustomLabel': 'شناسه مدل سفارشی',
   'settings.modelCustomPlaceholder': 'مثلاً anthropic/claude-sonnet-4-6',
@@ -852,6 +853,7 @@ export const fa: Dict = {
   'sketch.clear': 'پاک کردن',
   'sketch.close': 'بستن',
   'sketch.textPrompt': 'متن:',
+  'sketch.textModalTitle': 'افزودن متن',
 
   'pet.title': 'حیوان خانگی',
   'pet.tabBuiltIn': 'پیش‌فرض',

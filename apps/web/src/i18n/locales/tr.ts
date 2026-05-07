@@ -812,6 +812,7 @@ export const tr: Dict = {
   'sketch.clear': 'Temizle',
   'sketch.close': 'Kapat',
   'sketch.textPrompt': 'Metin:',
+  'sketch.textModalTitle': 'Metin ekle',
 
   'pet.title': 'Evcil Dostlar',
   'pet.tabBuiltIn': 'Yerleşik',
