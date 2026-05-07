@@ -130,6 +130,7 @@ export const hu: Dict = {
     'Set non-secret config directories for packaged app runs and agent detection.',
   'settings.cliEnvClaudeConfigDir': 'Claude Code config dir',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.modelCustom': 'Egyedi (gépeld be alább)…',
   'settings.modelCustomLabel': 'Egyedi modell-id',
   'settings.modelCustomPlaceholder': 'pl. anthropic/claude-sonnet-4-6',

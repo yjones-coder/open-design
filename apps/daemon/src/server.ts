@@ -3886,7 +3886,15 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       return design.runs.finish(run, 'failed', 1, null);
     }
 
-    const resolvedBin = resolveAgentBin(agentId);
+    let configuredAgentEnv = {};
+    try {
+      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
+      configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, def.id);
+    } catch {
+      configuredAgentEnv = {};
+    }
+
+    const resolvedBin = resolveAgentBin(agentId, configuredAgentEnv);
 
     const args = def.buildArgs(
       composed,
@@ -3986,14 +3994,6 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           }
         : {}),
     };
-    let configuredAgentEnv = {};
-    try {
-      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
-      configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, def.id);
-    } catch {
-      configuredAgentEnv = {};
-    }
-
     if (run.cancelRequested || design.runs.isTerminal(run.status)) {
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();

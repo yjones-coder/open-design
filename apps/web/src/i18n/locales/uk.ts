@@ -129,6 +129,7 @@ export const uk: Dict = {
     'Set non-secret config directories for packaged app runs and agent detection.',
   'settings.cliEnvClaudeConfigDir': 'Claude Code config dir',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.modelCustom': 'Власна (введіть нижче)…',
   'settings.modelCustomLabel': 'Власне ID моделі',
   'settings.modelCustomPlaceholder': 'напр. anthropic/claude-sonnet-4-6',

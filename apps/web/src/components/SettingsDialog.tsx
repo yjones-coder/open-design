@@ -200,6 +200,12 @@ const AGENT_CLI_ENV_FIELDS = [
     labelKey: 'settings.cliEnvCodexHome',
     placeholder: '~/.codex-alt',
   },
+  {
+    agentId: 'codex',
+    envKey: 'CODEX_BIN',
+    labelKey: 'settings.cliEnvCodexBin',
+    placeholder: '/absolute/path/to/codex',
+  },
 ] as const;
 
 function defaultApiProtocolConfig(protocol: ApiProtocol): ApiProtocolConfig {

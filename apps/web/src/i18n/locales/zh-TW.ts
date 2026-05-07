@@ -127,6 +127,7 @@ export const zhTW: Dict = {
     '為打包版應用執行和 agent 偵測設定非敏感設定目錄。',
   'settings.cliEnvClaudeConfigDir': 'Claude Code 設定目錄',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex 可執行檔路徑',
   'settings.modelCustom': '自訂（在下方填寫）…',
   'settings.modelCustomLabel': '自訂模型 id',
   'settings.modelCustomPlaceholder': '例如 anthropic/claude-sonnet-4-6',

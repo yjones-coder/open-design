@@ -130,6 +130,7 @@ export const ko: Dict = {
     'Set non-secret config directories for packaged app runs and agent detection.',
   'settings.cliEnvClaudeConfigDir': 'Claude Code config dir',
   'settings.cliEnvCodexHome': 'Codex home',
+  'settings.cliEnvCodexBin': 'Codex executable path',
   'settings.modelCustom': '직접 입력…',
   'settings.modelCustomLabel': '사용자 지정 모델 ID',
   'settings.modelCustomPlaceholder': '예: anthropic/claude-sonnet-4-6',
