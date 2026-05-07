@@ -7,11 +7,7 @@ import type { AppConfig, ChatAttachment, ChatCommentAttachment, ChatMessage, Con
 import { dayKey, dayLabel, exactDateTime, messageTime, relativeTimeLong } from '../utils/chatTime';
 import { commentsToAttachments, simplePositionLabel } from '../comments';
 import { AssistantMessage } from './AssistantMessage';
-import {
-  ChatComposer,
-  type ChatComposerHandle,
-  type ChatSendMeta,
-} from './ChatComposer';
+import { ChatComposer, type ChatComposerHandle } from './ChatComposer';
 import { Icon } from './Icon';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
@@ -62,12 +58,7 @@ interface Props {
   onAttachComment?: (comment: PreviewComment) => void;
   onDetachComment?: (commentId: string) => void;
   onDeleteComment?: (commentId: string) => void;
-  onSend: (
-    prompt: string,
-    attachments: ChatAttachment[],
-    commentAttachments: ChatCommentAttachment[],
-    meta?: ChatSendMeta,
-  ) => void;
+  onSend: (prompt: string, attachments: ChatAttachment[], commentAttachments: ChatCommentAttachment[]) => void;
   onStop: () => void;
   // Click-to-open chain: passes a basename up to ProjectView, which sets
   // FileWorkspace's openRequest. Tool cards, attachment chips, and

@@ -19,7 +19,6 @@ import type {
   ChatSseEvent,
   ChatSseStartPayload,
   DaemonAgentPayload,
-  ResearchOptions,
   SseErrorPayload,
 } from '@open-design/contracts';
 import type { StreamHandlers } from './anthropic';
@@ -58,10 +57,6 @@ export interface DaemonStreamOptions {
   // options and falls back to the CLI default when missing.
   model?: string | null;
   reasoning?: string | null;
-  // Optional pre-generation research. When `enabled`, the daemon runs a
-  // search round before spawning the agent and prepends the findings as
-  // a <research_context> block to the system prompt.
-  research?: ResearchOptions;
   initialLastEventId?: string | null;
   onRunCreated?: (runId: string) => void;
   onRunStatus?: (status: ChatRunStatus) => void;
@@ -94,7 +89,6 @@ export async function streamViaDaemon({
   commentAttachments,
   model,
   reasoning,
-  research,
   initialLastEventId,
   onRunCreated,
   onRunStatus,
@@ -119,7 +113,6 @@ export async function streamViaDaemon({
     commentAttachments: commentAttachments ?? [],
     model: model ?? null,
     reasoning: reasoning ?? null,
-    ...(research && research.enabled ? { research } : {}),
   };
   const body = JSON.stringify(request);
 

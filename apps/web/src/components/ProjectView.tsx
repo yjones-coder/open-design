@@ -972,7 +972,6 @@ export function ProjectView({
       prompt: string,
       attachments: ChatAttachment[],
       commentAttachments: ChatCommentAttachment[] = commentsToAttachments(attachedComments),
-      meta?: { research?: import('@open-design/contracts').ResearchOptions },
     ) => {
       if (!activeConversationId) return;
       if (streaming) return;
@@ -1264,7 +1263,6 @@ export function ProjectView({
           commentAttachments,
           model: choice?.model ?? null,
           reasoning: choice?.reasoning ?? null,
-          research: meta?.research,
           onRunCreated: (runId) => {
             updateMessageById(assistantId, (prev) => ({ ...prev, runId, runStatus: 'queued' }), true);
           },
