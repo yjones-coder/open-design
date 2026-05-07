@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
+import type { ToolPackConfig } from "../config.js";
 import { pathExists } from "./fs.js";
+import { resolveWinInstallIdentity } from "./identity.js";
 import type { WinPaths, WindowsUninstallRegistryEntry } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -10,7 +13,7 @@ function normalizeRegistryPath(value: string | null | undefined): string {
   return (value ?? "").replace(/[\\/]+$/, "").toLowerCase();
 }
 
-function stripRegistryQuotedValue(value: string | null | undefined): string {
+export function stripRegistryQuotedValue(value: string | null | undefined): string {
   const trimmed = (value ?? "").trim();
   if (trimmed.startsWith('"')) {
     const closingQuote = trimmed.indexOf('"', 1);
@@ -32,11 +35,27 @@ function createEmptyRegistryEntry(keyPath: string): WindowsUninstallRegistryEntr
   };
 }
 
+function normalizeRegistryKeyPath(value: string): string {
+  return value
+    .replace(/^HKCU\\/i, "HKEY_CURRENT_USER\\")
+    .replace(/^HKLM\\/i, "HKEY_LOCAL_MACHINE\\")
+    .toLowerCase();
+}
+
+function namespaceRegistryKeyPath(config: Pick<ToolPackConfig, "namespace">): string {
+  return normalizeRegistryKeyPath(`HKCU\\${resolveWinInstallIdentity(config).registryKey}`);
+}
+
 async function execReg(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
   return await execFileAsync("reg.exe", args, { cwd, env: process.env, windowsHide: true });
 }
 
-function registryEntryMatches(paths: WinPaths, entry: WindowsUninstallRegistryEntry): boolean {
+function registryEntryMatches(
+  paths: WinPaths,
+  entry: WindowsUninstallRegistryEntry,
+  config?: Pick<ToolPackConfig, "namespace">,
+): boolean {
+  if (config != null && normalizeRegistryKeyPath(entry.keyPath) === namespaceRegistryKeyPath(config)) return true;
   const targetInstallDir = normalizeRegistryPath(paths.installDir);
   const targetUninstaller = normalizeRegistryPath(paths.uninstallerPath);
   const installLocation = normalizeRegistryPath(entry.installLocation);
@@ -51,7 +70,10 @@ function registryEntryMatches(paths: WinPaths, entry: WindowsUninstallRegistryEn
   );
 }
 
-export async function queryWinRegistryEntries(paths: WinPaths): Promise<WindowsUninstallRegistryEntry[]> {
+export async function queryWinRegistryEntries(
+  paths: WinPaths,
+  config?: Pick<ToolPackConfig, "namespace">,
+): Promise<WindowsUninstallRegistryEntry[]> {
   const roots = [
     "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
     "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
@@ -67,7 +89,7 @@ export async function queryWinRegistryEntries(paths: WinPaths): Promise<WindowsU
     }
     let current: WindowsUninstallRegistryEntry | null = null;
     const collect = () => {
-      if (current != null && registryEntryMatches(paths, current)) entries.push(current);
+      if (current != null && registryEntryMatches(paths, current, config)) entries.push(current);
     };
     for (const rawLine of stdout.split(/\r?\n/)) {
       const line = rawLine.trimEnd();
@@ -94,8 +116,58 @@ export async function queryWinRegistryEntries(paths: WinPaths): Promise<WindowsU
   return entries;
 }
 
-export async function cleanupWinRegistryResidues(paths: WinPaths): Promise<string[]> {
-  const entries = await queryWinRegistryEntries(paths);
+export async function queryWinNamespaceRegistryEntry(
+  config: Pick<ToolPackConfig, "namespace">,
+  paths: WinPaths,
+): Promise<WindowsUninstallRegistryEntry | null> {
+  const identity = resolveWinInstallIdentity(config);
+  let stdout = "";
+  try {
+    ({ stdout } = await execReg(
+      ["query", `HKCU\\${identity.registryKey}`],
+      await pathExists(paths.appBuilderOutputRoot) ? paths.appBuilderOutputRoot : process.cwd(),
+    ));
+  } catch {
+    return null;
+  }
+  const entry = createEmptyRegistryEntry(`HKEY_CURRENT_USER\\${identity.registryKey}`);
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (line.length === 0 || line.startsWith("HKEY_")) continue;
+    const [name, , ...valueParts] = line.trim().split(/\s{2,}/);
+    if (name == null || valueParts.length === 0) continue;
+    const value = valueParts.join("  ");
+    if (name === "DisplayIcon") entry.displayIcon = value;
+    else if (name === "DisplayName") entry.displayName = value;
+    else if (name === "DisplayVersion") entry.displayVersion = value;
+    else if (name === "InstallLocation") entry.installLocation = value;
+    else if (name === "Publisher") entry.publisher = value;
+    else if (name === "QuietUninstallString") entry.quietUninstallString = value;
+    else if (name === "UninstallString") entry.uninstallString = value;
+  }
+  return entry;
+}
+
+export async function resolveWinRegisteredPaths(config: ToolPackConfig, paths: WinPaths): Promise<WinPaths> {
+  const entry = await queryWinNamespaceRegistryEntry(config, paths);
+  if (entry == null) return paths;
+  const identity = resolveWinInstallIdentity(config);
+  const uninstallerFromRegistry = stripRegistryQuotedValue(entry.quietUninstallString) || stripRegistryQuotedValue(entry.uninstallString);
+  const installDir = stripRegistryQuotedValue(entry.installLocation) || (uninstallerFromRegistry.length > 0 ? dirname(uninstallerFromRegistry) : paths.installDir);
+  const uninstallerPath = uninstallerFromRegistry.length > 0 ? uninstallerFromRegistry : join(installDir, identity.uninstallerName);
+  return {
+    ...paths,
+    installDir,
+    installedExePath: join(installDir, identity.exeName),
+    uninstallerPath,
+  };
+}
+
+export async function cleanupWinRegistryResidues(
+  paths: WinPaths,
+  config?: Pick<ToolPackConfig, "namespace">,
+): Promise<string[]> {
+  const entries = await queryWinRegistryEntries(paths, config);
   const removed: string[] = [];
   for (const entry of entries) {
     try {

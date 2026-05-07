@@ -128,6 +128,7 @@ RequestExecutionLevel user
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
+!include "WinMessages.nsh"
 
 Name "${productName}"
 OutFile "\${OUTPUT_EXE}"
@@ -141,6 +142,7 @@ ShowUninstDetails hide
 !define MUI_ABORTWARNING
 !define MUI_ICON "\${APP_ICON}"
 !define MUI_UNICON "\${APP_ICON}"
+Page custom RunningInstancesPage RunningInstancesPageLeave
 !insertmacro MUI_PAGE_WELCOME
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
 !insertmacro MUI_PAGE_DIRECTORY
@@ -163,7 +165,11 @@ ${createNsisLangString("RemoveDesktopShortcut", "Remove desktop shortcut", { LAN
 ${createNsisLangString("RemoveLocalData", "Delete local data for this installation", { LANG_SIMPCHINESE: "删除此安装的本地数据" })}
 ${createNsisLangString("UninstallOptionsTitle", "Uninstall options", { LANG_SIMPCHINESE: "卸载选项" })}
 ${createNsisLangString("UninstallOptionsSubtitle", "Choose which local items to remove.", { LANG_SIMPCHINESE: "选择要删除的本地项目。" })}
-${createNsisLangString("RunningInstancesMessage", `${productName} is still running. Close all ${productName} windows and background processes, then choose Retry.`, { LANG_SIMPCHINESE: `${productName} 仍在运行。请关闭所有 ${productName} 窗口和后台进程，然后选择重试。` })}
+${createNsisLangString("RunningInstancesTitle", `${productName} is still running`, { LANG_SIMPCHINESE: `${productName} 仍在运行` })}
+${createNsisLangString("RunningInstancesSubtitle", "Close it before continuing installation.", { LANG_SIMPCHINESE: "继续安装前需要关闭它。" })}
+${createNsisLangString("RunningInstancesMessage", `${productName} must be closed before installation can continue.`, { LANG_SIMPCHINESE: `继续安装前需要关闭 ${productName}。` })}
+${createNsisLangString("CloseAndContinue", "Close and continue", { LANG_SIMPCHINESE: "关闭并继续" })}
+${createNsisLangString("RunningInstancesCloseFailed", `${productName} could not be closed. Close it manually, then try again.`, { LANG_SIMPCHINESE: `无法关闭 ${productName}。请手动关闭后重试。` })}
 ${createNsisLangString("RunningInstancesSilentAbort", `${productName} is still running. Close it before running the installer silently.`, { LANG_SIMPCHINESE: `${productName} 仍在运行。请先关闭它，再运行静默安装。` })}
 ${createNsisLangString("ExistingInstallMessage", `${productName} is already installed in the selected folder. Choose OK to overwrite it, or Cancel to stop installation.`, { LANG_SIMPCHINESE: `所选文件夹中已经安装了 ${productName}。选择确定覆盖，或取消安装。` })}
 ${createNsisLangString("ExistingInstallSilentOverwrite", "Existing installation found; silent install will overwrite it.", { LANG_SIMPCHINESE: "发现已有安装；静默安装将覆盖它。" })}
@@ -173,6 +179,7 @@ Var RemoveLocalDataCheckbox
 Var RemoveDesktopShortcutState
 Var RemoveLocalDataState
 Var RunningInstancesOutput
+Var ExistingInstallLocation
 
 Function LogInstallerEvent
   Exch $0
@@ -208,7 +215,7 @@ FunctionEnd
 Function DetectRunningInstances
   Push $0
   Push $1
-  nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ns = ''${namespace}''; $flag = ''--od-stamp-namespace='' + $ns; $install = ''$INSTDIR''.ToLowerInvariant(); $matches = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ( $_.CommandLine.Contains($flag) -or ( $install.Length -gt 0 -and $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant().StartsWith($install) ) ) }; if ($matches) { ($matches | ForEach-Object { [string]$_.ProcessId + '' '' + $_.Name }) -join ''; '' }"'
+  nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { param($$install, $$registered); $$paths = @($$install, $$registered) | Where-Object { $$_ } | ForEach-Object { $$_.TrimEnd([char]92).ToLowerInvariant() } | Select-Object -Unique; $$matches = Get-CimInstance Win32_Process | Where-Object { $$matched = $$false; $$exe = $$_.ExecutablePath; if ($$null -ne $$exe) { $$exe = $$exe.ToLowerInvariant(); foreach ($$path in $$paths) { if ($$path -and $$exe.StartsWith($$path)) { $$matched = $$true; break } } }; $$matched }; if ($$matches) { $$matches | ForEach-Object { [string]$$_.ProcessId + [char]32 + $$_.Name } } }" "$INSTDIR" "$ExistingInstallLocation"'
   Pop $0
   Pop $1
   \${If} $0 == "0"
@@ -222,18 +229,29 @@ Function DetectRunningInstances
   Pop $0
 FunctionEnd
 
+Function CloseRunningInstances
+  Push $0
+  Push $1
+  nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { param($$install, $$registered); $$paths = @($$install, $$registered) | Where-Object { $$_ } | ForEach-Object { $$_.TrimEnd([char]92).ToLowerInvariant() } | Select-Object -Unique; $$matches = Get-CimInstance Win32_Process | Where-Object { $$matched = $$false; $$exe = $$_.ExecutablePath; if ($$null -ne $$exe) { $$exe = $$exe.ToLowerInvariant(); foreach ($$path in $$paths) { if ($$path -and $$exe.StartsWith($$path)) { $$matched = $$true; break } } }; $$matched }; $$ids = @($$matches | ForEach-Object { $$_.ProcessId }); foreach ($$id in $$ids) { try { [void][System.Diagnostics.Process]::GetProcessById($$id).CloseMainWindow() } catch {} }; Start-Sleep -Milliseconds 1500; foreach ($$id in $$ids) { try { $$p = [System.Diagnostics.Process]::GetProcessById($$id); if (-not $$p.HasExited) { Stop-Process -Id $$id -Force -ErrorAction SilentlyContinue } } catch {} }; if ($$ids) { $$ids -join ([char]32) } }" "$INSTDIR" "$ExistingInstallLocation"'
+  Pop $0
+  Pop $1
+  Push "running instances close exit=$0 output=$1"
+  Call LogInstallerEvent
+  Pop $1
+  Pop $0
+FunctionEnd
+
 Function .onInit
   SetShellVarContext current
+  ReadRegStr $ExistingInstallLocation HKCU "${registryKey}" "InstallLocation"
 
-check_running:
+  IfSilent silent_check no_existing_install
+silent_check:
   Call DetectRunningInstances
   \${If} $RunningInstancesOutput != ""
-    IfSilent 0 interactive_running
-      Push "install aborted: running instances detected: $RunningInstancesOutput"
-      Call LogInstallerEvent
-      Abort "$(RunningInstancesSilentAbort)"
-interactive_running:
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(RunningInstancesMessage)$\\r$\\n$\\r$\\n$RunningInstancesOutput" IDRETRY check_running IDCANCEL cancel_install
+    Push "install aborted: running instances detected: $RunningInstancesOutput"
+    Call LogInstallerEvent
+    Abort "$(RunningInstancesSilentAbort)"
   \${EndIf}
 
   IfFileExists "$INSTDIR\\${exeName}" existing_install no_existing_install
@@ -251,6 +269,45 @@ cancel_install:
 no_existing_install:
 FunctionEnd
 
+Function RunningInstancesPage
+  IfSilent done
+  Call DetectRunningInstances
+  \${If} $RunningInstancesOutput == ""
+    Abort
+  \${EndIf}
+  Push "running instances detected before install: $RunningInstancesOutput"
+  Call LogInstallerEvent
+
+  !insertmacro MUI_HEADER_TEXT "$(RunningInstancesTitle)" "$(RunningInstancesSubtitle)"
+  nsDialogs::Create 1018
+  Pop $0
+  \${If} $0 == error
+    Abort
+  \${EndIf}
+
+  \${NSD_CreateLabel} 0 0 100% 36u "$(RunningInstancesMessage)"
+  Pop $0
+
+  GetDlgItem $0 $HWNDPARENT 1
+  SendMessage $0 \${WM_SETTEXT} 0 "STR:$(CloseAndContinue)"
+  GetDlgItem $0 $HWNDPARENT 3
+  ShowWindow $0 0
+
+  nsDialogs::Show
+done:
+FunctionEnd
+
+Function RunningInstancesPageLeave
+  Call CloseRunningInstances
+  Call DetectRunningInstances
+  \${If} $RunningInstancesOutput != ""
+    Push "running instances still detected after close: $RunningInstancesOutput"
+    Call LogInstallerEvent
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(RunningInstancesCloseFailed)"
+    Abort
+  \${EndIf}
+FunctionEnd
+
 Function DirectoryPageLeave
   IfSilent done
   IfFileExists "$INSTDIR\\${exeName}" existing_install done
@@ -265,12 +322,13 @@ FunctionEnd
 
 Function CreateDesktopShortcut
   SetShellVarContext current
+  SetOutPath "$INSTDIR"
   CreateShortCut "$DESKTOP\\${shortcutName}" "$INSTDIR\\${exeName}" "" "$INSTDIR\\${exeName}" 0
 FunctionEnd
 
 Function RemoveInstallDir
   Push $0
-  nsExec::ExecToLog 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Test-Path -LiteralPath ''$INSTDIR'') { Remove-Item -LiteralPath ''$INSTDIR'' -Recurse -Force -ErrorAction SilentlyContinue }"'
+  nsExec::ExecToLog 'cmd.exe /d /s /c if exist "$INSTDIR" rmdir /s /q "$INSTDIR"'
   Pop $0
   Push "install dir remove exit=$0"
   Call LogInstallerEvent
@@ -308,7 +366,7 @@ FunctionEnd
 
 Function un.RemoveInstallDirContents
   Push $0
-  nsExec::ExecToLog 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Test-Path -LiteralPath ''$INSTDIR'') { Get-ChildItem -LiteralPath ''$INSTDIR'' -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }"'
+  nsExec::ExecToLog 'cmd.exe /d /s /c if exist "$INSTDIR" rmdir /s /q "$INSTDIR"'
   Pop $0
   Push "install dir fast remove exit=$0"
   Call un.LogInstallerEvent
@@ -317,7 +375,7 @@ FunctionEnd
 
 Function un.RemoveLocalDataRoot
   Push $0
-  nsExec::ExecToLog 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Test-Path -LiteralPath ''${localDataRoot}'') { Remove-Item -LiteralPath ''${localDataRoot}'' -Recurse -Force -ErrorAction SilentlyContinue }"'
+  nsExec::ExecToLog 'cmd.exe /d /s /c if exist "${localDataRoot}" rmdir /s /q "${localDataRoot}"'
   Pop $0
   Push "local data remove exit=$0"
   Call un.LogInstallerEvent
@@ -352,6 +410,7 @@ prepare_install_dir:
   \${EndIf}
 
   WriteUninstaller "$INSTDIR\\${uninstallerName}"
+  SetOutPath "$INSTDIR"
   IfSilent 0 skip_silent_desktop_shortcut
   CreateShortCut "$DESKTOP\\${shortcutName}" "$INSTDIR\\${exeName}" "" "$INSTDIR\\${exeName}" 0
 skip_silent_desktop_shortcut:
@@ -371,9 +430,15 @@ Section "Uninstall"
   SetShellVarContext current
   Push "uninstall section start"
   Call un.LogInstallerEvent
+  IfSilent delete_desktop_shortcut check_desktop_shortcut_state
+check_desktop_shortcut_state:
   \${If} $RemoveDesktopShortcutState == \${BST_CHECKED}
     Delete "$DESKTOP\\${shortcutName}"
   \${EndIf}
+  Goto after_desktop_shortcut
+delete_desktop_shortcut:
+  Delete "$DESKTOP\\${shortcutName}"
+after_desktop_shortcut:
   Delete "$SMPROGRAMS\\${shortcutName}"
   DeleteRegKey HKCU "${registryKey}"
   DeleteRegKey HKCU "${appPathsKey}"
