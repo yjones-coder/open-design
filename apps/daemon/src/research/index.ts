@@ -4,14 +4,10 @@ import type {
   ResearchSource,
 } from '@open-design/contracts/api/research';
 import { resolveProviderConfig } from '../media-config.js';
-import { exaSearch, ExaError } from './exa.js';
-import { perplexitySearch, PerplexityError } from './perplexity.js';
 import { tavilySearch, TavilyError } from './tavily.js';
 
 const DEFAULT_MAX_SOURCES = 5;
 const TAVILY_MAX_RESULTS_LIMIT = 20;
-const WEB_RESEARCH_PROVIDER_ORDER = ['exa', 'perplexity', 'tavily'] as const;
-type WebResearchProvider = (typeof WEB_RESEARCH_PROVIDER_ORDER)[number];
 
 export class ResearchError extends Error {
   constructor(
@@ -40,135 +36,64 @@ export async function searchResearch(
     throw new ResearchError('query required', 400, 'QUERY_REQUIRED');
   }
   const depth: ResearchDepth = 'shallow';
-  const providers = resolveProviderOrder(input.providers);
+  const requested = Array.isArray(input.providers) ? input.providers : [];
+  const providers = requested.filter(
+    (p: unknown): p is string => typeof p === 'string' && p.length > 0,
+  );
+  const provider = providers[0] ?? 'tavily';
   const maxSources = clampMaxSources(input.maxSources);
-  const providerErrors: string[] = [];
-  let sawConfiguredProvider = false;
 
-  for (const provider of providers) {
-    const cfg = await resolveProviderConfig(input.projectRoot, provider);
-    if (!cfg.apiKey) continue;
-    sawConfiguredProvider = true;
-    try {
-      const out = await runProviderSearch(provider, {
-        apiKey: cfg.apiKey,
-        baseUrl: cfg.baseUrl,
-        query,
-        maxSources,
-        ...(input.signal ? { signal: input.signal } : {}),
-      });
-      if (out.sources.length === 0) {
-        providerErrors.push(`${provider}: no sources found`);
-        continue;
-      }
-      return {
-        query,
-        summary: out.answer || synthesizeFallbackSummary(out.sources),
-        sources: out.sources,
-        provider,
-        depth,
-        fetchedAt: Date.now(),
-      };
-    } catch (err) {
-      providerErrors.push(`${provider}: ${providerErrorMessage(err)}`);
-    }
-  }
-
-  if (!sawConfiguredProvider) {
+  if (provider !== 'tavily') {
     throw new ResearchError(
-      'No web research provider API key configured (configure Exa, Perplexity, or Tavily in Settings -> Media providers)',
+      `provider "${provider}" not supported in Phase 1`,
       400,
-      'WEB_RESEARCH_PROVIDER_KEY_MISSING',
+      'UNSUPPORTED_RESEARCH_PROVIDER',
     );
   }
-  throw new ResearchError(
-    `All configured web research providers failed: ${providerErrors.join('; ')}`,
-    502,
-    'RESEARCH_PROVIDER_FAILED',
-  );
-}
 
-function resolveProviderOrder(providers: unknown): WebResearchProvider[] {
-  const requested = Array.isArray(providers)
-    ? providers.filter(
-        (p: unknown): p is string => typeof p === 'string' && p.trim().length > 0,
-      )
-    : [];
-  const order = requested.length > 0 ? requested : WEB_RESEARCH_PROVIDER_ORDER;
-  const resolved: WebResearchProvider[] = [];
-  for (const raw of order) {
-    const provider = raw.trim().toLowerCase();
-    if (provider === 'financialdatasets') {
-      throw new ResearchError(
-        'Financial Datasets is not a web search provider; use Exa, Perplexity, or Tavily for research search',
-        400,
-        'UNSUPPORTED_RESEARCH_PROVIDER',
-      );
-    }
-    if (!isWebResearchProvider(provider)) {
-      throw new ResearchError(
-        `provider "${raw}" not supported for web research`,
-        400,
-        'UNSUPPORTED_RESEARCH_PROVIDER',
-      );
-    }
-    if (!resolved.includes(provider)) resolved.push(provider);
+  const cfg = await resolveProviderConfig(input.projectRoot, 'tavily');
+  if (!cfg.apiKey) {
+    throw new ResearchError(
+      'Tavily API key not configured (Settings -> Tavily Search)',
+      400,
+      'TAVILY_API_KEY_MISSING',
+    );
   }
-  return resolved;
-}
 
-function isWebResearchProvider(value: string): value is WebResearchProvider {
-  return (WEB_RESEARCH_PROVIDER_ORDER as readonly string[]).includes(value);
-}
-
-async function runProviderSearch(
-  provider: WebResearchProvider,
-  input: {
-    apiKey: string;
-    baseUrl?: string;
-    query: string;
-    maxSources: number;
-    signal?: AbortSignal;
-  },
-): Promise<{ answer: string; sources: ResearchSource[] }> {
-  if (provider === 'exa') {
-    return exaSearch({
-      apiKey: input.apiKey,
-      query: input.query,
-      maxResults: input.maxSources,
-      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+  let answer = '';
+  let sources: ResearchSource[] = [];
+  try {
+    const out = await tavilySearch({
+      apiKey: cfg.apiKey,
+      query,
+      searchDepth: 'basic',
+      maxResults: maxSources,
+      includeAnswer: true,
+      ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     });
+    answer = out.answer;
+    sources = out.sources;
+  } catch (err) {
+    const message =
+      err instanceof TavilyError
+        ? err.message
+        : `research failed: ${(err as Error).message || String(err)}`;
+    throw new ResearchError(message, 502, 'RESEARCH_PROVIDER_FAILED');
   }
-  if (provider === 'perplexity') {
-    return perplexitySearch({
-      apiKey: input.apiKey,
-      query: input.query,
-      maxResults: input.maxSources,
-      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
-      ...(input.signal ? { signal: input.signal } : {}),
-    });
-  }
-  return tavilySearch({
-    apiKey: input.apiKey,
-    query: input.query,
-    searchDepth: 'basic',
-    maxResults: input.maxSources,
-    includeAnswer: true,
-    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
-    ...(input.signal ? { signal: input.signal } : {}),
-  });
-}
 
-function providerErrorMessage(err: unknown): string {
-  if (
-    err instanceof ExaError ||
-    err instanceof PerplexityError ||
-    err instanceof TavilyError
-  ) {
-    return err.message;
+  if (sources.length === 0) {
+    throw new ResearchError('no sources found', 404, 'NO_RESEARCH_SOURCES');
   }
-  return (err as Error).message || String(err);
+
+  return {
+    query,
+    summary: answer || synthesizeFallbackSummary(sources),
+    sources,
+    provider,
+    depth,
+    fetchedAt: Date.now(),
+  };
 }
 
 function synthesizeFallbackSummary(sources: ResearchSource[]): string {
