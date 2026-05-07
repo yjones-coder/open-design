@@ -429,9 +429,6 @@ export const RU_DESIGN_SYSTEM_IDS_WITH_EN_FALLBACK = [
   'storytelling',
   'totality-festival',
   'tetris',
-  // TODO: add localized DS summary for totality-festival (introduced in #678).
-  // Fallback for now so the localized-content coverage test passes.
-  'totality-festival',
   'vibrant',
   'vintage',
 ] as const;
