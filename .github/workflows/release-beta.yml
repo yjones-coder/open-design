@@ -59,6 +59,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Prepare beta release metadata
         id: beta
@@ -227,9 +229,9 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ runner.temp }}/tools-pack-cache
-          key: tools-pack-win-v4-${{ runner.os }}-${{ steps.win_tools_pack_cache_key.outputs.epoch }}
+          key: tools-pack-win-v5-${{ runner.os }}-${{ steps.win_tools_pack_cache_key.outputs.epoch }}
           restore-keys: |
-            tools-pack-win-v4-${{ runner.os }}-
+            tools-pack-win-v5-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -301,18 +303,29 @@ jobs:
             exit 0
           }
 
+          $priorityByNode = @{
+            "win.electron-builder-dir" = 0
+            "win.workspace-build" = 1
+            "win.resource-tree" = 2
+            "win.workspace-tarballs" = 3
+            "win.packaged-app" = 4
+          }
+
           $entries = Get-ChildItem -Path $entryRoot -Directory -Recurse |
             Where-Object { Test-Path (Join-Path $_.FullName "manifest.json") } |
             ForEach-Object {
               $size = (Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
                 Measure-Object -Property Length -Sum).Sum
+              $node = Split-Path (Split-Path $_.FullName -Parent) -Leaf
               [pscustomobject]@{
                 Path = $_.FullName
+                Node = $node
+                Priority = [int]($priorityByNode[$node] ?? 100)
                 Size = [int64]($size ?? 0)
                 LastWriteTimeUtc = $_.LastWriteTimeUtc
               }
             } |
-            Sort-Object LastWriteTimeUtc -Descending
+            Sort-Object Priority, @{ Expression = "LastWriteTimeUtc"; Descending = $true }
 
           $keptBytes = 0L
           $removedBytes = 0L
@@ -335,7 +348,7 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ runner.temp }}/tools-pack-cache
-          key: tools-pack-win-v4-${{ runner.os }}-${{ steps.win_tools_pack_cache_key.outputs.epoch }}
+          key: tools-pack-win-v5-${{ runner.os }}-${{ steps.win_tools_pack_cache_key.outputs.epoch }}
 
       - name: Prepare windows beta assets
         shell: pwsh

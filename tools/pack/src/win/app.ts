@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
 
@@ -18,17 +18,13 @@ import {
   PRODUCT_NAME,
 } from "./constants.js";
 import { readPackagedVersion, writePackagedConfig } from "./manifest.js";
-import { removeTree } from "./fs.js";
+import { pathExists, removeTree } from "./fs.js";
 import type {
-  AssembledAppCacheMetadata,
-  AssembledAppCacheResult,
-  ElectronReadyAppCacheMetadata,
-  ElectronReadyAppCacheResult,
-  NativeRebuildCacheMetadata,
-  NativeRebuildCacheResult,
   PackedTarballInfo,
   PackedTarballsCacheMetadata,
   PackedTarballsCacheResult,
+  PackagedAppCacheMetadata,
+  PackagedAppCacheResult,
   WinPaths,
 } from "./types.js";
 
@@ -81,43 +77,6 @@ async function runElectronRebuild(config: ToolPackConfig, appRoot: string): Prom
 
 function nativeRebuildOutputPath(appRoot: string): string {
   return join(appRoot, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node");
-}
-
-export async function rebuildWinNativeDependencies(
-  config: ToolPackConfig,
-  cache: ToolPackCache,
-  assembledApp: AssembledAppCacheResult,
-): Promise<NativeRebuildCacheResult> {
-  const key = hashJson({
-    arch: "x64",
-    assembledAppKey: assembledApp.key,
-    electronVersion: config.electronVersion,
-    modules: ELECTRON_REBUILD_NATIVE_MODULES,
-    platform: "win32",
-    schemaVersion: 1,
-  });
-  const node = {
-    id: "win.native-rebuild",
-    key,
-    outputs: ["better_sqlite3.node"],
-    invalidate: async () => null,
-    build: async ({ entryRoot }: { entryRoot: string }): Promise<NativeRebuildCacheMetadata> => {
-      const stagingAppRoot = join(entryRoot, "app");
-      await cp(assembledApp.appRoot, stagingAppRoot, { recursive: true });
-      await runElectronRebuild(config, stagingAppRoot);
-      await cp(nativeRebuildOutputPath(stagingAppRoot), join(entryRoot, "better_sqlite3.node"));
-      return { modules: ELECTRON_REBUILD_NATIVE_MODULES };
-    },
-  };
-  const manifest = await cache.acquire({
-    materialize: [],
-    node,
-  });
-  return {
-    key,
-    modules: manifest.payloadMetadata.modules,
-    nodePath: join(manifest.entryPath, "better_sqlite3.node"),
-  };
 }
 
 async function buildWorkspaceArtifacts(config: ToolPackConfig): Promise<void> {
@@ -243,45 +202,51 @@ async function writeAssembledAppEntrypoints(
   );
 }
 
-async function createAssembledAppCacheKey(
+export async function createWinPackagedAppCacheKey(
   config: ToolPackConfig,
   tarballsKey: string,
   packedTarballs: PackedTarballInfo[],
 ): Promise<string> {
   return hashJson({
+    arch: "x64",
     electronVersion: config.electronVersion,
-    node: "win.assembled-app",
+    modules: ELECTRON_REBUILD_NATIVE_MODULES,
+    node: "win.packaged-app",
     packedTarballs,
     platform: "win32",
-    schemaVersion: 5,
+    schemaVersion: 1,
     tarballsKey,
     webOutputMode: config.webOutputMode,
   });
 }
 
-export async function writeAssembledApp(
+export async function prepareWinPackagedApp(
   config: ToolPackConfig,
   paths: WinPaths,
   tarballs: PackedTarballsCacheResult,
   cache: ToolPackCache,
-): Promise<AssembledAppCacheResult> {
+): Promise<PackagedAppCacheResult> {
   const packagedVersion = await readPackagedVersion(config);
   await removeTree(join(config.roots.output.namespaceRoot, "assembled"));
   const packedTarballs = tarballs.tarballs;
-  const key = await createAssembledAppCacheKey(config, tarballs.key, packedTarballs);
+  const key = await createWinPackagedAppCacheKey(config, tarballs.key, packedTarballs);
   const node = {
-    id: "win.assembled-app",
+    id: "win.packaged-app",
     key,
     outputs: ["app"],
     invalidate: async () => null,
-    build: async ({ entryRoot }: { entryRoot: string }): Promise<AssembledAppCacheMetadata> => {
-      const assembledAppRoot = join(entryRoot, "app");
+    build: async ({ entryRoot }: { entryRoot: string }): Promise<PackagedAppCacheMetadata> => {
+      const appRoot = join(entryRoot, "app");
       await writeAssembledAppEntrypoints(
-        { ...paths, assembledAppRoot, assembledMainEntryPath: join(assembledAppRoot, "main.cjs"), assembledPackageJsonPath: join(assembledAppRoot, "package.json") },
+        { ...paths, assembledAppRoot: appRoot, assembledMainEntryPath: join(appRoot, "main.cjs"), assembledPackageJsonPath: join(appRoot, "package.json") },
         packedTarballs,
         packagedVersion,
       );
-      await runNpmInstall(assembledAppRoot);
+      await runNpmInstall(appRoot);
+      await runElectronRebuild(config, appRoot);
+      if (!(await pathExists(nativeRebuildOutputPath(appRoot)))) {
+        throw new Error(`Electron ABI rebuild did not produce ${nativeRebuildOutputPath(appRoot)}`);
+      }
       return { packagedVersion };
     },
   };
@@ -291,39 +256,4 @@ export async function writeAssembledApp(
   });
   await writePackagedConfig(config, paths, packagedVersion);
   return { appRoot: join(manifest.entryPath, "app"), key, packagedVersion };
-}
-
-export async function prepareElectronReadyApp(
-  assembledApp: AssembledAppCacheResult,
-  nativeRebuild: NativeRebuildCacheResult,
-  cache: ToolPackCache,
-): Promise<ElectronReadyAppCacheResult> {
-  const key = hashJson({
-    assembledAppKey: assembledApp.key,
-    nativeRebuildKey: nativeRebuild.key,
-    node: "win.electron-ready-app",
-    schemaVersion: 2,
-  });
-  const node = {
-    id: "win.electron-ready-app",
-    key,
-    outputs: ["app"],
-    invalidate: async () => null,
-    build: async ({ entryRoot }: { entryRoot: string }): Promise<ElectronReadyAppCacheMetadata> => {
-      const appRoot = join(entryRoot, "app");
-      await cp(assembledApp.appRoot, appRoot, { recursive: true });
-      await cp(nativeRebuild.nodePath, nativeRebuildOutputPath(appRoot));
-      return { assembledAppKey: assembledApp.key, nativeRebuildKey: nativeRebuild.key };
-    },
-  };
-  const manifest = await cache.acquire({
-    materialize: [],
-    node,
-  });
-  return {
-    appRoot: join(manifest.entryPath, "app"),
-    assembledAppKey: manifest.payloadMetadata.assembledAppKey,
-    key,
-    nativeRebuildKey: manifest.payloadMetadata.nativeRebuildKey,
-  };
 }

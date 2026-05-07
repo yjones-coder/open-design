@@ -207,6 +207,55 @@ export class ToolPackCache {
     });
     return { ...manifest, entryPath };
   }
+
+  async readHit<TMetadata>({
+    materialize,
+    node,
+  }: {
+    materialize: CacheMaterializeTarget[];
+    node: CacheNode<TMetadata>;
+  }): Promise<CacheAcquireResult<TMetadata> | null> {
+    const startedAt = Date.now();
+    const keyHash = hashText(`${node.id}\n${node.key}`);
+    const entryPath = join(this.root, "entries", safePathToken(node.id), keyHash);
+    const manifestPath = join(entryPath, "manifest.json");
+    const outputs = node.outputs.map(normalizeRelativePath);
+    const materialized: CacheAcquireReport["materialized"] = [];
+
+    const manifest = await withDirectoryLock(join(this.root, "locks"), "global", async () => {
+      const existingManifest = await readManifest<TMetadata>(manifestPath);
+      if (existingManifest == null) return null;
+      if (existingManifest.schemaVersion !== CACHE_SCHEMA_VERSION) return null;
+      if (existingManifest.nodeId !== node.id) return null;
+      if (existingManifest.key !== node.key) return null;
+      if ((await assertOutputsExist(entryPath, outputs)) != null) return null;
+      if ((await node.invalidate({ entryRoot: entryPath, manifest: existingManifest })) != null) return null;
+
+      for (const target of materialize) {
+        const sourcePath = join(entryPath, target.from);
+        await rm(target.to, { force: true, recursive: true });
+        await mkdir(dirname(target.to), { recursive: true });
+        await cp(sourcePath, target.to, { recursive: true });
+        materialized.push({ from: normalizeRelativePath(target.from), to: target.to });
+      }
+
+      return existingManifest;
+    });
+
+    if (manifest == null) return null;
+    this.#entries.push({
+      durationMs: Date.now() - startedAt,
+      entryPath,
+      key: node.key,
+      keyHash,
+      materialized,
+      nodeId: node.id,
+      outputs,
+      reason: null,
+      status: "hit",
+    });
+    return { ...manifest, entryPath };
+  }
 }
 
 export async function hashPath(

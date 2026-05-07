@@ -30,7 +30,6 @@ import { resolveWinTargets } from "./report.js";
 import type { ResourceTreeResult } from "./resources.js";
 import type {
   ElectronBuilderDirCacheMetadata,
-  ElectronReadyAppCacheResult,
   WinPaths,
 } from "./types.js";
 
@@ -211,7 +210,8 @@ export async function runElectronBuilder(
   config: ToolPackConfig,
   paths: WinPaths,
   cache: ToolPackCache,
-  electronReadyApp: ElectronReadyAppCacheResult,
+  packagedAppKey: string,
+  getPackagedAppRoot: () => Promise<string>,
   resourceTree: ResourceTreeResult,
 ): Promise<void> {
   const packagedVersion = await readPackagedVersion(config);
@@ -220,17 +220,17 @@ export async function runElectronBuilder(
     asar: ELECTRON_BUILDER_ASAR,
     buildDependenciesFromSource: ELECTRON_BUILDER_BUILD_DEPENDENCIES_FROM_SOURCE,
     electronBuilderCliPath: config.electronBuilderCliPath,
-    electronReadyAppKey: electronReadyApp.key,
     electronVersion: config.electronVersion,
     filePatterns: ELECTRON_BUILDER_FILE_PATTERNS,
     node: "win.electron-builder-dir",
     nodeGypRebuild: ELECTRON_BUILDER_NODE_GYP_REBUILD,
     npmRebuild: ELECTRON_BUILDER_NPM_REBUILD,
+    packagedAppKey,
     packagedConfigSchemaVersion: 1,
     portable: config.portable,
     platform: "win32",
     resourceTreeKey: resourceTree.key,
-    schemaVersion: 3,
+    schemaVersion: 4,
     target: "dir",
     webOutputMode: config.webOutputMode,
     winIcon: await hashPath(winResources.icon),
@@ -242,18 +242,36 @@ export async function runElectronBuilder(
     outputs: ["builder", ...(config.webOutputMode === "standalone" ? [auditOutput] : [])],
     invalidate: async () => null,
     build: async ({ entryRoot }: { entryRoot: string }): Promise<ElectronBuilderDirCacheMetadata> => {
+      const packagedAppRoot = await getPackagedAppRoot();
       await runElectronBuilderRaw(
         { ...config, to: "dir" },
         { ...createCacheLocalWinPaths(paths, entryRoot), resourceRoot: resourceTree.resourceRoot },
-        electronReadyApp.appRoot,
+        packagedAppRoot,
       );
-      return { electronReadyAppKey: electronReadyApp.key, packagedVersion };
+      return { packagedAppKey, packagedVersion };
     },
   };
-  const manifest = await cache.acquire({
+  let manifest = await cache.readHit({
     materialize: [],
     node,
   });
+  if (manifest == null) {
+    const packagedAppRoot = await getPackagedAppRoot();
+    manifest = await cache.acquire({
+      materialize: [],
+      node: {
+        ...node,
+        build: async ({ entryRoot }: { entryRoot: string }): Promise<ElectronBuilderDirCacheMetadata> => {
+          await runElectronBuilderRaw(
+            { ...config, to: "dir" },
+            { ...createCacheLocalWinPaths(paths, entryRoot), resourceRoot: resourceTree.resourceRoot },
+            packagedAppRoot,
+          );
+          return { packagedAppKey, packagedVersion };
+        },
+      },
+    });
+  }
 
   const cachedBuilderRoot = join(manifest.entryPath, "builder");
   const cachedUnpackedRoot = join(cachedBuilderRoot, "win-unpacked");

@@ -16,36 +16,17 @@ export type PackedTarballsCacheResult = PackedTarballsCacheMetadata & {
   key: string;
 };
 
-export type AssembledAppCacheMetadata = {
+export type PackagedAppCacheMetadata = {
   packagedVersion: string;
 };
 
-export type AssembledAppCacheResult = AssembledAppCacheMetadata & {
-  appRoot: string;
-  key: string;
-};
-
-export type NativeRebuildCacheMetadata = {
-  modules: readonly string[];
-};
-
-export type NativeRebuildCacheResult = NativeRebuildCacheMetadata & {
-  key: string;
-  nodePath: string;
-};
-
-export type ElectronReadyAppCacheMetadata = {
-  assembledAppKey: string;
-  nativeRebuildKey: string;
-};
-
-export type ElectronReadyAppCacheResult = ElectronReadyAppCacheMetadata & {
+export type PackagedAppCacheResult = PackagedAppCacheMetadata & {
   appRoot: string;
   key: string;
 };
 
 export type ElectronBuilderDirCacheMetadata = {
-  electronReadyAppKey: string;
+  packagedAppKey: string;
   packagedVersion: string;
 };
 

@@ -6,10 +6,9 @@ import { ToolPackCache } from "../cache.js";
 import type { ToolPackConfig } from "../config.js";
 import {
   collectWorkspaceTarballs,
+  createWinPackagedAppCacheKey,
   ensureWinWorkspaceBuild,
-  prepareElectronReadyApp,
-  rebuildWinNativeDependencies,
-  writeAssembledApp,
+  prepareWinPackagedApp,
 } from "./app.js";
 import { PRODUCT_NAME } from "./constants.js";
 import { pathExists } from "./fs.js";
@@ -70,11 +69,15 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
     await copyWinIcon(paths);
   });
   const tarballs = await runPhase("workspace-tarballs", async () => collectWorkspaceTarballs(config, paths, cache));
-  const assembledApp = await runPhase("assembled-app", async () => writeAssembledApp(config, paths, tarballs, cache));
-  const nativeRebuild = await runPhase("native-rebuild", async () => rebuildWinNativeDependencies(config, cache, assembledApp));
-  const electronReadyApp = await runPhase("electron-ready-app", async () => prepareElectronReadyApp(assembledApp, nativeRebuild, cache));
+  const packagedAppKey = await createWinPackagedAppCacheKey(config, tarballs.key, tarballs.tarballs);
+  let packagedAppRoot: string | null = null;
   await runPhase("electron-builder", async () => {
-    await runElectronBuilder(config, paths, cache, electronReadyApp, resourceTree);
+    await runElectronBuilder(config, paths, cache, packagedAppKey, async () => {
+      if (packagedAppRoot != null) return packagedAppRoot;
+      const packagedApp = await prepareWinPackagedApp(config, paths, tarballs, cache);
+      packagedAppRoot = packagedApp.appRoot;
+      return packagedAppRoot;
+    }, resourceTree);
   });
   await runPhase("latest-yml", async () => {
     await writeLocalLatestYml(config, paths);
