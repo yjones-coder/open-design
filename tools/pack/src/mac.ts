@@ -203,12 +203,34 @@ const ELECTRON_BUILDER_FILE_PATTERNS = [
   "!**/node_modules/better-sqlite3/deps",
   "!**/node_modules/better-sqlite3/deps/**",
 ] as const;
+// Keep Electron native UI resources aligned with the Web UI locale set.
+// Electron uses underscore-separated locale ids; its base "es" resource
+// covers the app's es-ES dictionary.
+const MAC_ELECTRON_LANGUAGES = [
+  "en",
+  "de",
+  "zh_CN",
+  "zh_TW",
+  "pt_BR",
+  "es",
+  "ru",
+  "fa",
+  "ar",
+  "ja",
+  "ko",
+  "pl",
+  "hu",
+  "fr",
+  "uk",
+  "tr",
+] as const;
 
 export type MacSizeReport = {
   appBytes: number;
   builder: {
     asar: boolean;
     compression: ToolPackConfig["macCompression"];
+    electronLanguages: readonly string[];
     filePatterns: readonly string[];
     targets: ElectronBuilderTarget[];
     webOutputMode: ToolPackConfig["webOutputMode"];
@@ -738,6 +760,7 @@ async function runElectronBuilder(
     files: [...ELECTRON_BUILDER_FILE_PATTERNS],
     mac: {
       category: "public.app-category.developer-tools",
+      electronLanguages: MAC_ELECTRON_LANGUAGES,
       entitlements: config.signed ? macResources.entitlements : undefined,
       entitlementsInherit: config.signed ? macResources.entitlementsInherit : undefined,
       gatekeeperAssess: false,
@@ -907,6 +930,7 @@ async function collectMacSizeReport(
     builder: {
       asar: ELECTRON_BUILDER_ASAR,
       compression: config.macCompression,
+      electronLanguages: MAC_ELECTRON_LANGUAGES,
       filePatterns: ELECTRON_BUILDER_FILE_PATTERNS,
       targets,
       webOutputMode: config.webOutputMode,
