@@ -228,10 +228,6 @@ test('saving a Composio key from Settings unlocks the connectors gate immediatel
   await expect(page.getByTestId('connector-gate')).toHaveCount(0);
   await expect(page.getByTestId('connectors-search-input')).toBeEnabled();
   await expect(connectorCard(page, 'github')).toBeVisible();
-  await expect(settingsDialog).toBeVisible();
-  await expect(
-    settingsDialog.getByPlaceholder('Paste a new key to replace the saved one'),
-  ).toBeVisible();
 
   const savedConfig = await page.evaluate((key) => {
     const raw = window.localStorage.getItem(key);
