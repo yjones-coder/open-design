@@ -602,9 +602,22 @@
     function showTooltip(html, x, y){
       ensureTooltip();
       tooltipEl.innerHTML = html;
-      tooltipEl.style.left = `${x + 14}px`;
-      tooltipEl.style.top = `${y + 14}px`;
+      // Position off-screen first so we can measure the actual size, then clamp inside the viewport
+      tooltipEl.style.left = '-9999px';
+      tooltipEl.style.top = '-9999px';
       tooltipEl.classList.add('show');
+      const rect = tooltipEl.getBoundingClientRect();
+      const margin = 8;
+      const vw = window.innerWidth || document.documentElement.clientWidth;
+      const vh = window.innerHeight || document.documentElement.clientHeight;
+      let left = x + 14;
+      let top = y + 14;
+      if(left + rect.width + margin > vw) left = Math.max(margin, x - rect.width - 14);
+      if(top + rect.height + margin > vh) top = Math.max(margin, y - rect.height - 14);
+      if(left < margin) left = margin;
+      if(top < margin) top = margin;
+      tooltipEl.style.left = `${left}px`;
+      tooltipEl.style.top = `${top}px`;
     }
     function hideTooltip(){
       if(!tooltipEl) return;
@@ -654,6 +667,25 @@
       const ctx = c.getContext('2d'); const w = c.width; const h = c.height;
       ctx.clearRect(0,0,w,h);
       const padLeft = 42, padRight = 16, padTop = 18, padBottom = 26;
+      // Guard against empty / single-point datasets so adapters that pass
+      // sparse data don't divide by zero (NaN axis labels) or pick Infinity
+      // as min/max
+      if(!Array.isArray(arr) || arr.length === 0){
+        ctx.fillStyle = textColor(); ctx.font = '11px Inter';
+        ctx.fillText('No data', padLeft, h / 2);
+        chartState[id] = { type:'line', points: [], values: [], labels: [], unit: cfg.unit || '', decimals: cfg.decimals ?? 0, isShortSeries: true };
+        return;
+      }
+      if(arr.length === 1){
+        // Render a single dot + value label rather than crashing on `arr.length-1`
+        const cx = (padLeft + w - padRight) / 2;
+        const cy = (padTop + h - padBottom) / 2;
+        ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI*2); ctx.fillStyle = colorA; ctx.fill();
+        ctx.fillStyle = textColor(); ctx.font = '11px Inter';
+        ctx.fillText(`${arr[0]}${cfg.unit || ''}`, cx + 10, cy + 4);
+        chartState[id] = { type:'line', points: [{ x: cx, y: cy }], values: arr.slice(), labels: cfg.xLabels || ['1'], unit: cfg.unit || '', decimals: cfg.decimals ?? 0, isShortSeries: true };
+        return;
+      }
       const min = Math.min(...arr), max = Math.max(...arr);
       for(let i=0;i<5;i++){
         const y = padTop + (h-padTop-padBottom) * (i/4);
@@ -715,7 +747,16 @@
         ctx.beginPath(); ctx.arc(pp.x, pp.y, 8, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fill();
         ctx.beginPath(); ctx.arc(pp.x, pp.y, 4, 0, Math.PI*2); ctx.fillStyle = '#ffd166'; ctx.fill();
       }
-      chartState[id] = { type:'line', points: pts, values: arr, labels: cfg.xLabels || arr.map((_,i)=>String(i+1)), unit: cfg.unit || '' };
+      chartState[id] = {
+        type:'line',
+        points: pts,
+        values: arr,
+        labels: cfg.xLabels || arr.map((_,i)=>String(i+1)),
+        unit: cfg.unit || '',
+        decimals: typeof cfg.decimals === 'number' ? cfg.decimals : 0,
+        // guard against single-point datasets when an adapter passes one value
+        isShortSeries: arr.length < 2
+      };
     }
 
     function drawStackBars(id, hoverIndex = -1){
@@ -845,7 +886,7 @@
           drawLineChart(id, st.values, colors[0], colors[1], {
             xLabels: st.labels,
             unit: st.unit,
-            decimals: 0,
+            decimals: st.decimals,
             pinIndex: local.pin,
             rangeStart: local.dragStart,
             rangeEnd: local.dragEnd,
@@ -861,6 +902,119 @@
           st.points.forEach((p,i)=>{ const d = Math.abs(p.x - mx); if(d < minDist){minDist = d; nearest = i;} });
           return nearest;
         };
+        // Touch support — call the same logical handlers directly with a
+        // plain pointer object instead of dispatching synthetic Events. This
+        // avoids assigning to read-only Event fields (Event.target/etc.) which
+        // would throw a TypeError before reaching the real handler.
+        const buildPointer = (touch, originalEvent)=>({
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+          shiftKey: !!(originalEvent && originalEvent.shiftKey)
+        });
+        const handleTouchStart = (p)=>{
+          const local = interactionState.line[id];
+          const nearest = nearestByMouse(p);
+          if(nearest < 0) return;
+          local.dragStart = nearest;
+          local.dragEnd = nearest;
+          local.dragging = true;
+          redraw();
+        };
+        const handleTouchMove = (p)=>{
+          const st = chartState[id]; if(!st) return;
+          const nearest = nearestByMouse(p);
+          const local = interactionState.line[id];
+          if(!local.dragging){
+            redraw({ hoverIndex: nearest });
+            updateInsights({
+              focus: `<b>${nameMap[id]}</b><br/>${st.labels[nearest]} = ${st.values[nearest]}${st.unit}`
+            });
+            showTooltip(`<b>${st.labels[nearest]}</b><br/>Value: ${st.values[nearest]}${st.unit}`, p.clientX, p.clientY);
+            return;
+          }
+          local.dragEnd = nearest;
+          redraw();
+          const rs = Math.min(local.dragStart, local.dragEnd);
+          const re = Math.max(local.dragStart, local.dragEnd);
+          const seg = st.values.slice(rs, re + 1);
+          const avg = (seg.reduce((a,b)=>a+b,0) / seg.length).toFixed(1);
+          updateInsights({
+            focus: `<b>${nameMap[id]}</b><br/>Selecting ${st.labels[rs]} - ${st.labels[re]}`,
+            range: `Avg <b>${avg}${st.unit}</b>`
+          });
+          showTooltip(`<b>${st.labels[rs]} → ${st.labels[re]}</b><br/>Avg: ${avg}${st.unit}`, p.clientX, p.clientY);
+        };
+        const handleTouchEnd = (p)=>{
+          const st = chartState[id];
+          const local = interactionState.line[id];
+          if(!local.dragging) return;
+          const moved = local.dragStart !== local.dragEnd;
+          local.dragging = false;
+          if(!moved){
+            // tap-to-pin
+            local.pin = local.pin === local.dragStart ? null : local.dragStart;
+            local.dragStart = null;
+            local.dragEnd = null;
+            redraw({ hoverIndex: local.pin });
+            if(local.pin !== null){
+              updateInsights({ pin: `<b>${nameMap[id]} @ ${st.labels[local.pin]}</b><br/>${st.values[local.pin]}${st.unit}` });
+              showTooltip(`<b>Pinned: ${st.labels[local.pin]}</b><br/>Value: ${st.values[local.pin]}${st.unit}`, p.clientX, p.clientY);
+            } else { updateInsights({ pin: 'None' }); hideTooltip(); }
+            return;
+          }
+          local.dragStart = null;
+          local.dragEnd = null;
+          redraw();
+        };
+        c.addEventListener('touchstart',(e)=>{
+          if(!e.touches || e.touches.length === 0) return;
+          e.preventDefault();
+          handleTouchStart(buildPointer(e.touches[0], e));
+        }, { passive: false });
+        c.addEventListener('touchmove',(e)=>{
+          if(!e.touches || e.touches.length === 0) return;
+          e.preventDefault();
+          handleTouchMove(buildPointer(e.touches[0], e));
+        }, { passive: false });
+        c.addEventListener('touchend',(e)=>{
+          const t = (e.changedTouches && e.changedTouches[0]) || null;
+          if(!t) return;
+          e.preventDefault();
+          handleTouchEnd(buildPointer(t, e));
+        }, { passive: false });
+        c.addEventListener('touchcancel',()=>{
+          const local = interactionState.line[id];
+          local.dragging = false;
+          local.dragStart = null;
+          local.dragEnd = null;
+          hideTooltip();
+          redraw({ hoverIndex: local.pin });
+        });
+        // Keyboard arrow keys: step through indices for accessibility (a11y).
+        // Tab focus the canvas first, then ←/→ to move the pin one step.
+        if(!c.hasAttribute('tabindex')) c.setAttribute('tabindex', '0');
+        c.addEventListener('keydown',(e)=>{
+          const st = chartState[id]; if(!st || !st.points || st.points.length === 0) return;
+          const local = interactionState.line[id];
+          const last = st.points.length - 1;
+          if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+            e.preventDefault();
+            const cur = local.pin == null ? 0 : local.pin;
+            const next = e.key === 'ArrowLeft' ? Math.max(0, cur - 1) : Math.min(last, cur + 1);
+            local.pin = next;
+            redraw({ hoverIndex: next });
+            updateInsights({
+              focus: `<b>${nameMap[id]}</b><br/>${st.labels[next]} = ${st.values[next]}${st.unit}`,
+              pin: `<b>${nameMap[id]} @ ${st.labels[next]}</b><br/>${st.values[next]}${st.unit}`
+            });
+          } else if(e.key === 'Escape'){
+            e.preventDefault();
+            local.pin = null; local.dragStart = null; local.dragEnd = null; local.dragging = false;
+            redraw();
+            updateInsights({ pin: 'None' });
+            hideTooltip();
+          }
+        });
         c.addEventListener('mousedown',(e)=>{
           const local = interactionState.line[id];
           const nearest = nearestByMouse(e);
@@ -931,13 +1085,21 @@
             });
             updateABInsight(id, st, local.ranges);
           }
-          redraw();
+          // Clear active drag state BEFORE redraw so the live overlay is
+          // not painted onto the final frame (saved ranges still render
+          // via local.ranges)
           local.dragStart = null;
           local.dragEnd = null;
+          redraw();
         });
         c.addEventListener('mouseleave',()=>{
           const local = interactionState.line[id];
+          // If the pointer leaves the canvas mid-drag we must abandon the
+          // active range, otherwise a stale overlay sticks around until
+          // the next interaction
           local.dragging = false;
+          local.dragStart = null;
+          local.dragEnd = null;
           hideTooltip();
           redraw({ hoverIndex: local.pin });
         });
@@ -965,6 +1127,9 @@
           if(hit >= 0){
             const s = st.bars[hit].stack;
             showTooltip(`<b>${st.labels[hit]}</b><br/>Video ${s[0]} · Thread ${s[1]} · Carousel ${s[2]}`, e.clientX, e.clientY);
+            updateInsights({
+              focus: `<b>Content Mix · ${st.labels[hit]}</b><br/>Video ${s[0]} · Thread ${s[1]} · Carousel ${s[2]}`
+            });
           } else hideTooltip();
         });
         mix.addEventListener('mouseleave',()=>{ hideTooltip(); drawStackBars('mixChart'); });
@@ -988,6 +1153,9 @@
           if(hit >= 0){
             const a = st.arcs[hit];
             showTooltip(`<b>${a.label}</b><br/>Share: ${a.value}%`, e.clientX, e.clientY);
+            updateInsights({
+              focus: `<b>Sentiment · ${a.label}</b><br/>Share: ${a.value}%`
+            });
           } else hideTooltip();
         });
         donut.addEventListener('mouseleave',()=>{ hideTooltip(); drawDonut('sentimentChart'); });

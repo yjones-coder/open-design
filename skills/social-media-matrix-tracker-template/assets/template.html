@@ -902,35 +902,85 @@
           st.points.forEach((p,i)=>{ const d = Math.abs(p.x - mx); if(d < minDist){minDist = d; nearest = i;} });
           return nearest;
         };
-        // Touch → mouse-like adapter so the same drag/pin/range UX works on
-        // tablets and phones. We synthesise a minimal mouse event surface
-        // (clientX/clientY/shiftKey) and dispatch through the same logic.
-        const dispatchAsMouse = (type, touch, originalEvent)=>{
-          const fakeEvent = {
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            shiftKey: !!(originalEvent && originalEvent.shiftKey),
-            preventDefault: ()=>{},
-            target: originalEvent ? originalEvent.target : c
-          };
-          c.dispatchEvent(Object.assign(new Event(type, { bubbles: false }), fakeEvent));
+        // Touch support — call the same logical handlers directly with a
+        // plain pointer object instead of dispatching synthetic Events. This
+        // avoids assigning to read-only Event fields (Event.target/etc.) which
+        // would throw a TypeError before reaching the real handler.
+        const buildPointer = (touch, originalEvent)=>({
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+          shiftKey: !!(originalEvent && originalEvent.shiftKey)
+        });
+        const handleTouchStart = (p)=>{
+          const local = interactionState.line[id];
+          const nearest = nearestByMouse(p);
+          if(nearest < 0) return;
+          local.dragStart = nearest;
+          local.dragEnd = nearest;
+          local.dragging = true;
+          redraw();
+        };
+        const handleTouchMove = (p)=>{
+          const st = chartState[id]; if(!st) return;
+          const nearest = nearestByMouse(p);
+          const local = interactionState.line[id];
+          if(!local.dragging){
+            redraw({ hoverIndex: nearest });
+            updateInsights({
+              focus: `<b>${nameMap[id]}</b><br/>${st.labels[nearest]} = ${st.values[nearest]}${st.unit}`
+            });
+            showTooltip(`<b>${st.labels[nearest]}</b><br/>Value: ${st.values[nearest]}${st.unit}`, p.clientX, p.clientY);
+            return;
+          }
+          local.dragEnd = nearest;
+          redraw();
+          const rs = Math.min(local.dragStart, local.dragEnd);
+          const re = Math.max(local.dragStart, local.dragEnd);
+          const seg = st.values.slice(rs, re + 1);
+          const avg = (seg.reduce((a,b)=>a+b,0) / seg.length).toFixed(1);
+          updateInsights({
+            focus: `<b>${nameMap[id]}</b><br/>Selecting ${st.labels[rs]} - ${st.labels[re]}`,
+            range: `Avg <b>${avg}${st.unit}</b>`
+          });
+          showTooltip(`<b>${st.labels[rs]} → ${st.labels[re]}</b><br/>Avg: ${avg}${st.unit}`, p.clientX, p.clientY);
+        };
+        const handleTouchEnd = (p)=>{
+          const st = chartState[id];
+          const local = interactionState.line[id];
+          if(!local.dragging) return;
+          const moved = local.dragStart !== local.dragEnd;
+          local.dragging = false;
+          if(!moved){
+            // tap-to-pin
+            local.pin = local.pin === local.dragStart ? null : local.dragStart;
+            local.dragStart = null;
+            local.dragEnd = null;
+            redraw({ hoverIndex: local.pin });
+            if(local.pin !== null){
+              updateInsights({ pin: `<b>${nameMap[id]} @ ${st.labels[local.pin]}</b><br/>${st.values[local.pin]}${st.unit}` });
+              showTooltip(`<b>Pinned: ${st.labels[local.pin]}</b><br/>Value: ${st.values[local.pin]}${st.unit}`, p.clientX, p.clientY);
+            } else { updateInsights({ pin: 'None' }); hideTooltip(); }
+            return;
+          }
+          local.dragStart = null;
+          local.dragEnd = null;
+          redraw();
         };
         c.addEventListener('touchstart',(e)=>{
           if(!e.touches || e.touches.length === 0) return;
           e.preventDefault();
-          dispatchAsMouse('mousedown', e.touches[0], e);
+          handleTouchStart(buildPointer(e.touches[0], e));
         }, { passive: false });
         c.addEventListener('touchmove',(e)=>{
           if(!e.touches || e.touches.length === 0) return;
           e.preventDefault();
-          dispatchAsMouse('mousemove', e.touches[0], e);
+          handleTouchMove(buildPointer(e.touches[0], e));
         }, { passive: false });
         c.addEventListener('touchend',(e)=>{
-          // Use the last known touch point on touchend (changedTouches)
           const t = (e.changedTouches && e.changedTouches[0]) || null;
           if(!t) return;
           e.preventDefault();
-          dispatchAsMouse('mouseup', t, e);
+          handleTouchEnd(buildPointer(t, e));
         }, { passive: false });
         c.addEventListener('touchcancel',()=>{
           const local = interactionState.line[id];
