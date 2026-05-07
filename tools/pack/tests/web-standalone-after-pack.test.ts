@@ -46,6 +46,32 @@ async function writeRootWebPackage(resourcesRoot: string): Promise<void> {
   await writeFile(join(webPackageRoot, "dist", "sidecar", "index.js"), "module.exports = {};\n", "utf8");
 }
 
+async function writeFlattenedElectronFramework(appOutDir: string): Promise<string> {
+  const frameworkRoot = join(
+    appOutDir,
+    "Open Design.app",
+    "Contents",
+    "Frameworks",
+    "Electron Framework.framework",
+  );
+  const entries = ["Electron Framework", "Resources", "Libraries", "Helpers"];
+
+  for (const root of [frameworkRoot, join(frameworkRoot, "Versions", "A"), join(frameworkRoot, "Versions", "Current")]) {
+    await mkdir(root, { recursive: true });
+    for (const entry of entries) {
+      const entryPath = join(root, entry);
+      if (entry === "Electron Framework") {
+        await writeFile(entryPath, "binary\n", "utf8");
+      } else {
+        await mkdir(entryPath, { recursive: true });
+        await writeFile(join(entryPath, "fixture.txt"), entry, "utf8");
+      }
+    }
+  }
+
+  return frameworkRoot;
+}
+
 async function writeStandaloneFixture(
   workspaceRoot: string,
   options: { includeHoistedNext: boolean; includeWebNext: boolean; useAbsolutePnpmSymlinks?: boolean },
@@ -113,6 +139,9 @@ async function runFixture(options: {
   const oldConfigEnv = process.env[CONFIG_ENV];
 
   await mkdir(resourcesRoot, { recursive: true });
+  if (platformName === "darwin") {
+    await writeFlattenedElectronFramework(appOutDir);
+  }
   await writeRootWebPackage(resourcesRoot);
   await writeFile(
     configPath,
@@ -213,11 +242,32 @@ describe("web standalone afterPack hook", () => {
     try {
       const report = JSON.parse(await readFile(fixture.auditReportPath, "utf8")) as {
         copiedAudit: { externalSymlinks: string[]; resolvedModules: Record<string, string> };
+        macElectronFrameworkNormalize: { changes: Array<{ target: string }>; skipped: boolean };
       };
       const copiedNextLink = join(fixture.destinationRoot, "apps", "web", "node_modules", "next");
       const nextTarget = await readlink(copiedNextLink);
+      const frameworkRoot = join(
+        fixture.appOutDir,
+        "Open Design.app",
+        "Contents",
+        "Frameworks",
+        "Electron Framework.framework",
+      );
 
       expect(path.isAbsolute(nextTarget)).toBe(false);
+      await expect(readlink(join(frameworkRoot, "Versions", "Current"))).resolves.toBe("A");
+      await expect(readlink(join(frameworkRoot, "Electron Framework"))).resolves.toBe(
+        join("Versions", "Current", "Electron Framework"),
+      );
+      await expect(readlink(join(frameworkRoot, "Resources"))).resolves.toBe(join("Versions", "Current", "Resources"));
+      expect(report.macElectronFrameworkNormalize.skipped).toBe(false);
+      expect(report.macElectronFrameworkNormalize.changes.map((entry) => entry.target)).toEqual([
+        "A",
+        join("Versions", "Current", "Electron Framework"),
+        join("Versions", "Current", "Resources"),
+        join("Versions", "Current", "Libraries"),
+        join("Versions", "Current", "Helpers"),
+      ]);
       expect(report.copiedAudit.externalSymlinks).toEqual([]);
       expect(report.copiedAudit.resolvedModules["next/package.json"].split(path.sep).join("/")).toMatch(
         /open-design-web-standalone\/node_modules\/\.pnpm\/next@0\.0\.0\/node_modules\/next\/package\.json$/,

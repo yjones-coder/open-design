@@ -132,6 +132,57 @@ function resolveRootAppNodeModulesRoot(resourcesRoot) {
   return path.join(resourcesRoot, "app", "node_modules");
 }
 
+async function ensureRelativeSymlink(linkPath, target, changes) {
+  let currentTarget = null;
+  try {
+    const metadata = await lstat(linkPath);
+    if (metadata.isSymbolicLink()) {
+      currentTarget = await readlink(linkPath);
+    }
+  } catch {
+    // Missing links are created below.
+  }
+
+  if (currentTarget === target) return;
+
+  await rm(linkPath, { force: true, recursive: true });
+  await symlink(target, linkPath);
+  changes.push({ linkPath, target });
+}
+
+async function normalizeDarwinElectronFramework(appPath) {
+  const frameworkRoot = path.join(appPath, "Contents", "Frameworks", "Electron Framework.framework");
+  const versionsRoot = path.join(frameworkRoot, "Versions");
+  const versionRoot = path.join(versionsRoot, "A");
+
+  if (!(await pathExists(versionRoot))) {
+    return {
+      changes: [],
+      frameworkRoot,
+      skipped: true,
+    };
+  }
+
+  const changes = [];
+  await ensureRelativeSymlink(path.join(versionsRoot, "Current"), "A", changes);
+
+  for (const entryName of ["Electron Framework", "Resources", "Libraries", "Helpers"]) {
+    if (await pathLstatExists(path.join(versionRoot, entryName))) {
+      await ensureRelativeSymlink(
+        path.join(frameworkRoot, entryName),
+        path.join("Versions", "Current", entryName),
+        changes,
+      );
+    }
+  }
+
+  return {
+    changes,
+    frameworkRoot,
+    skipped: false,
+  };
+}
+
 async function sizePathBytes(filePath) {
   let metadata;
   try {
@@ -757,6 +808,9 @@ async function runWebStandaloneAfterPack(context) {
   if (context.electronPlatformName === "darwin" && !(await pathExists(appPath))) {
     throw new Error(`[tools-pack web-standalone] app bundle not found: ${appPath}`);
   }
+  const macElectronFrameworkNormalize = context.electronPlatformName === "darwin"
+    ? await normalizeDarwinElectronFramework(appPath)
+    : null;
   if (!(await pathExists(resourcesRoot))) {
     throw new Error(`[tools-pack web-standalone] resources root not found: ${resourcesRoot}`);
   }
@@ -816,6 +870,7 @@ async function runWebStandaloneAfterPack(context) {
     copiedNextDedupeAudit,
     copiedPrune,
     generatedAt: new Date().toISOString(),
+    macElectronFrameworkNormalize,
     platformName: context.electronPlatformName,
     resourcesRoot,
     rootBuildResiduePrune,
