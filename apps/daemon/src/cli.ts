@@ -57,9 +57,20 @@ const MCP_BOOLEAN_FLAGS = new Set([
   'h',
 ]);
 
+const RESEARCH_SEARCH_STRING_FLAGS = new Set([
+  'query',
+  'max-sources',
+  'daemon-url',
+]);
+const RESEARCH_SEARCH_BOOLEAN_FLAGS = new Set([
+  'help',
+  'h',
+]);
+
 const SUBCOMMAND_MAP = {
   media: runMedia,
   mcp: runMcp,
+  research: runResearch,
 };
 
 if (argv[0] === 'mcp' && argv[1] === 'live-artifacts') {
@@ -148,6 +159,9 @@ function printRootHelp() {
   od mcp live-artifacts
       Start the MCP server exposing live-artifact and connector tools.
 
+  od research search --query <text> [--max-sources 5] [--daemon-url <url>]
+      Run agent-callable Tavily research through the local daemon.
+
   "$OD_NODE_BIN" "$OD_BIN" tools ...
       Recommended agent-runtime form; avoids relying on user PATH for od or node.
 
@@ -176,6 +190,83 @@ What the daemon does:
   * proxies messages (text + images) to the selected agent via child-process spawn
   * exposes /api/projects/:id/media/generate — the unified image/video/audio
      dispatcher that the agent calls via \`od media generate\`.`);
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: od research …
+// ---------------------------------------------------------------------------
+
+async function runResearch(args) {
+  const sub = args.find((a) => a && !a.startsWith('--'));
+  const subArgs = sub ? args.filter((a) => a !== sub) : args;
+  if (!sub || sub === 'help' || args.includes('--help') || args.includes('-h')) {
+    printResearchHelp();
+    process.exit(sub === 'help' || args.includes('--help') || args.includes('-h') ? 0 : 2);
+  }
+  if (sub !== 'search') {
+    console.error(`unknown subcommand: od research ${sub}`);
+    printResearchHelp();
+    process.exit(2);
+  }
+  return runResearchSearch(subArgs);
+}
+
+async function runResearchSearch(rawArgs) {
+  let flags;
+  try {
+    flags = parseFlags(rawArgs, {
+      string: RESEARCH_SEARCH_STRING_FLAGS,
+      boolean: RESEARCH_SEARCH_BOOLEAN_FLAGS,
+    });
+  } catch (err) {
+    console.error(err.message);
+    printResearchHelp();
+    process.exit(2);
+  }
+  const query = typeof flags.query === 'string' ? flags.query.trim() : '';
+  if (!query) {
+    console.error('--query required');
+    process.exit(2);
+  }
+  const daemonUrl =
+    flags['daemon-url'] || process.env.OD_DAEMON_URL || 'http://127.0.0.1:7456';
+  const maxSources =
+    flags['max-sources'] == null ? undefined : Number(flags['max-sources']);
+  const url = `${daemonUrl.replace(/\/$/, '')}/api/research/search`;
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        ...(Number.isFinite(maxSources) ? { maxSources } : {}),
+      }),
+    });
+  } catch (err) {
+    surfaceFetchError(err, daemonUrl);
+    process.exit(3);
+  }
+  if (!resp.ok) {
+    const text = await resp.text();
+    console.error(`daemon ${resp.status}: ${text}`);
+    process.exit(4);
+  }
+  process.stdout.write(`${await resp.text()}\n`);
+}
+
+function printResearchHelp() {
+  console.log(`Usage:
+  od research search --query <text> [--max-sources 5] [--daemon-url <url>]
+
+Runs Tavily-backed shallow research through the local Open Design daemon.
+Output is JSON only on stdout:
+  { "query": "...", "summary": "...", "sources": [...], "provider": "tavily", "depth": "shallow", "fetchedAt": 0 }
+
+Flags:
+  --query        Required search query.
+  --max-sources  Optional source cap. Defaults to 5, clamped to Tavily's max.
+  --daemon-url   Local daemon URL. Defaults to OD_DAEMON_URL or http://127.0.0.1:7456.`);
 }
 
 // ---------------------------------------------------------------------------

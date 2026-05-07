@@ -198,7 +198,7 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
   {
     id: 'tavily',
     label: 'Tavily Search',
-    hint: 'Pre-generation web research',
+    hint: 'Agent-callable web research',
     integrated: true,
     defaultBaseUrl: 'https://api.tavily.com',
     docsUrl: 'https://app.tavily.com/home',
