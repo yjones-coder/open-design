@@ -59,6 +59,100 @@ describe('API proxy routes', () => {
     );
   });
 
+  // Regression: appendVersionedApiPath needs to thread three shapes:
+  //   * bare host                  → inject /v1 (api.openai.com)
+  //   * sub-path containing /vN    → no inject (api.deepinfra.com/v1/openai)
+  //   * sub-path without /vN       → inject /v1 (api.deepseek.com/anthropic)
+  // The earlier end-of-path check broke the second case; a "non-empty
+  // path → respect verbatim" intermediate fix broke the third. Pin all
+  // three so neither regression returns.
+  it.each([
+    [
+      'https://api.deepinfra.com/v1/openai',
+      'https://api.deepinfra.com/v1/openai/chat/completions',
+    ],
+    [
+      'https://api.deepinfra.com/v1/openai/',
+      'https://api.deepinfra.com/v1/openai/chat/completions',
+    ],
+    [
+      'https://openrouter.ai/api/v1',
+      'https://openrouter.ai/api/v1/chat/completions',
+    ],
+    [
+      'https://api.openai.com',
+      'https://api.openai.com/v1/chat/completions',
+    ],
+    [
+      'https://api.openai.com/',
+      'https://api.openai.com/v1/chat/completions',
+    ],
+  ])('routes OpenAI baseUrl %s to %s', async (input, expected) => {
+    const fetchMock = vi.fn((req: FetchInput, init?: FetchInit) => {
+      const url = String(req);
+      if (url.startsWith(baseUrl)) return realFetch(req, init);
+      return Promise.resolve(sseResponse('data: [DONE]\n\n'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await realFetch(`${baseUrl}/api/proxy/openai/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: input,
+        apiKey: 'sk-test',
+        model: 'm',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(expected);
+  });
+
+  // The Anthropic proxy goes through the same `appendVersionedApiPath`
+  // helper, but its preset table includes Anthropic-compatible gateways
+  // mounted at non-versioned sub-paths (DeepSeek `/anthropic`, MiniMax
+  // `/anthropic`, MiMo `/anthropic`). Those still need the `/v1`
+  // injection, otherwise upstream returns 404 on `.../anthropic/messages`.
+  it.each([
+    [
+      'https://api.anthropic.com',
+      'https://api.anthropic.com/v1/messages',
+    ],
+    [
+      'https://api.deepseek.com/anthropic',
+      'https://api.deepseek.com/anthropic/v1/messages',
+    ],
+    [
+      'https://api.minimaxi.com/anthropic',
+      'https://api.minimaxi.com/anthropic/v1/messages',
+    ],
+    [
+      'https://token-plan-cn.xiaomimimo.com/anthropic',
+      'https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages',
+    ],
+  ])('routes Anthropic baseUrl %s to %s', async (input, expected) => {
+    const fetchMock = vi.fn((req: FetchInput, init?: FetchInit) => {
+      const url = String(req);
+      if (url.startsWith(baseUrl)) return realFetch(req, init);
+      return Promise.resolve(sseResponse('data: [DONE]\n\n'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await realFetch(`${baseUrl}/api/proxy/anthropic/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: input,
+        apiKey: 'sk-test',
+        model: 'm',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(expected);
+  });
+
   it('allows loopback API base URLs for local OpenAI-compatible providers', async () => {
     const fetchMock = vi.fn((input: FetchInput, init?: FetchInit) => {
       const url = String(input);
@@ -88,6 +182,32 @@ describe('API proxy routes', () => {
     );
   });
 
+  it('allows IPv4-mapped loopback API base URLs for local OpenAI-compatible providers', async () => {
+    const fetchMock = vi.fn((input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return realFetch(input, init);
+      return Promise.resolve(sseResponse('data: [DONE]\n\n'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await realFetch(`${baseUrl}/api/proxy/openai/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: 'http://[::ffff:127.0.0.1]:11434/v1',
+        apiKey: 'sk-local',
+        model: 'llama-local',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.text()).resolves.toContain('event: end');
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(
+      'http://[::ffff:7f00:1]:11434/v1/chat/completions',
+    );
+  });
+
   it('blocks private network API base URLs before proxying', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
@@ -97,6 +217,30 @@ describe('API proxy routes', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         baseUrl: 'http://192.168.1.50:11434/v1',
+        apiKey: 'sk-private',
+        model: 'private-model',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.text()).resolves.toContain('Internal IPs blocked');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'http://[fd00::1]:11434/v1',
+    'http://[fe80::1]:11434/v1',
+    'http://[::ffff:192.168.1.50]:11434/v1',
+  ])('blocks internal IPv6 API base URL %s before proxying', async (blockedBaseUrl) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await realFetch(`${baseUrl}/api/proxy/openai/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: blockedBaseUrl,
         apiKey: 'sk-private',
         model: 'private-model',
         messages: [{ role: 'user', content: 'hello' }],

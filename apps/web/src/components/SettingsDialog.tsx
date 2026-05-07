@@ -6,20 +6,34 @@ import { AgentIcon } from './AgentIcon';
 import { Icon } from './Icon';
 import {
   CUSTOM_MODEL_SENTINEL,
-  isCustomModel,
   renderModelOptions,
 } from './modelOptions';
-import { KNOWN_PROVIDERS } from '../state/config';
+import { DEFAULT_NOTIFICATIONS, KNOWN_PROVIDERS } from '../state/config';
+import type { KnownProvider } from '../state/config';
 import {
   MAX_MAX_TOKENS,
   MIN_MAX_TOKENS,
   modelMaxTokensDefault,
 } from '../state/maxTokens';
-import type { AgentInfo, ApiProtocol, ApiProtocolConfig, AppConfig, AppTheme, AppVersionInfo, ExecMode } from '../types';
+import type {
+  AgentInfo,
+  ApiProtocol,
+  ApiProtocolConfig,
+  AppConfig,
+  AppTheme,
+  AppVersionInfo,
+  ConnectionTestResponse,
+  ExecMode,
+} from '../types';
+import { testAgent, testApiProvider } from '../providers/connection-test';
 import { MEDIA_PROVIDERS } from '../media/models';
 import type { MediaProvider } from '../media/models';
 import { PetSettings } from './pet/PetSettings';
-import { DEFAULT_NOTIFICATIONS } from '../state/config';
+import { LibrarySection } from './LibrarySection';
+import {
+  applyAppearanceToDocument,
+  normalizeAccentColor,
+} from '../state/appearance';
 import {
   FAILURE_SOUNDS,
   SUCCESS_SOUNDS,
@@ -32,10 +46,13 @@ import {
 export type SettingsSection =
   | 'execution'
   | 'media'
+  | 'composio'
+  | 'integrations'
   | 'language'
   | 'appearance'
   | 'notifications'
   | 'pet'
+  | 'library'
   | 'about';
 
 interface Props {
@@ -44,14 +61,17 @@ interface Props {
   daemonLive: boolean;
   appVersionInfo: AppVersionInfo | null;
   welcome?: boolean;
-  // Optional deep-link target so callers (e.g. the entry-view "adopt a
-  // pet" pill) can pop the dialog open straight on a specific section.
-  defaultSection?: SettingsSection;
+  initialSection?: SettingsSection;
   onSave: (cfg: AppConfig) => void;
   onClose: () => void;
   onRefreshAgents: (
-    options?: { throwOnError?: boolean },
+    options?: AgentRefreshOptions,
   ) => AgentInfo[] | Promise<AgentInfo[] | void> | void;
+}
+
+export interface AgentRefreshOptions {
+  throwOnError?: boolean;
+  agentCliEnv?: AppConfig['agentCliEnv'];
 }
 
 const SUGGESTED_MODELS_BY_PROTOCOL = {
@@ -130,6 +150,64 @@ type RescanNotice =
   | { kind: 'success'; count: number }
   | { kind: 'error' };
 
+type TestState =
+  | { status: 'idle' }
+  | { status: 'running' }
+  | { status: 'done'; result: ConnectionTestResponse };
+
+// Map a test result to the visual severity of its inline status node so
+// the same green/red/amber palette as the Rescan status applies.
+export function testStatusVariant(
+  result: ConnectionTestResponse,
+): 'success' | 'warn' | 'error' {
+  if (result.ok) return 'success';
+  if (result.kind === 'rate_limited') return 'warn';
+  return 'error';
+}
+
+export function shouldShowCustomModelInput(
+  modelValue: string,
+  knownModelIds: readonly string[],
+  explicitCustomMode: boolean,
+): boolean {
+  return (
+    explicitCustomMode ||
+    !modelValue ||
+    !knownModelIds.includes(modelValue)
+  );
+}
+
+export function canRunProviderConnectionTest(
+  config: Pick<AppConfig, 'apiKey' | 'baseUrl' | 'model'>,
+): boolean {
+  return (
+    Boolean(config.apiKey.trim()) &&
+    Boolean(config.baseUrl.trim()) &&
+    Boolean(config.model.trim())
+  );
+}
+
+const AGENT_CLI_ENV_FIELDS = [
+  {
+    agentId: 'claude',
+    envKey: 'CLAUDE_CONFIG_DIR',
+    labelKey: 'settings.cliEnvClaudeConfigDir',
+    placeholder: '~/.claude-2',
+  },
+  {
+    agentId: 'codex',
+    envKey: 'CODEX_HOME',
+    labelKey: 'settings.cliEnvCodexHome',
+    placeholder: '~/.codex-alt',
+  },
+  {
+    agentId: 'codex',
+    envKey: 'CODEX_BIN',
+    labelKey: 'settings.cliEnvCodexBin',
+    placeholder: '/absolute/path/to/codex',
+  },
+] as const;
+
 function defaultApiProtocolConfig(protocol: ApiProtocol): ApiProtocolConfig {
   const provider = KNOWN_PROVIDERS.find((p) => p.protocol === protocol);
   return {
@@ -138,6 +216,63 @@ function defaultApiProtocolConfig(protocol: ApiProtocol): ApiProtocolConfig {
     model: provider?.model ?? '',
     apiVersion: '',
     apiProviderBaseUrl: provider ? provider.baseUrl : null,
+  };
+}
+
+function providerFamilyLabel(provider: KnownProvider): string {
+  return provider.label.replace(/\s+—\s+(Anthropic|OpenAI)$/u, '');
+}
+
+function siblingProviderForProtocol(
+  providerBaseUrl: string | null | undefined,
+  protocol: ApiProtocol,
+): KnownProvider | null {
+  if (!providerBaseUrl) return null;
+  const currentProvider = KNOWN_PROVIDERS.find(
+    (p) => p.baseUrl === providerBaseUrl,
+  );
+  if (!currentProvider) return null;
+
+  const currentFamily = providerFamilyLabel(currentProvider);
+  return (
+    KNOWN_PROVIDERS.find(
+      (p) => p.protocol === protocol && providerFamilyLabel(p) === currentFamily,
+    ) ?? null
+  );
+}
+
+function nextApiProtocolConfig(
+  config: AppConfig,
+  protocol: ApiProtocol,
+): ApiProtocolConfig {
+  const savedConfig = config.apiProtocolConfigs?.[protocol];
+  if (savedConfig) return savedConfig;
+
+  const currentConfig = currentApiProtocolConfig(config);
+  const siblingProvider = siblingProviderForProtocol(
+    currentConfig.apiProviderBaseUrl,
+    protocol,
+  );
+  if (siblingProvider) {
+    return {
+      ...defaultApiProtocolConfig(protocol),
+      baseUrl: siblingProvider.baseUrl,
+      model: siblingProvider.model,
+      apiProviderBaseUrl: siblingProvider.baseUrl,
+    };
+  }
+
+  if (currentConfig.apiProviderBaseUrl === null) {
+    return {
+      ...currentConfig,
+      apiKey: '',
+      apiVersion: protocol === 'azure' ? currentConfig.apiVersion : '',
+      apiProviderBaseUrl: null,
+    };
+  }
+
+  return {
+    ...defaultApiProtocolConfig(protocol),
   };
 }
 
@@ -173,23 +308,92 @@ export function isValidApiBaseUrl(value: string): boolean {
   try {
     const url = new URL(trimmed);
     const hostname = url.hostname.toLowerCase();
-    const isLoopback =
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname === '[::1]';
-    const isPrivateIpv4 =
-      hostname.startsWith('169.254.') ||
-      hostname.startsWith('10.') ||
-      /^192\.168\./.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname);
     return (
       (url.protocol === 'http:' || url.protocol === 'https:') &&
       Boolean(url.hostname) &&
-      (isLoopback || !isPrivateIpv4)
+      (isLoopbackApiHost(hostname) || !isBlockedInternalApiHost(hostname))
     );
   } catch {
     return false;
   }
+}
+
+function normalizeBracketedIpv6(hostname: string): string {
+  return hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1).toLowerCase()
+    : hostname.toLowerCase();
+}
+
+function parseIpv4(hostname: string): [number, number, number, number] | null {
+  const parts = hostname.split('.');
+  if (parts.length !== 4) return null;
+  const parsed = parts.map((part) => {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const value = Number(part);
+    return value >= 0 && value <= 255 ? value : null;
+  });
+  if (parsed.some((part) => part === null)) return null;
+  return parsed as [number, number, number, number];
+}
+
+function isLoopbackIpv4(hostname: string): boolean {
+  const parts = parseIpv4(hostname);
+  return Boolean(parts && parts[0] === 127);
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = parseIpv4(hostname);
+  if (!parts) return false;
+  const [a, b] = parts;
+  return (
+    (a === 169 && b === 254) ||
+    a === 10 ||
+    (a === 192 && b === 168) ||
+    (a === 172 && b >= 16 && b <= 31)
+  );
+}
+
+function ipv4MappedToDotted(hostname: string): string | null {
+  const host = normalizeBracketedIpv6(hostname);
+  const mapped = /^::ffff:(.+)$/i.exec(host)?.[1];
+  if (!mapped) return null;
+  if (parseIpv4(mapped.toLowerCase())) return mapped.toLowerCase();
+  const hexParts = mapped.split(':');
+  if (
+    hexParts.length !== 2 ||
+    !hexParts.every((part) => /^[0-9a-f]{1,4}$/i.test(part))
+  ) {
+    return null;
+  }
+  const hi = hexParts[0];
+  const lo = hexParts[1];
+  if (!hi || !lo) return null;
+  const value =
+    (Number.parseInt(hi, 16) << 16) |
+    Number.parseInt(lo, 16);
+  return [
+    (value >>> 24) & 255,
+    (value >>> 16) & 255,
+    (value >>> 8) & 255,
+    value & 255,
+  ].join('.');
+}
+
+function isLoopbackApiHost(hostname: string): boolean {
+  const host = normalizeBracketedIpv6(hostname);
+  if (host === 'localhost' || host === '::1') return true;
+  if (isLoopbackIpv4(host)) return true;
+  const mapped = ipv4MappedToDotted(host);
+  return Boolean(mapped && isLoopbackIpv4(mapped));
+}
+
+function isBlockedInternalApiHost(hostname: string): boolean {
+  const host = normalizeBracketedIpv6(hostname);
+  if (isPrivateIpv4(host)) return true;
+  if (/^f[cd][0-9a-f]{2}:/i.test(host)) return true;
+  if (/^fe[89ab][0-9a-f]:/i.test(host)) return true;
+  const mapped = ipv4MappedToDotted(host);
+  return Boolean(mapped && isPrivateIpv4(mapped));
 }
 
 export function updateCurrentApiProtocolConfig(
@@ -214,6 +418,40 @@ export function updateCurrentApiProtocolConfig(
   );
 }
 
+export function updateAgentCliEnvValue(
+  config: AppConfig,
+  agentId: string,
+  envKey: string,
+  rawValue: string,
+): AppConfig {
+  const value = rawValue.trim();
+  const agentCliEnv = { ...(config.agentCliEnv ?? {}) };
+  const nextAgentEnv = { ...(agentCliEnv[agentId] ?? {}) };
+  if (value) {
+    nextAgentEnv[envKey] = value;
+  } else {
+    delete nextAgentEnv[envKey];
+  }
+
+  if (Object.keys(nextAgentEnv).length > 0) {
+    agentCliEnv[agentId] = nextAgentEnv;
+  } else {
+    delete agentCliEnv[agentId];
+  }
+
+  return {
+    ...config,
+    agentCliEnv: Object.keys(agentCliEnv).length > 0 ? agentCliEnv : {},
+  };
+}
+
+export function agentRefreshOptionsForConfig(cfg: AppConfig): AgentRefreshOptions {
+  return {
+    throwOnError: true,
+    agentCliEnv: cfg.agentCliEnv ?? {},
+  };
+}
+
 export function switchApiProtocolConfig(
   config: AppConfig,
   protocol: ApiProtocol,
@@ -223,8 +461,13 @@ export function switchApiProtocolConfig(
     ...(config.apiProtocolConfigs ?? {}),
     [currentProtocol]: currentApiProtocolConfig(config),
   };
-  const nextApiConfig =
-    apiProtocolConfigs[protocol] ?? defaultApiProtocolConfig(protocol);
+  const nextApiConfig = nextApiProtocolConfig(
+    {
+      ...config,
+      apiProtocolConfigs,
+    },
+    protocol,
+  );
   return applyApiProtocolConfig(
     {
       ...config,
@@ -242,7 +485,7 @@ export function SettingsDialog({
   daemonLive,
   appVersionInfo,
   welcome,
-  defaultSection,
+  initialSection = 'execution',
   onSave,
   onClose,
   onRefreshAgents,
@@ -254,33 +497,78 @@ export function SettingsDialog({
   // On Save, App's useLayoutEffect fires after unmount and applies the new
   // saved theme, so this cleanup is effectively a no-op in that path.
   useLayoutEffect(() => {
-    const saved = initial.theme ?? 'system';
     return () => {
-      if (saved === 'system') {
-        document.documentElement.removeAttribute('data-theme');
-      } else {
-        document.documentElement.setAttribute('data-theme', saved);
-      }
+      applyAppearanceToDocument({
+        theme: initial.theme ?? 'system',
+        accentColor: initial.accentColor,
+      });
     };
-  }, [initial.theme]);
+  }, [initial.theme, initial.accentColor]);
   const [showApiKey, setShowApiKey] = useState(false);
   const [languageOpen, setLanguageOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState<SettingsSection>(
-    defaultSection ?? 'execution',
-  );
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [languageMenuRect, setLanguageMenuRect] = useState<DOMRect | null>(null);
   const [agentRescanRunning, setAgentRescanRunning] = useState(false);
   const [agentRescanNotice, setAgentRescanNotice] =
     useState<RescanNotice | null>(null);
+  const [agentTestState, setAgentTestState] = useState<TestState>({
+    status: 'idle',
+  });
+  const [providerTestState, setProviderTestState] = useState<TestState>({
+    status: 'idle',
+  });
+  const agentTestAbortRef = useRef<AbortController | null>(null);
+  const providerTestAbortRef = useRef<AbortController | null>(null);
+  const agentTestRevisionRef = useRef(0);
+  const providerTestRevisionRef = useRef(0);
+  const [apiModelCustomEditing, setApiModelCustomEditing] = useState(false);
+  const [agentCustomModelIds, setAgentCustomModelIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const languageRef = useRef<HTMLDivElement | null>(null);
 
-  // If the daemon goes offline mid-edit, force API mode so the UI doesn't
-  // pretend Local CLI is selectable.
   useEffect(() => {
-    if (!daemonLive && cfg.mode === 'daemon') {
-      setCfg((c) => ({ ...c, mode: 'api' }));
-    }
-  }, [daemonLive, cfg.mode]);
+    setActiveSection(initialSection);
+  }, [initialSection]);
+
+  // Tests pin a result against the unsaved draft. Once the user edits any
+  // field that feeds into the test, the result is no longer trustworthy —
+  // clear it so we don't show a stale "Connected" line next to fresh input.
+  // If a test is already running, leave the running state visible and let the
+  // stale result be ignored when it returns; the button stays disabled so a
+  // new smoke test cannot overlap the old one.
+  const agentChoiceForTest = cfg.agentModels?.[cfg.agentId ?? ''];
+  useEffect(() => {
+    agentTestRevisionRef.current += 1;
+    setAgentTestState((state) =>
+      state.status === 'running' ? state : { status: 'idle' },
+    );
+  }, [
+    cfg.agentId,
+    agentChoiceForTest?.model,
+    agentChoiceForTest?.reasoning,
+    cfg.agentCliEnv,
+  ]);
+  useEffect(() => {
+    providerTestRevisionRef.current += 1;
+    setProviderTestState((state) =>
+      state.status === 'running' ? state : { status: 'idle' },
+    );
+  }, [
+    cfg.apiProtocol,
+    cfg.apiKey,
+    cfg.baseUrl,
+    cfg.model,
+    cfg.apiVersion,
+  ]);
+  // Releasing the abort controllers on unmount avoids the "setState after
+  // unmount" warning if the dialog closes while a test is still running.
+  useEffect(() => {
+    return () => {
+      agentTestAbortRef.current?.abort();
+      providerTestAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (!languageOpen) return;
@@ -323,8 +611,10 @@ export function SettingsDialog({
   );
 
   const setMode = (mode: ExecMode) => setCfg((c) => ({ ...c, mode }));
-  const setApiProtocol = (protocol: ApiProtocol) =>
+  const setApiProtocol = (protocol: ApiProtocol) => {
+    setApiModelCustomEditing(false);
     setCfg((c) => switchApiProtocolConfig(c, protocol));
+  };
   const updateApiConfig = (patch: Partial<ApiProtocolConfig>) =>
     setCfg((c) => updateCurrentApiProtocolConfig(c, patch));
   const handleRefreshAgents = async () => {
@@ -332,7 +622,7 @@ export function SettingsDialog({
     setAgentRescanRunning(true);
     setAgentRescanNotice(null);
     try {
-      const refreshed = await onRefreshAgents({ throwOnError: true });
+      const refreshed = await onRefreshAgents(agentRefreshOptionsForConfig(cfg));
       const nextAgents = Array.isArray(refreshed) ? refreshed : agents;
       setAgentRescanNotice({
         kind: 'success',
@@ -342,6 +632,159 @@ export function SettingsDialog({
       setAgentRescanNotice({ kind: 'error' });
     } finally {
       setAgentRescanRunning(false);
+    }
+  };
+
+  const handleTestAgent = async () => {
+    if (agentTestState.status === 'running') {
+      return;
+    }
+    const selected = agents.find((a) => a.id === cfg.agentId && a.available);
+    if (!selected) return;
+    const choice = cfg.agentModels?.[selected.id] ?? {};
+    const controller = new AbortController();
+    const revision = agentTestRevisionRef.current;
+    agentTestAbortRef.current = controller;
+    setAgentTestState({ status: 'running' });
+    const clearIfStale = () => {
+      if (agentTestAbortRef.current === controller) {
+        setAgentTestState({ status: 'idle' });
+      }
+    };
+    try {
+      const result = await testAgent(
+        {
+          agentId: selected.id,
+          model: choice.model || undefined,
+          reasoning: choice.reasoning || undefined,
+          agentCliEnv: cfg.agentCliEnv ?? {},
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (agentTestRevisionRef.current !== revision) {
+        clearIfStale();
+        return;
+      }
+      setAgentTestState({ status: 'done', result });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (agentTestRevisionRef.current !== revision) {
+        clearIfStale();
+        return;
+      }
+      setAgentTestState({
+        status: 'done',
+        result: {
+          ok: false,
+          kind: 'unknown',
+          latencyMs: 0,
+          model: choice.model || 'default',
+          detail: err instanceof Error ? err.message : 'Test request failed',
+        },
+      });
+    } finally {
+      if (agentTestAbortRef.current === controller) {
+        agentTestAbortRef.current = null;
+      }
+    }
+  };
+
+  const handleTestProvider = async () => {
+    if (providerTestState.status === 'running') {
+      return;
+    }
+    const controller = new AbortController();
+    const revision = providerTestRevisionRef.current;
+    providerTestAbortRef.current = controller;
+    setProviderTestState({ status: 'running' });
+    const clearIfStale = () => {
+      if (providerTestAbortRef.current === controller) {
+        setProviderTestState({ status: 'idle' });
+      }
+    };
+    try {
+      const result = await testApiProvider(
+        {
+          protocol: apiProtocol,
+          baseUrl: cfg.baseUrl,
+          apiKey: cfg.apiKey,
+          model: cfg.model,
+          apiVersion:
+            apiProtocol === 'azure'
+              ? cfg.apiVersion?.trim() || undefined
+              : undefined,
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (providerTestRevisionRef.current !== revision) {
+        clearIfStale();
+        return;
+      }
+      setProviderTestState({ status: 'done', result });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (providerTestRevisionRef.current !== revision) {
+        clearIfStale();
+        return;
+      }
+      setProviderTestState({
+        status: 'done',
+        result: {
+          ok: false,
+          kind: 'unknown',
+          latencyMs: 0,
+          model: cfg.model,
+          detail: err instanceof Error ? err.message : 'Test request failed',
+        },
+      });
+    } finally {
+      if (providerTestAbortRef.current === controller) {
+        providerTestAbortRef.current = null;
+      }
+    }
+  };
+
+  const renderTestMessage = (
+    result: ConnectionTestResponse,
+    kindForSuccess: 'api' | 'cli',
+  ): string => {
+    const ms = Math.max(0, Math.round(result.latencyMs));
+    const sample = result.sample ?? '';
+    const agentName = result.agentName ?? '';
+    const testedModel = result.model ?? cfg.model;
+    if (result.ok) {
+      return kindForSuccess === 'api'
+        ? t('settings.testSuccessApi', { ms, sample })
+        : t('settings.testSuccessCli', { agentName, ms, sample });
+    }
+    switch (result.kind) {
+      case 'auth_failed':
+        return t('settings.testAuthFailed');
+      case 'forbidden':
+        return t('settings.testForbidden');
+      case 'not_found_model':
+        return t('settings.testNotFoundModel', { model: testedModel });
+      case 'invalid_model_id':
+        return t('settings.testInvalidModelId', { model: testedModel });
+      case 'invalid_base_url':
+        return t('settings.testInvalidBaseUrl');
+      case 'rate_limited':
+        return t('settings.testRateLimited');
+      case 'upstream_unavailable':
+        return t('settings.testUpstream', { status: result.status ?? 0 });
+      case 'timeout':
+        return t('settings.testTimeout', { ms });
+      case 'agent_not_installed':
+        return t('settings.testAgentMissing', { agentName });
+      case 'agent_spawn_failed':
+        return t('settings.testAgentSpawn', {
+          agentName,
+          detail: result.detail ?? '',
+        });
+      default:
+        return t('settings.testUnknown', { detail: result.detail ?? '' });
     }
   };
 
@@ -376,8 +819,15 @@ export function SettingsDialog({
     )),
     [apiProtocol, cfg.baseUrl, selectedProvider],
   );
-  const apiModelCustom = Boolean(cfg.model) && !apiModelOptions.includes(cfg.model);
-  const apiModelSelectValue = apiModelCustom || !cfg.model ? CUSTOM_MODEL_SENTINEL : cfg.model;
+  const apiModelCustomActive =
+    shouldShowCustomModelInput(
+      cfg.model,
+      apiModelOptions,
+      apiModelCustomEditing,
+    );
+  const apiModelSelectValue = apiModelCustomActive
+    ? CUSTOM_MODEL_SENTINEL
+    : cfg.model;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -449,6 +899,28 @@ export function SettingsDialog({
             </button>
             <button
               type="button"
+              className={`settings-nav-item${activeSection === 'composio' ? ' active' : ''}`}
+              onClick={() => setActiveSection('composio')}
+            >
+              <Icon name="sliders" size={18} />
+              <span>
+                <strong>Connectors</strong>
+                <small>External system connections</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`settings-nav-item${activeSection === 'integrations' ? ' active' : ''}`}
+              onClick={() => setActiveSection('integrations')}
+            >
+              <Icon name="link" size={18} />
+              <span>
+                <strong>MCP server</strong>
+                <small>Connect your coding agent</small>
+              </span>
+            </button>
+            <button
+              type="button"
               className={`settings-nav-item${activeSection === 'language' ? ' active' : ''}`}
               onClick={() => setActiveSection('language')}
             >
@@ -489,6 +961,17 @@ export function SettingsDialog({
               <span>
                 <strong>{t('pet.navTitle')}</strong>
                 <small>{t('pet.navHint')}</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`settings-nav-item${activeSection === 'library' ? ' active' : ''}`}
+              onClick={() => setActiveSection('library')}
+            >
+              <Icon name="grid" size={18} />
+              <span>
+                <strong>{t('settings.library')}</strong>
+                <small>{t('settings.libraryHint')}</small>
               </span>
             </button>
             <button
@@ -570,25 +1053,59 @@ export function SettingsDialog({
                   <h3>{t('settings.localCli')}</h3>
                   <p className="hint">{t('settings.codeAgentHint')}</p>
                 </div>
-                <button
-                  type="button"
-                  className={
-                    'ghost icon-btn settings-rescan-btn' +
-                    (agentRescanRunning ? ' loading' : '')
-                  }
-                  onClick={() => void handleRefreshAgents()}
-                  disabled={agentRescanRunning}
-                  title={t('settings.rescanTitle')}
-                >
-                  {agentRescanRunning ? (
-                    <>
-                      <Icon name="spinner" size={13} className="icon-spin" />
-                      <span>{t('settings.rescanRunning')}</span>
-                    </>
-                  ) : (
-                    t('settings.rescan')
-                  )}
-                </button>
+                <div className="section-head-actions">
+                  {(() => {
+                    const selected = agents.find(
+                      (a) => a.id === cfg.agentId && a.available,
+                    );
+                    const running = agentTestState.status === 'running';
+                    const disabled = running || !selected;
+                    return (
+                      <button
+                        type="button"
+                        className={
+                          'ghost icon-btn settings-test-btn' +
+                          (running ? ' loading' : '')
+                        }
+                        onClick={() => void handleTestAgent()}
+                        disabled={disabled}
+                        title={t('settings.testTitle')}
+                      >
+                        {running ? (
+                          <>
+                            <Icon
+                              name="spinner"
+                              size={13}
+                              className="icon-spin"
+                            />
+                            <span>{t('settings.test')}</span>
+                          </>
+                        ) : (
+                          t('settings.test')
+                        )}
+                      </button>
+                    );
+                  })()}
+                  <button
+                    type="button"
+                    className={
+                      'ghost icon-btn settings-rescan-btn' +
+                      (agentRescanRunning ? ' loading' : '')
+                    }
+                    onClick={() => void handleRefreshAgents()}
+                    disabled={agentRescanRunning}
+                    title={t('settings.rescanTitle')}
+                  >
+                    {agentRescanRunning ? (
+                      <>
+                        <Icon name="spinner" size={13} className="icon-spin" />
+                        <span>{t('settings.rescanRunning')}</span>
+                      </>
+                    ) : (
+                      t('settings.rescan')
+                    )}
+                  </button>
+                </div>
               </div>
               {agentRescanNotice ? (
                 <p
@@ -604,6 +1121,25 @@ export function SettingsDialog({
                         count: agentRescanNotice.count,
                       })
                     : t('settings.rescanFailed')}
+                </p>
+              ) : null}
+              {agentTestState.status === 'running' ? (
+                <p
+                  className="settings-test-status running"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {t('settings.testRunning')}
+                </p>
+              ) : agentTestState.status === 'done' ? (
+                <p
+                  className={
+                    'settings-test-status ' +
+                    testStatusVariant(agentTestState.result)
+                  }
+                  role={agentTestState.result.ok ? 'status' : 'alert'}
+                >
+                  {renderTestMessage(agentTestState.result, 'cli')}
                 </p>
               ) : null}
               {agents.length === 0 ? (
@@ -691,7 +1227,12 @@ export function SettingsDialog({
                   choice.reasoning ??
                   selected.reasoningOptions?.[0]?.id ?? '';
                 const customActive =
-                  hasModels && isCustomModel(modelValue, selected.models!);
+                  hasModels &&
+                  shouldShowCustomModelInput(
+                    modelValue,
+                    selected.models!.map((m) => m.id),
+                    agentCustomModelIds.has(selected.id),
+                  );
                 const selectValue = customActive
                   ? CUSTOM_MODEL_SENTINEL
                   : modelValue;
@@ -708,10 +1249,23 @@ export function SettingsDialog({
                             if (e.target.value === CUSTOM_MODEL_SENTINEL) {
                               // Switching to "Custom…" should clear the
                               // value so the input below opens empty for
-                              // typing — keeping the previous live id
-                              // would defeat the point.
+                              // typing. Keep an explicit edit-mode flag so
+                              // intermediate values like `gpt-5` do not
+                              // collapse the custom input while typing
+                              // `gpt-5.5`.
+                              setAgentCustomModelIds((prev) => {
+                                const next = new Set(prev);
+                                next.add(selected.id);
+                                return next;
+                              });
                               setChoice({ model: '' });
                             } else {
+                              setAgentCustomModelIds((prev) => {
+                                if (!prev.has(selected.id)) return prev;
+                                const next = new Set(prev);
+                                next.delete(selected.id);
+                                return next;
+                              });
                               setChoice({ model: e.target.value });
                             }
                           }}
@@ -761,6 +1315,35 @@ export function SettingsDialog({
                   </div>
                 );
               })()}
+              <div className="agent-cli-env">
+                <div className="agent-cli-env-head">
+                  <h4>{t('settings.cliEnvTitle')}</h4>
+                  <p className="hint">{t('settings.cliEnvHint')}</p>
+                </div>
+                <div className="agent-cli-env-grid">
+                  {AGENT_CLI_ENV_FIELDS.map((field) => (
+                    <label className="field" key={`${field.agentId}:${field.envKey}`}>
+                      <span className="field-label">{t(field.labelKey)}</span>
+                      <input
+                        type="text"
+                        value={cfg.agentCliEnv?.[field.agentId]?.[field.envKey] ?? ''}
+                        placeholder={field.placeholder}
+                        spellCheck={false}
+                        onChange={(e) =>
+                          setCfg((c) =>
+                            updateAgentCliEnvValue(
+                              c,
+                              field.agentId,
+                              field.envKey,
+                              e.target.value,
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
             </section>
           ) : (
             <section className="settings-section">
@@ -768,13 +1351,63 @@ export function SettingsDialog({
                 <div>
                   <h3>{API_PROTOCOL_LABELS[apiProtocol]}</h3>
                 </div>
+                {(() => {
+                  const running = providerTestState.status === 'running';
+                  const hasRequired = canRunProviderConnectionTest(cfg);
+                  const disabled = running || !hasRequired;
+                  return (
+                    <button
+                      type="button"
+                      className={
+                        'ghost icon-btn settings-test-btn' +
+                        (running ? ' loading' : '')
+                      }
+                      onClick={() => void handleTestProvider()}
+                      disabled={disabled}
+                      title={t('settings.testTitle')}
+                    >
+                      {running ? (
+                        <>
+                          <Icon
+                            name="spinner"
+                            size={13}
+                            className="icon-spin"
+                          />
+                          <span>{t('settings.test')}</span>
+                        </>
+                      ) : (
+                        t('settings.test')
+                      )}
+                    </button>
+                  );
+                })()}
               </div>
+              {providerTestState.status === 'running' ? (
+                <p
+                  className="settings-test-status running"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {t('settings.testRunning')}
+                </p>
+              ) : providerTestState.status === 'done' ? (
+                <p
+                  className={
+                    'settings-test-status ' +
+                    testStatusVariant(providerTestState.result)
+                  }
+                  role={providerTestState.result.ok ? 'status' : 'alert'}
+                >
+                  {renderTestMessage(providerTestState.result, 'api')}
+                </p>
+              ) : null}
               <label className="field">
                 <span className="field-label">{t('settings.quickFillProvider')}</span>
                 <select
                   value={selectedProviderIndex >= 0 ? String(selectedProviderIndex) : ''}
                   onChange={(e) => {
                     if (e.target.value === '') {
+                      setApiModelCustomEditing(false);
                       updateApiConfig({
                         baseUrl: '',
                         model: '',
@@ -785,6 +1418,7 @@ export function SettingsDialog({
                     const idx = Number(e.target.value);
                     if (!isNaN(idx) && protocolProviders[idx]) {
                       const p = protocolProviders[idx]!;
+                      setApiModelCustomEditing(false);
                       updateApiConfig({
                         baseUrl: p.baseUrl,
                         model: p.model,
@@ -831,8 +1465,10 @@ export function SettingsDialog({
                   value={apiModelSelectValue}
                   onChange={(e) => {
                     if (e.target.value === CUSTOM_MODEL_SENTINEL) {
+                      setApiModelCustomEditing(true);
                       updateApiConfig({ model: '' });
                     } else {
+                      setApiModelCustomEditing(false);
                       updateApiConfig({ model: e.target.value });
                     }
                   }}
@@ -849,7 +1485,7 @@ export function SettingsDialog({
               {apiProtocol === 'azure' ? (
                 <p className="hint">{t('settings.azureDeploymentModelHint')}</p>
               ) : null}
-              {apiModelCustom || apiModelSelectValue === CUSTOM_MODEL_SENTINEL ? (
+              {apiModelCustomActive ? (
                 <label className="field">
                   <span className="field-label">{t('settings.modelCustomLabel')}</span>
                   <input
@@ -900,6 +1536,9 @@ export function SettingsDialog({
           ) : null}
 
           {activeSection === 'media' ? <MediaProvidersSection cfg={cfg} setCfg={setCfg} /> : null}
+          {activeSection === 'integrations' ? <IntegrationsSection /> : null}
+
+          {activeSection === 'composio' ? <ComposioSection cfg={cfg} setCfg={setCfg} /> : null}
 
           {activeSection === 'language' ? (
           <section className="settings-section">
@@ -992,6 +1631,10 @@ export function SettingsDialog({
             <PetSettings cfg={cfg} setCfg={setCfg} />
           ) : null}
 
+          {activeSection === 'library' ? (
+            <LibrarySection cfg={cfg} setCfg={setCfg} />
+          ) : null}
+
           {activeSection === 'about' ? (
             <section className="settings-section">
               <div className="section-head">
@@ -1053,6 +1696,80 @@ export function SettingsDialog({
   );
 }
 
+function ComposioSection({
+  cfg,
+  setCfg,
+}: {
+  cfg: AppConfig;
+  setCfg: Dispatch<SetStateAction<AppConfig>>;
+}) {
+  const composio = cfg.composio ?? {};
+
+  const updateComposio = (patch: NonNullable<AppConfig['composio']>) => {
+    setCfg((curr) => ({ ...curr, composio: { ...(curr.composio ?? {}), ...patch } }));
+  };
+  const hasPendingEdit = Boolean(composio.apiKey?.trim());
+  const apiKeyConfigured = Boolean(hasPendingEdit || composio.apiKeyConfigured);
+  const isSavedState = apiKeyConfigured && !hasPendingEdit;
+  const tail = composio.apiKeyTail?.trim();
+
+  return (
+    <section className="settings-section">
+      <div className="section-head">
+        <div>
+          <h3>Connectors</h3>
+          <p className="hint">Manage connector and tool provider settings for this device.</p>
+        </div>
+      </div>
+      <label className="field">
+        <span className="field-label-row">
+          <span className="field-label-group">
+            <span className="field-label">Composio API Key</span>
+            {isSavedState ? (
+              <span className="field-status-badge" title="Saved to local daemon">
+                {tail ? `Saved · ••••${tail}` : 'Saved'}
+              </span>
+            ) : null}
+          </span>
+          <a
+            className="field-label-link"
+            href="https://app.composio.dev"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Get API Key
+            <Icon name="external-link" size={11} />
+          </a>
+        </span>
+        <div className="field-row">
+          <input
+            type="password"
+            value={composio.apiKey ?? ''}
+            placeholder={isSavedState ? 'Paste a new key to replace the saved one' : 'Paste Composio API key'}
+            onChange={(e) => updateComposio({ apiKey: e.target.value })}
+            aria-describedby="composio-api-key-help"
+          />
+          <button
+            type="button"
+            className="ghost"
+            disabled={!apiKeyConfigured}
+            onClick={() => updateComposio({ apiKey: '', apiKeyConfigured: false, apiKeyTail: '' })}
+          >
+            Clear
+          </button>
+        </div>
+        <span id="composio-api-key-help" className="hint">
+          {isSavedState
+            ? 'Your key stays in the local daemon. Paste a new key above to replace it, or Clear to remove.'
+            : apiKeyConfigured
+              ? 'Unsaved changes — click Save to store this key in the local daemon.'
+              : 'Keys are stored locally in the daemon and never sent through environment variables.'}
+        </span>
+      </label>
+    </section>
+  );
+}
+
 function MediaProvidersSection({
   cfg,
   setCfg,
@@ -1075,13 +1792,13 @@ function MediaProvidersSection({
     });
   const updateProvider = (
     provider: MediaProvider,
-    patch: { apiKey?: string; baseUrl?: string },
+    patch: { apiKey?: string; baseUrl?: string; model?: string },
   ) => {
     setCfg((curr) => {
-      const prev = curr.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '' };
+      const prev = curr.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '', model: '' };
       const next = { ...prev, ...patch };
       const map = { ...(curr.mediaProviders ?? {}) };
-      if (!next.apiKey.trim() && !next.baseUrl.trim()) {
+      if (!next.apiKey.trim() && !next.baseUrl.trim() && !next.model?.trim()) {
         delete map[provider.id];
       } else {
         map[provider.id] = next;
@@ -1100,9 +1817,11 @@ function MediaProvidersSection({
       </div>
       <div className="media-provider-list">
         {providers.map((provider) => {
-          const entry = cfg.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '' };
+          const entry = cfg.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '', model: '' };
           const configured = Boolean(entry.apiKey.trim() || entry.baseUrl.trim());
           const disabled = !provider.integrated;
+          const supportsCustomModel = provider.supportsCustomModel === true;
+          const clearable = Boolean(entry.apiKey.trim() || entry.baseUrl.trim() || entry.model?.trim());
           return (
             <div key={provider.id} className={`media-provider-row${provider.integrated ? '' : ' pending'}`}>
               <div className="media-provider-head">
@@ -1137,11 +1856,20 @@ function MediaProvidersSection({
                   disabled={disabled}
                   onChange={(e) => updateProvider(provider, { baseUrl: e.target.value })}
                 />
+                {supportsCustomModel ? (
+                  <input
+                    value={entry.model ?? ''}
+                    placeholder="gemini-3.1-flash-image-preview"
+                    aria-label={`${provider.label} model`}
+                    disabled={disabled}
+                    onChange={(e) => updateProvider(provider, { model: e.target.value })}
+                  />
+                ) : null}
                 <button
                   type="button"
                   className="ghost"
-                  disabled={!configured}
-                  onClick={() => updateProvider(provider, { apiKey: '', baseUrl: '' })}
+                  disabled={!clearable}
+                  onClick={() => updateProvider(provider, { apiKey: '', baseUrl: '', model: '' })}
                 >
                   {t('settings.mediaProviderClear')}
                 </button>
@@ -1154,11 +1882,600 @@ function MediaProvidersSection({
   );
 }
 
+// Per-client install paths. Each entry's `snippet` is what the user
+// copies; some clients also support a richer `deeplink` flow that
+// triggers a one-click install with an in-client approval dialog.
+//
+// Schemas drift between clients in deliberate ways. VS Code keys
+// servers under "servers" with a required "type" field; Zed uses
+// "context_servers"; Cursor, Windsurf, and Antigravity share
+// "mcpServers"; Claude Code is best served by its CLI which writes
+// to the local config for you. Verified against each tool's official
+// docs in May 2026.
+//
+// Important: every snippet uses absolute paths to `node` and the
+// daemon's built cli.js, fetched from the daemon at runtime. macOS
+// and Linux ship a system /usr/bin/od (octal-dump) that shadows any
+// `od` we might add to PATH, and most Open Design users run from
+// source where `od` is not installed globally. The installer panel
+// must NOT reference bare `od`.
+type McpClientId =
+  | 'claude'
+  | 'codex'
+  | 'cursor'
+  | 'vscode'
+  | 'zed'
+  | 'windsurf'
+  | 'antigravity';
+
+interface McpInstallInfo {
+  command: string;
+  args: string[];
+  daemonUrl: string;
+  platform: 'darwin' | 'linux' | 'win32' | string;
+  cliExists: boolean;
+  nodeExists: boolean;
+  buildHint: string | null;
+}
+
+interface McpClient {
+  id: McpClientId;
+  label: string;
+  // Function so the dropdown can show different methods per OS
+  // (Claude Code uses CLI on POSIX but JSON edit on Windows because
+  // the bash/PowerShell/cmd.exe quoting is too fragile to reliably
+  // emit a single command that works in every shell).
+  buildMethod: (info: McpInstallInfo) => string;
+  // Function so per-OS path hints (~/.cursor on POSIX vs
+  // %USERPROFILE%\.cursor on Windows) and shortcut differences
+  // (⌘⇧P vs Ctrl+Shift+P) can be rendered correctly.
+  buildInstruction: (info: McpInstallInfo) => string;
+  buildSnippet: (info: McpInstallInfo) => string;
+  buildSnippetLang: (info: McpInstallInfo) => 'bash' | 'json' | 'toml';
+  // Optional one-click install action. Currently only Cursor
+  // supports deeplinks of this shape.
+  buildDeeplink?: (info: McpInstallInfo) => string;
+  deeplinkLabel?: string;
+}
+
+// Path hint per OS. Localizes the "where to paste" copy so a
+// Windows user does not see ~/.cursor/mcp.json (which their shell
+// will not expand) or a Linux user does not see %APPDATA% paths.
+function homeConfigPath(
+  platform: McpInstallInfo['platform'],
+  posix: string,
+  windows: string,
+): string {
+  return platform === 'win32' ? windows : posix;
+}
+
+function commandPaletteShortcut(platform: McpInstallInfo['platform']): string {
+  return platform === 'darwin' ? '⌘⇧P' : 'Ctrl+Shift+P';
+}
+
+function settingsShortcut(platform: McpInstallInfo['platform']): string {
+  return platform === 'darwin' ? '⌘,' : 'Ctrl+,';
+}
+
+// btoa() requires every input character be representable in Latin-1
+// (codepoints 0-255). A Mac/Linux home directory like
+// "/Users/Émile/.fnm/.../node" trips that and throws
+// InvalidCharacterError. UTF-8-encode the string into bytes first,
+// then map each byte back to a Latin-1 char before base64'ing.
+function utf8Btoa(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  return btoa(bin);
+}
+
+function buildSharedMcpJson(info: McpInstallInfo): string {
+  const inner = { command: info.command, args: info.args };
+  const innerJson = JSON.stringify(inner, null, 2)
+    .split('\n')
+    .map((line, i) => (i === 0 ? line : `    ${line}`))
+    .join('\n');
+  return `{
+  "mcpServers": {
+    "open-design": ${innerJson}
+  }
+}`;
+}
+
+const MCP_CLIENTS: McpClient[] = [
+  {
+    id: 'claude',
+    label: 'Claude Code',
+    // `claude mcp add-json <name> '<json>'` takes ONLY the inner
+    // server-config object, not the full mcpServers wrapper. We
+    // inline the JSON into the command itself so the snippet is a
+    // real one-liner the user can copy and run, no template
+    // substitution. Single quotes around the JSON work in bash, zsh,
+    // PowerShell, and Git Bash; the only outlier is Windows cmd.exe,
+    // where users would need to swap to PowerShell.
+    buildMethod: () => 'CLI command',
+    buildInstruction: () => 'Run this in your terminal.',
+    buildSnippet: (info) => {
+      const inner = JSON.stringify({ command: info.command, args: info.args });
+      return `claude mcp add-json --scope user open-design '${inner}'`;
+    },
+    buildSnippetLang: () => 'bash',
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    // Codex CLI shares config between the terminal CLI and the IDE
+    // extension at ~/.codex/config.toml (TOML, not JSON, and a
+    // different table key from every other client - mcp_servers
+    // rather than mcpServers / servers / context_servers). Schema
+    // ref: https://developers.openai.com/codex/mcp.
+    //
+    // For our payload (just command + args, both strings/arrays of
+    // strings) JSON.stringify happens to produce valid TOML literal
+    // values, since TOML basic strings use the same double-quote
+    // escape rules and TOML inline arrays match JSON array syntax.
+    buildMethod: () => 'TOML config',
+    buildInstruction: (info) => {
+      const path = homeConfigPath(
+        info.platform,
+        '~/.codex/config.toml',
+        '%USERPROFILE%\\.codex\\config.toml',
+      );
+      return `Append this table to ${path}. The same config is shared between the Codex CLI and the Codex IDE extension.`;
+    },
+    buildSnippet: (info) => `[mcp_servers.open-design]
+command = ${JSON.stringify(info.command)}
+args = ${JSON.stringify(info.args)}`,
+    buildSnippetLang: () => 'toml',
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    buildMethod: () => 'One-click install',
+    buildInstruction: (info) =>
+      `Click "Install in Cursor" to install with an approval dialog, or merge this JSON into ${homeConfigPath(info.platform, '~/.cursor/mcp.json', '%USERPROFILE%\\.cursor\\mcp.json')}.`,
+    buildSnippet: buildSharedMcpJson,
+    buildSnippetLang: () => 'json',
+    buildDeeplink: (info) => {
+      const inner = { command: info.command, args: info.args };
+      // Cursor expects the inner server-config object base64-encoded
+      // as ?config=...; the handler decodes it and pops an approval
+      // dialog before writing to mcp.json. We UTF-8-encode first so
+      // non-Latin1 chars in paths (e.g. an accented username) do not
+      // throw from btoa().
+      const encoded = utf8Btoa(JSON.stringify(inner));
+      return `cursor://anysphere.cursor-deeplink/mcp/install?name=open-design&config=${encoded}`;
+    },
+    deeplinkLabel: 'Install in Cursor',
+  },
+  {
+    id: 'vscode',
+    label: 'VS Code',
+    buildMethod: () => 'JSON config',
+    buildInstruction: (info) =>
+      `Open the Command Palette (${commandPaletteShortcut(info.platform)}), run "MCP: Open User Configuration", and merge this JSON. Copilot Chat must be in Agent mode for tools to show up.`,
+    buildSnippet: (info) => `{
+  "servers": {
+    "open-design": {
+      "type": "stdio",
+      "command": ${JSON.stringify(info.command)},
+      "args": ${JSON.stringify(info.args)}
+    }
+  }
+}`,
+    buildSnippetLang: () => 'json',
+  },
+  {
+    id: 'antigravity',
+    label: 'Antigravity',
+    buildMethod: () => 'JSON config',
+    buildInstruction: () =>
+      'In Antigravity: Agent panel "..." menu → MCP Servers → Manage MCP Servers → View raw config. Merge this JSON.',
+    buildSnippet: buildSharedMcpJson,
+    buildSnippetLang: () => 'json',
+  },
+  {
+    id: 'zed',
+    label: 'Zed',
+    buildMethod: () => 'JSON config',
+    buildInstruction: (info) =>
+      `Open Zed Settings (${settingsShortcut(info.platform)}) and merge this into the top-level object. Zed uses "context_servers", not "mcpServers".`,
+    buildSnippet: (info) => `{
+  "context_servers": {
+    "open-design": {
+      "source": "custom",
+      "command": ${JSON.stringify(info.command)},
+      "args": ${JSON.stringify(info.args)}
+    }
+  }
+}`,
+    buildSnippetLang: () => 'json',
+  },
+  {
+    id: 'windsurf',
+    label: 'Windsurf',
+    buildMethod: () => 'JSON config',
+    buildInstruction: (info) =>
+      `Open ${homeConfigPath(info.platform, '~/.codeium/windsurf/mcp_config.json', '%USERPROFILE%\\.codeium\\windsurf\\mcp_config.json')} (or use the MCPs icon in Cascade → Configure) and merge:`,
+    buildSnippet: buildSharedMcpJson,
+    buildSnippetLang: () => 'json',
+  },
+];
+
+function IntegrationsSection() {
+  const [clientId, setClientId] = useState<McpClientId>('claude');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [info, setInfo] = useState<McpInstallInfo | null>(null);
+  const [infoError, setInfoError] = useState<string | null>(null);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  // The reset is wired through a ref-driven timer rather than effect
+  // cleanup so re-clicks during the 2s window restart the countdown.
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  // Close the dropdown on outside click or Escape.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!pickerRef.current) return;
+      if (!pickerRef.current.contains(e.target as Node)) setPickerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPickerOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pickerOpen]);
+
+  // Pull the absolute paths to node + cli.js from the running daemon
+  // so snippets work even when `od` isn't on PATH (the realistic
+  // case for source clones, plus macOS/Linux ship a /usr/bin/od that
+  // shadows any global install). Fetched on mount; if the daemon is
+  // unreachable we surface a clear error instead of a half-built
+  // snippet that would silently fail when pasted.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/mcp/install-info')
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`daemon ${res.status}`);
+        return (await res.json()) as McpInstallInfo;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setInfo(data);
+        setInfoError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setInfoError(String(err && err.message ? err.message : err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const client = MCP_CLIENTS.find((c) => c.id === clientId) ?? MCP_CLIENTS[0]!;
+  const snippet = info ? client.buildSnippet(info) : '';
+  const snippetLang: 'bash' | 'json' | 'toml' = info
+    ? client.buildSnippetLang(info)
+    : 'json';
+
+  // Reset the "Copied" badge when the user flips to a different
+  // client; otherwise the green check sits there next to a snippet
+  // they haven't actually copied.
+  useEffect(() => {
+    setCopied(false);
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+  }, [clientId]);
+
+  const onCopy = async () => {
+    if (!snippet) return;
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setCopied(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API can fail under non-secure contexts; the snippet
+      // is selectable so the user can still copy manually.
+      setCopied(false);
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="section-head">
+        <div>
+          <h3>MCP server</h3>
+          <p className="hint">
+            Lets a coding agent in another repo (Claude Code, Cursor,
+            VS Code, Antigravity, Zed, Windsurf) read your Open Design
+            projects. Use it to pull a design into your app without
+            exporting a zip first.
+          </p>
+        </div>
+      </div>
+
+      <div className="settings-about-list" style={{ display: 'block' }}>
+        {infoError ? (
+          <div
+            className="empty-card"
+            style={{ marginBottom: 14, color: 'var(--danger-fg, #f88)' }}
+          >
+            Couldn&rsquo;t reach the local daemon to resolve install paths
+            ({infoError}). Make sure Open Design is running, then reopen this
+            panel.
+          </div>
+        ) : null}
+
+        {info && (!info.cliExists || !info.nodeExists) ? (
+          <div
+            className="empty-card"
+            style={{
+              marginBottom: 14,
+              borderLeft: '3px solid var(--warning-fg, #fbbf24)',
+            }}
+          >
+            <strong>
+              {!info.cliExists
+                ? 'Build the daemon first.'
+                : 'Node binary is missing.'}
+            </strong>{' '}
+            {info.buildHint ??
+              'apps/daemon/dist/cli.js is missing. Run `pnpm --filter @open-design/daemon build` and refresh.'}
+          </div>
+        ) : null}
+
+        <div
+          className="ds-picker"
+          ref={pickerRef}
+          style={{ marginBottom: 14 }}
+        >
+          <button
+            type="button"
+            className={`ds-picker-trigger${pickerOpen ? ' open' : ''}`}
+            onClick={() => setPickerOpen((v) => !v)}
+            aria-haspopup="listbox"
+            aria-expanded={pickerOpen}
+          >
+            <span className="ds-picker-meta">
+              <span className="ds-picker-title">{client.label}</span>
+              <span className="ds-picker-sub">
+                {info ? client.buildMethod(info) : ''}
+              </span>
+            </span>
+            <Icon
+              name="chevron-down"
+              size={14}
+              className="ds-picker-chevron"
+              style={{ transform: pickerOpen ? 'rotate(180deg)' : undefined }}
+            />
+          </button>
+          {pickerOpen ? (
+            <div className="ds-picker-popover" role="listbox">
+              <div className="ds-picker-list">
+                {MCP_CLIENTS.map((c) => {
+                  const active = c.id === clientId;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      className={`ds-picker-item${active ? ' active' : ''}`}
+                      onClick={() => {
+                        setClientId(c.id);
+                        setPickerOpen(false);
+                      }}
+                    >
+                      <span className="ds-picker-item-text">
+                        <span className="ds-picker-item-title">{c.label}</span>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: 'var(--text-muted)',
+                          }}
+                        >
+                          {info ? c.buildMethod(info) : ''}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {info ? (
+          <p style={{ margin: '0 0 10px' }}>{client.buildInstruction(info)}</p>
+        ) : null}
+
+        {client.buildDeeplink && info ? (
+          <div style={{ marginBottom: 12 }}>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                // Use a hidden anchor so the cursor:// scheme is
+                // handled the same way as a normal link click; some
+                // browsers block window.location assignments to
+                // unknown schemes from button handlers.
+                const url = client.buildDeeplink!(info);
+                const a = document.createElement('a');
+                a.href = url;
+                a.rel = 'noopener noreferrer';
+                a.click();
+              }}
+              disabled={!info.cliExists || !info.nodeExists}
+              style={{ padding: '6px 14px', fontSize: 13 }}
+            >
+              <Icon name="link" size={14} />
+              <span style={{ marginLeft: 6 }}>{client.deeplinkLabel}</span>
+            </button>
+            <span
+              style={{
+                marginLeft: 10,
+                fontSize: 12,
+                color: 'var(--fg-2, #9aa0a6)',
+              }}
+            >
+              Cursor pops an approval dialog before writing the config.
+            </span>
+          </div>
+        ) : null}
+
+        <div style={{ position: 'relative' }}>
+          <pre
+            style={{
+              background: 'var(--surface-2, #11141a)',
+              color: 'var(--fg-1, #e6e6e6)',
+              padding: '12px 14px',
+              borderRadius: 8,
+              overflowX: 'auto',
+              fontFamily:
+                'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+              fontSize: 12,
+              lineHeight: 1.55,
+              margin: 0,
+              userSelect: 'text',
+              whiteSpace: snippetLang === 'bash' ? 'pre-wrap' : 'pre',
+              wordBreak: snippetLang === 'bash' ? 'break-all' : 'normal',
+              minHeight: 60,
+            }}
+            data-lang={snippetLang}
+          >
+            <code>
+              {snippet ||
+                (infoError
+                  ? '# resolving paths failed, see the error above'
+                  : '# loading install paths from the local daemon…')}
+            </code>
+          </pre>
+          <button
+            type="button"
+            className="ghost"
+            onClick={onCopy}
+            disabled={!snippet}
+            style={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              padding: '4px 10px',
+              fontSize: 12,
+            }}
+            aria-label="Copy MCP configuration snippet"
+          >
+            <Icon name={copied ? 'check' : 'copy'} size={14} />
+            <span style={{ marginLeft: 6 }}>{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            padding: '10px 12px',
+            background: 'var(--bg-subtle)',
+            border: '1px solid var(--border)',
+            borderLeft: '3px solid var(--accent)',
+            borderRadius: 6,
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>Restart your client to pick up the new server.</strong>{' '}
+          <span style={{ color: 'var(--text-muted)' }}>
+            Most editors only load MCP servers at startup. In Cursor / VS
+            Code / Antigravity / Windsurf you can run{' '}
+            <code>Developer: Reload Window</code> from the command palette
+            instead of a full restart. Zed and Claude Code need a quit and
+            reopen.
+          </span>
+        </div>
+
+        <div style={{ marginTop: 20, lineHeight: 1.55 }}>
+          <p
+            style={{
+              margin: '0 0 8px',
+              fontSize: 11,
+              color: 'var(--text-muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              fontWeight: 600,
+            }}
+          >
+            What your agent can do
+          </p>
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 18,
+              fontSize: 13,
+              color: 'var(--text)',
+            }}
+          >
+            <li>
+              Read or search any file in a project (HTML, JSX, CSS, JSON,
+              SVG, Markdown).
+            </li>
+            <li>
+              Pull a design bundle in one call: the entry file plus every
+              CSS variable, component, and font it references.
+            </li>
+            <li>
+              Default to the project and file you have open in Open Design,
+              so you can say &ldquo;build this in my app&rdquo; without
+              re-stating which design.
+            </li>
+          </ul>
+        </div>
+
+        <p
+          style={{
+            marginTop: 14,
+            fontSize: 12,
+            color: 'var(--text-muted)',
+            lineHeight: 1.5,
+          }}
+        >
+          Open Design must be running for MCP tool calls to succeed. If
+          you started your coding agent before opening Open Design,
+          restart the agent so it can reach the live daemon.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 const THEMES: Array<{ value: AppTheme; labelKey: 'settings.themeSystem' | 'settings.themeLight' | 'settings.themeDark' }> = [
   { value: 'system', labelKey: 'settings.themeSystem' },
   { value: 'light', labelKey: 'settings.themeLight' },
   { value: 'dark', labelKey: 'settings.themeDark' },
 ];
+
+const DEFAULT_ACCENT_COLOR = '#c96442';
+const ACCENT_SWATCHES = [
+  DEFAULT_ACCENT_COLOR,
+  '#2563eb',
+  '#7c3aed',
+  '#059669',
+  '#dc2626',
+  '#d97706',
+  '#0891b2',
+  '#db2777',
+] as const;
 
 function AppearanceSection({
   cfg,
@@ -1169,16 +2486,20 @@ function AppearanceSection({
 }) {
   const { t } = useI18n();
   const current = cfg.theme ?? 'system';
+  const currentAccent = normalizeAccentColor(cfg.accentColor) ?? DEFAULT_ACCENT_COLOR;
 
   // Apply the draft theme immediately so the user sees a live preview
   // before hitting Save. SettingsDialog's cleanup reverts this on cancel.
   useLayoutEffect(() => {
-    if (current === 'system') {
-      document.documentElement.removeAttribute('data-theme');
-    } else {
-      document.documentElement.setAttribute('data-theme', current);
-    }
-  }, [current]);
+    applyAppearanceToDocument({
+      theme: current,
+      accentColor: cfg.accentColor,
+    });
+  }, [current, cfg.accentColor]);
+
+  const setAccentColor = (color: string | undefined) => {
+    setCfg((c) => ({ ...c, accentColor: color ? normalizeAccentColor(color) ?? c.accentColor : undefined }));
+  };
 
   return (
     <section className="settings-section">
@@ -1200,6 +2521,33 @@ function AppearanceSection({
             <span className="seg-title">{t(labelKey)}</span>
           </button>
         ))}
+      </div>
+      <div className="field">
+        <span className="field-label">Accent color</span>
+        <div className="pet-swatches" role="radiogroup" aria-label="Accent color">
+          {ACCENT_SWATCHES.map((color) => {
+            const active = currentAccent === color;
+            return (
+              <button
+                key={color}
+                type="button"
+                className={`pet-swatch${active ? ' active' : ''}`}
+                style={{ background: color }}
+                aria-label={color === DEFAULT_ACCENT_COLOR ? 'Default accent color' : color}
+                aria-checked={active}
+                role="radio"
+                onClick={() => setAccentColor(color === DEFAULT_ACCENT_COLOR ? undefined : color)}
+              />
+            );
+          })}
+          <input
+            type="color"
+            aria-label="Custom accent color"
+            className="pet-swatch-picker"
+            value={currentAccent}
+            onChange={(e) => setAccentColor(e.target.value)}
+          />
+        </div>
       </div>
     </section>
   );
