@@ -13,7 +13,7 @@ describe('renderResearchCommandContract', () => {
       'the first tool action must be the research command with this canonical query',
     );
     expect(prompt).toContain(
-      'If the OD command fails because no web research provider is configured or every configured provider is unavailable',
+      'If the OD command fails because Tavily is not configured or unavailable',
     );
     expect(prompt).toContain(
       'use your own search capability as fallback and label the fallback clearly',

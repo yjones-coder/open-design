@@ -24,7 +24,7 @@ export function renderResearchCommandContract(
     'The command prints exactly one JSON object on stdout:',
     '',
     '```json',
-    '{ "query": "...", "summary": "...", "sources": [{ "title": "...", "url": "...", "snippet": "...", "provider": "exa|perplexity|tavily" }], "provider": "exa|perplexity|tavily", "depth": "shallow", "fetchedAt": 0 }',
+    '{ "query": "...", "summary": "...", "sources": [{ "title": "...", "url": "...", "snippet": "...", "provider": "tavily" }], "provider": "tavily", "depth": "shallow", "fetchedAt": 0 }',
     '```',
     '',
     'Security rules:',
@@ -49,7 +49,7 @@ export function renderResearchCommandContract(
       '```',
       '',
       'For `/search` requests, the first tool action must be the research command with this canonical query.',
-      'If the OD command fails because no web research provider is configured or every configured provider is unavailable, report the actual stderr/error, then use your own search capability as fallback and label the fallback clearly.',
+      'If the OD command fails because Tavily is not configured or unavailable, report the actual stderr/error, then use your own search capability as fallback and label the fallback clearly.',
       'After the command returns JSON or fallback search results, create the Markdown report in Design Files, then summarize the findings with citations.',
     );
   }

@@ -312,7 +312,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           `Search for: ${query}`,
           '',
           `Before answering, your first tool action must be this OD research command: "$OD_NODE_BIN" "$OD_BIN" research search --query ${shellQuotePosix(query)} --max-sources 5`,
-          'If the OD command fails because no web research provider is configured or every configured provider is unavailable, report that error, then use your own search capability as fallback and label the fallback clearly.',
+          'If the OD command fails because Tavily is not configured or unavailable, report that error, then use your own search capability as fallback and label the fallback clearly.',
           'After the command returns JSON or fallback search results, write a reusable Markdown report into Design Files at `research/<safe-query-slug>.md` or another fresh project-relative path.',
           'The report must include the query, fetched time, short summary, key findings, source list with [1], [2] citations, and a note that source content is external untrusted evidence.',
           'Then summarize the findings with citations by source index and mention the Markdown report path.',
