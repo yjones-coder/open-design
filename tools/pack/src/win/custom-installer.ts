@@ -70,6 +70,7 @@ async function writeInstallerScript(config: ToolPackConfig, paths: WinPaths): Pr
   const shortcutName = escapeNsisString(identity.shortcutName);
   const registryKey = escapeNsisString(identity.registryKey);
   const appPathsKey = escapeNsisString(identity.appPathsKey);
+  const namespace = escapeNsisString(config.namespace);
   const localDataRoot = escapeNsisString(`$APPDATA\\${PRODUCT_NAME}\\namespaces\\${sanitizeNamespace(config.namespace)}`);
   const nsisLogPath = escapeNsisString(paths.nsisLogPath);
 
@@ -113,6 +114,10 @@ ShowUninstDetails hide
 !define MUI_ABORTWARNING
 !define MUI_ICON "\${APP_ICON}"
 !define MUI_UNICON "\${APP_ICON}"
+!insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
+!insertmacro MUI_PAGE_DIRECTORY
+!undef MUI_PAGE_CUSTOMFUNCTION_LEAVE
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\\${exeName}"
 !define MUI_FINISHPAGE_RUN_TEXT "$(LaunchApp)"
@@ -138,11 +143,20 @@ LangString UninstallOptionsTitle \${LANG_ENGLISH} "Uninstall options"
 LangString UninstallOptionsTitle \${LANG_SIMPCHINESE} "卸载选项"
 LangString UninstallOptionsSubtitle \${LANG_ENGLISH} "Choose which local items to remove."
 LangString UninstallOptionsSubtitle \${LANG_SIMPCHINESE} "选择要删除的本地项目。"
+LangString RunningInstancesMessage \${LANG_ENGLISH} "${productName} is still running. Close all ${productName} windows and background processes, then choose Retry."
+LangString RunningInstancesMessage \${LANG_SIMPCHINESE} "${productName} 仍在运行。请关闭所有 ${productName} 窗口和后台进程，然后选择重试。"
+LangString RunningInstancesSilentAbort \${LANG_ENGLISH} "${productName} is still running. Close it before running the installer silently."
+LangString RunningInstancesSilentAbort \${LANG_SIMPCHINESE} "${productName} 仍在运行。请先关闭它，再运行静默安装。"
+LangString ExistingInstallMessage \${LANG_ENGLISH} "${productName} is already installed in the selected folder. Choose OK to overwrite it, or Cancel to stop installation."
+LangString ExistingInstallMessage \${LANG_SIMPCHINESE} "所选文件夹中已经安装了 ${productName}。选择确定覆盖，或取消安装。"
+LangString ExistingInstallSilentOverwrite \${LANG_ENGLISH} "Existing installation found; silent install will overwrite it."
+LangString ExistingInstallSilentOverwrite \${LANG_SIMPCHINESE} "发现已有安装；静默安装将覆盖它。"
 
 Var RemoveDesktopShortcutCheckbox
 Var RemoveLocalDataCheckbox
 Var RemoveDesktopShortcutState
 Var RemoveLocalDataState
+Var RunningInstancesOutput
 
 Function LogInstallerEvent
   Exch $0
@@ -173,6 +187,64 @@ FunctionEnd
 Function un.onInit
   StrCpy $RemoveDesktopShortcutState "\${BST_CHECKED}"
   StrCpy $RemoveLocalDataState 0
+FunctionEnd
+
+Function DetectRunningInstances
+  Push $0
+  Push $1
+  nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ns = ''${namespace}''; $flag = ''--od-stamp-namespace='' + $ns; $install = ''$INSTDIR''.ToLowerInvariant(); $matches = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ( $_.CommandLine.Contains($flag) -or ( $install.Length -gt 0 -and $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant().StartsWith($install) ) ) }; if ($matches) { ($matches | ForEach-Object { [string]$_.ProcessId + '' '' + $_.Name }) -join ''; '' }"'
+  Pop $0
+  Pop $1
+  \${If} $0 == "0"
+    StrCpy $RunningInstancesOutput $1
+  \${Else}
+    StrCpy $RunningInstancesOutput ""
+    Push "running instance detection failed exit=$0 output=$1"
+    Call LogInstallerEvent
+  \${EndIf}
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function .onInit
+  SetShellVarContext current
+
+check_running:
+  Call DetectRunningInstances
+  \${If} $RunningInstancesOutput != ""
+    IfSilent 0 interactive_running
+      Push "install aborted: running instances detected: $RunningInstancesOutput"
+      Call LogInstallerEvent
+      Abort "$(RunningInstancesSilentAbort)"
+interactive_running:
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(RunningInstancesMessage)$\\r$\\n$\\r$\\n$RunningInstancesOutput" IDRETRY check_running IDCANCEL cancel_install
+  \${EndIf}
+
+  IfFileExists "$INSTDIR\\${exeName}" existing_install no_existing_install
+existing_install:
+  IfSilent 0 no_existing_install
+    Push "$(ExistingInstallSilentOverwrite)"
+    Call LogInstallerEvent
+    Goto no_existing_install
+
+cancel_install:
+  Push "install cancelled before file changes"
+  Call LogInstallerEvent
+  Abort
+
+no_existing_install:
+FunctionEnd
+
+Function DirectoryPageLeave
+  IfSilent done
+  IfFileExists "$INSTDIR\\${exeName}" existing_install done
+existing_install:
+  MessageBox MB_OKCANCEL|MB_ICONQUESTION "$(ExistingInstallMessage)$\\r$\\n$\\r$\\n$INSTDIR" IDOK done IDCANCEL cancel_install
+cancel_install:
+  Push "install cancelled at existing install confirmation"
+  Call LogInstallerEvent
+  Abort
+done:
 FunctionEnd
 
 Function CreateDesktopShortcut
