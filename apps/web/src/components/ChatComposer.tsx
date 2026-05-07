@@ -297,6 +297,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       ].join('\n');
     }
 
+    function shellQuotePosix(value: string): string {
+      return `'${value.replace(/'/g, `'\\''`)}'`;
+    }
+
     function expandSearchCommand(input: string): { prompt: string; query: string } | null {
       const m = /^\/search(?:\s+([\s\S]*))?$/i.exec(input.trim());
       if (!m) return null;
@@ -307,7 +311,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         prompt: [
           `Search for: ${query}`,
           '',
-          `Before answering, your first tool action must be this OD research command: "$OD_NODE_BIN" "$OD_BIN" research search --query ${JSON.stringify(query)} --max-sources 5`,
+          `Before answering, your first tool action must be this OD research command: "$OD_NODE_BIN" "$OD_BIN" research search --query ${shellQuotePosix(query)} --max-sources 5`,
           'If the OD command fails because Tavily is not configured or unavailable, report that error, then use your own search capability as fallback and label the fallback clearly.',
           'Then summarize the findings with citations by source index.',
         ].join('\n'),
@@ -527,7 +531,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         reset();
         return;
       }
-      const search = expandSearchCommand(prompt);
+      const search = researchAvailable ? expandSearchCommand(prompt) : null;
       if (search) {
         if (streaming) return;
         onSend(search.prompt, staged, commentAttachments, {
