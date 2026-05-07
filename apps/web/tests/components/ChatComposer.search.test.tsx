@@ -38,7 +38,7 @@ describe('ChatComposer /search command', () => {
       '"$OD_NODE_BIN" "$OD_BIN" research search --query \'EV market 2025 trends\' --max-sources 5',
     );
     expect(prompt).toContain(
-      'If the OD command fails because Tavily is not configured or unavailable',
+      'If the OD command fails because no web research provider is configured or every configured provider is unavailable',
     );
     expect(prompt).toContain(
       'use your own search capability as fallback and label the fallback clearly',

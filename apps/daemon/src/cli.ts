@@ -259,13 +259,13 @@ function printResearchHelp() {
   console.log(`Usage:
   od research search --query <text> [--max-sources 5] [--daemon-url <url>]
 
-Runs Tavily-backed shallow research through the local Open Design daemon.
+Runs shallow web research through the local Open Design daemon.
 Output is JSON only on stdout:
-  { "query": "...", "summary": "...", "sources": [...], "provider": "tavily", "depth": "shallow", "fetchedAt": 0 }
+  { "query": "...", "summary": "...", "sources": [...], "provider": "exa|perplexity|tavily", "depth": "shallow", "fetchedAt": 0 }
 
 Flags:
   --query        Required search query.
-  --max-sources  Optional source cap. Defaults to 5, clamped to Tavily's max.
+  --max-sources  Optional source cap. Defaults to 5, clamped to provider limits.
   --daemon-url   Local daemon URL. Defaults to OD_DAEMON_URL or http://127.0.0.1:7456.`);
 }
 
