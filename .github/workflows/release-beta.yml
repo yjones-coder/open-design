@@ -36,7 +36,7 @@ jobs:
     name: Prepare beta metadata
     runs-on: ubuntu-latest
     env:
-      OPEN_DESIGN_BETA_METADATA_URL: ${{ secrets.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}/beta/latest/metadata.json
+      OPEN_DESIGN_BETA_METADATA_URL: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}/beta/latest/metadata.json
       OPEN_DESIGN_RELEASE_SIGNED: ${{ inputs.signed }}
     outputs:
       asset_version_suffix: ${{ steps.beta.outputs.asset_version_suffix }}
@@ -73,7 +73,7 @@ jobs:
           AWS_DEFAULT_REGION: auto
           AWS_EC2_METADATA_DISABLED: "true"
           CLOUDFLARE_R2_RELEASES_BUCKET: ${{ secrets.CLOUDFLARE_R2_RELEASES_BUCKET }}
-          CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ secrets.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
+          CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
           CLOUDFLARE_R2_RELEASES_URL: ${{ secrets.CLOUDFLARE_R2_RELEASES_URL }}
         run: |
           set -euo pipefail
@@ -340,7 +340,7 @@ jobs:
       - name: Prepare beta assets
         id: assets
         env:
-          CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ secrets.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
+          CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
         run: |
           set -euo pipefail
           if [ -z "$CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN" ]; then
@@ -673,7 +673,7 @@ jobs:
       - name: Prepare windows beta assets
         shell: pwsh
         env:
-          CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ secrets.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
+          CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN)) {
             throw "CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN is required"
@@ -819,7 +819,7 @@ jobs:
       AWS_DEFAULT_REGION: auto
       AWS_EC2_METADATA_DISABLED: "true"
       CLOUDFLARE_R2_RELEASES_BUCKET: ${{ secrets.CLOUDFLARE_R2_RELEASES_BUCKET }}
-      CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ secrets.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
+      CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
       CLOUDFLARE_R2_RELEASES_URL: ${{ secrets.CLOUDFLARE_R2_RELEASES_URL }}
       ASSET_VERSION_SUFFIX: ${{ needs.metadata.outputs.asset_version_suffix }}
       BASE_VERSION: ${{ needs.metadata.outputs.base_version }}
@@ -1150,6 +1150,9 @@ jobs:
             echo "- Artifact path: ${{ steps.r2.outputs.version_prefix }}"
             echo "- State source: ${{ needs.metadata.outputs.state_source }}"
             echo "- Metadata: ${{ steps.r2.outputs.metadata_url }}"
+            echo "- Version metadata: ${{ steps.r2.outputs.version_metadata_url }}"
+            echo "- E2E report path: ${{ steps.r2.outputs.version_prefix }}/report/"
+            echo "- E2E report URL: ${{ steps.r2.outputs.report_url }}"
             echo "- mac enabled: $ENABLE_MAC"
             echo "- windows enabled: $ENABLE_WIN"
             echo "- linux enabled: $ENABLE_LINUX"
@@ -1158,10 +1161,16 @@ jobs:
               echo "- mac dmg: ${{ steps.r2.outputs.mac_dmg_url }}"
               echo "- mac zip: ${{ steps.r2.outputs.mac_zip_url }}"
               echo "- mac feed: ${{ steps.r2.outputs.mac_feed_url }}"
+              echo "- mac e2e manifest: ${{ steps.r2.outputs.report_url }}mac/manifest.json"
+              echo "- mac e2e screenshot: ${{ steps.r2.outputs.report_url }}mac/screenshots/open-design-mac-smoke.png"
+              echo "- mac e2e vitest log: ${{ steps.r2.outputs.report_url }}mac/vitest.log"
             fi
             if [ "$ENABLE_WIN" = "true" ]; then
               echo "- win installer: ${{ steps.r2.outputs.win_installer_url }}"
               echo "- win feed: ${{ steps.r2.outputs.win_feed_url }}"
+              echo "- win e2e manifest: ${{ steps.r2.outputs.report_url }}win/manifest.json"
+              echo "- win e2e screenshot: ${{ steps.r2.outputs.report_url }}win/screenshots/open-design-win-smoke.png"
+              echo "- win e2e vitest log: ${{ steps.r2.outputs.report_url }}win/vitest.log"
             fi
             if [ "$ENABLE_LINUX" = "true" ]; then
               echo "- linux AppImage: ${{ steps.r2.outputs.linux_appimage_url }}"
