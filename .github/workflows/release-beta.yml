@@ -98,7 +98,7 @@ jobs:
           $toolsPackDir = Join-Path $env:RUNNER_TEMP "tools-pack"
           $cacheDir = Join-Path $env:RUNNER_TEMP "tools-pack-cache"
           $buildJsonPath = Join-Path $env:RUNNER_TEMP "windows-tools-pack-build.json"
-          $buildOutput = pnpm exec tools-pack win build `
+          $buildOutput = node tools/pack/bin/tools-pack.mjs win build `
             --dir $toolsPackDir `
             --cache-dir $cacheDir `
             --namespace $env:OD_RELEASE_BETA_DRY_RUN_NAMESPACE `
@@ -153,8 +153,8 @@ jobs:
           "" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           "### Release-beta dry run result" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           "" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          "- Version: `${{ steps.beta.outputs.beta_version }}`" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          "- Tag that would be used: `${{ steps.beta.outputs.version_tag }}`" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          "- Version: ${{ steps.beta.outputs.beta_version }}" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          "- Tag that would be used: ${{ steps.beta.outputs.version_tag }}" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           "- Published release artifacts: none" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           if (!(Test-Path $buildJsonPath)) {
             "- Build JSON: missing" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
