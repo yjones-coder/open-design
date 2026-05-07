@@ -339,6 +339,8 @@ async function checkWebTestLayout(): Promise<boolean> {
 }
 
 const toolsRootAllowlist = new Map<string, "directory" | "file">([
+  // Keep top-level tools intentionally small. `tools/launcher` was an incoming
+  // Windows shim experiment from PR #683 and is not an active repo boundary.
   ["AGENTS.md", "file"],
   ["dev", "directory"],
   ["pack", "directory"],

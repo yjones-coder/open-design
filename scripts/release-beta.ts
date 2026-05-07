@@ -264,6 +264,9 @@ let latestBeta: ParsedBetaVersion | null = null;
 let stateSource = "R2 metadata.json";
 const latestMetadataJson = await fetchOptionalHttpsText(metadataUrl);
 if (latestMetadataJson == null) {
+  // Only HTTP 404 reaches this branch; other fetch failures throw above. This
+  // is an intentional cold-start/reset behavior for a missing beta metadata
+  // object, not a fallback to any updater feed or GitHub release state.
   latestBeta = {
     baseVersion: packagedVersion,
     betaNumber: 0,

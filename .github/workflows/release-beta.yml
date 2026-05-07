@@ -19,7 +19,7 @@ on:
         type: boolean
         default: true
       enable_linux:
-        description: "Build and publish Linux x64 AppImage beta artifacts to R2."
+        description: "Build and publish Linux x64 AppImage/checksum to R2 only; no updater feed is published yet."
         required: true
         type: boolean
         default: false

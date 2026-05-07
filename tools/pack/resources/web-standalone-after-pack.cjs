@@ -298,6 +298,8 @@ async function rewriteCopiedStandaloneSymlinks(options) {
       const currentTarget = await readlink(current);
       const sourceTarget = path.resolve(path.dirname(copiedSourcePath), currentTarget);
       const destinationTarget = mapPath(sourceTarget, "sourceRoot", "destinationRoot");
+      // External source-tree symlinks are not rewritten; the closure audit below
+      // reports them as externalSymlink and fails the package instead.
       if (destinationTarget == null) return;
 
       const nextTarget = path.relative(path.dirname(current), destinationTarget) || ".";
