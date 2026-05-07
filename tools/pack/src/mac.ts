@@ -72,6 +72,11 @@ type MacPaths = {
   zipPath: string;
 };
 
+type SeededAppConfigPaths = {
+  sourcePath: string;
+  targetPath: string;
+};
+
 export type MacPackResult = {
   appPath: string;
   dmgPath: string | null;
@@ -273,6 +278,34 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function resolveSeededAppConfigPaths(config: ToolPackConfig): SeededAppConfigPaths {
+  const sourceDataDir = process.env.OD_DATA_DIR != null && process.env.OD_DATA_DIR.length > 0
+    ? config.workspaceRoot === process.cwd()
+      ? process.env.OD_DATA_DIR
+      : process.env.OD_DATA_DIR
+    : join(config.workspaceRoot, ".od");
+  return {
+    sourcePath: join(sourceDataDir, "app-config.json"),
+    targetPath: join(config.roots.runtime.namespaceRoot, "data", "app-config.json"),
+  };
+}
+
+async function seedPackagedAppConfig(config: ToolPackConfig): Promise<void> {
+  if (config.portable) return;
+
+  const { sourcePath, targetPath } = resolveSeededAppConfigPaths(config);
+  if (!(await pathExists(sourcePath))) return;
+
+  const raw = await readFile(sourcePath, "utf8");
+  const parsed = JSON.parse(raw) as unknown;
+  if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
+    throw new Error(`packaged app-config seed must be a JSON object: ${sourcePath}`);
+  }
+
+  await mkdir(dirname(targetPath), { recursive: true });
+  await writeFile(targetPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
 }
 
 function toPosixPath(value: string): string {
@@ -784,6 +817,7 @@ export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
   const paths = resolveMacPaths(config);
   const targets = resolveElectronBuilderTargets(config.to as MacBuildOutput);
   await buildWorkspaceArtifacts(config);
+  await seedPackagedAppConfig(config);
   await copyResourceTree(config, paths);
   const tarballs = await collectWorkspaceTarballs(config, paths);
   await writeAssembledApp(config, paths, tarballs);
@@ -804,6 +838,8 @@ export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
     zipPath: artifacts.zipPath,
   };
 }
+
+export { resolveSeededAppConfigPaths, seedPackagedAppConfig };
 
 function desktopStamp(config: ToolPackConfig): SidecarStamp {
   return {
