@@ -1394,6 +1394,7 @@ describe('SettingsDialog pets interactions', () => {
           }),
         }),
       }),
+      true,
     );
   });
 
@@ -1429,6 +1430,7 @@ describe('SettingsDialog pets interactions', () => {
           enabled: false,
         }),
       }),
+      true,
     );
   });
 
@@ -1552,6 +1554,7 @@ describe('SettingsDialog skills and design systems interactions', () => {
       expect.objectContaining({
         disabledSkills: ['blog-post'],
       }),
+      true,
     );
   });
 
@@ -1588,6 +1591,7 @@ describe('SettingsDialog skills and design systems interactions', () => {
       expect.objectContaining({
         disabledDesignSystems: ['signal-green'],
       }),
+      true,
     );
   });
 
