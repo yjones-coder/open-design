@@ -119,6 +119,11 @@ type HealthEvalValue = {
   title: string;
 };
 
+type SmokeTiming = {
+  durationMs: number;
+  step: string;
+};
+
 const shouldRunPackagedWinSmoke = process.platform === 'win32' && process.env.OD_PACKAGED_E2E_WIN === '1';
 const winDescribe = shouldRunPackagedWinSmoke ? describe : describe.skip;
 
@@ -128,10 +133,13 @@ winDescribe('packaged windows runtime smoke', () => {
 
   test('installs, starts, inspects with eval and screenshot, stops, and uninstalls the built windows artifact', async () => {
     let passed = false;
+    const timings: SmokeTiming[] = [];
     try {
-      await runToolsPackJson<WinUninstallResult>('uninstall').catch(() => null);
+      await measureSmokeStep(timings, 'pre-clean uninstall', async () => {
+        await runToolsPackJson<WinUninstallResult>('uninstall').catch(() => null);
+      });
 
-      const install = await runToolsPackJson<WinInstallResult>('install');
+      const install = await measureSmokeStep(timings, 'install', async () => runToolsPackJson<WinInstallResult>('install'));
       installed = true;
 
       expect(install.namespace).toBe(namespace);
@@ -162,7 +170,7 @@ winDescribe('packaged windows runtime smoke', () => {
         );
       }
 
-      const start = await runToolsPackJson<WinStartResult>('start');
+      const start = await measureSmokeStep(timings, 'start', async () => runToolsPackJson<WinStartResult>('start'));
       started = true;
 
       expect(start.namespace).toBe(namespace);
@@ -171,7 +179,7 @@ winDescribe('packaged windows runtime smoke', () => {
       expectPathInside(start.logPath, join(runtimeNamespaceRoot, 'logs', 'desktop'));
       expect(start.pid).toBeGreaterThan(0);
 
-      const inspect = await waitForHealthyDesktop();
+      const inspect = await measureSmokeStep(timings, 'wait healthy inspect eval', async () => waitForHealthyDesktop());
       expect(inspect.status?.state).toBe('running');
       expect(inspect.status?.url).toBe('od://app/');
 
@@ -181,19 +189,24 @@ winDescribe('packaged windows runtime smoke', () => {
       expect(value.health.ok).toBe(true);
       expect(value.health.version).toEqual(expect.any(String));
 
-      const screenshot = await runToolsPackJson<WinInspectResult>('inspect', ['--path', screenshotPath]);
+      const screenshot = await measureSmokeStep(timings, 'inspect screenshot', async () =>
+        runToolsPackJson<WinInspectResult>('inspect', ['--path', screenshotPath]),
+      );
       expect(screenshot.screenshot?.path).toBe(screenshotPath);
       expect(await fileSizeBytes(screenshotPath)).toBeGreaterThan(0);
 
-      assertLogPathsAndContent(await runToolsPackJson<LogsResult>('logs'));
+      const logs = await measureSmokeStep(timings, 'logs', async () => runToolsPackJson<LogsResult>('logs'));
+      assertLogPathsAndContent(logs);
 
-      const stop = await runToolsPackJson<WinStopResult>('stop');
+      const stop = await measureSmokeStep(timings, 'stop', async () => runToolsPackJson<WinStopResult>('stop'));
       started = false;
       expect(stop.namespace).toBe(namespace);
       expect(stop.status).not.toBe('partial');
       expect(stop.remainingPids).toEqual([]);
 
-      const uninstall = await runToolsPackJson<WinUninstallResult>('uninstall', ['--remove-product-user-data']);
+      const uninstall = await measureSmokeStep(timings, 'uninstall remove data', async () =>
+        runToolsPackJson<WinUninstallResult>('uninstall', ['--remove-product-user-data']),
+      );
       installed = false;
       expect(uninstall.namespace).toBe(namespace);
       expect(uninstall.residueObservation?.managedProcessPids ?? []).toEqual([]);
@@ -224,9 +237,31 @@ winDescribe('packaged windows runtime smoke', () => {
         });
         installed = false;
       }
+
+      printSmokeTimings(timings);
     }
   }, 300_000);
 });
+
+async function measureSmokeStep<T>(timings: SmokeTiming[], step: string, run: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await run();
+  } finally {
+    timings.push({ durationMs: Date.now() - startedAt, step });
+  }
+}
+
+function printSmokeTimings(timings: SmokeTiming[]): void {
+  const totalMs = timings.reduce((sum, timing) => sum + timing.durationMs, 0);
+  console.info(
+    [
+      '[windows smoke timings]',
+      ...timings.map((timing) => `${timing.step}: ${Math.round(timing.durationMs / 100) / 10}s`),
+      `measured total: ${Math.round(totalMs / 100) / 10}s`,
+    ].join('\n'),
+  );
+}
 
 async function runToolsPackJson<T>(action: string, extraArgs: string[] = []): Promise<T> {
   const args = [
