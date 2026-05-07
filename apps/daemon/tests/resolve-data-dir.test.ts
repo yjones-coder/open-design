@@ -10,7 +10,7 @@
  */
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveDataDir } from '../src/server.js';
@@ -19,6 +19,8 @@ describe('resolveDataDir', () => {
   let fakeHome: string;
   let projectRoot: string;
   let homedirSpy: ReturnType<typeof vi.spyOn>;
+
+  const canonical = (value: string) => realpathSync(value);
 
   beforeEach(() => {
     fakeHome = mkdtempSync(path.join(os.tmpdir(), 'rdd-home-'));
@@ -39,50 +41,50 @@ describe('resolveDataDir', () => {
 
   it('expands a leading ~/ against the user home directory', () => {
     const out = resolveDataDir('~/od-test', projectRoot);
-    expect(out).toBe(path.join(fakeHome, 'od-test'));
+    expect(out).toBe(canonical(path.join(fakeHome, 'od-test')));
   });
 
   it('expands ~\\ (backslash) against the user home directory', () => {
     const out = resolveDataDir('~\\od-test', projectRoot);
-    expect(out).toBe(path.join(fakeHome, 'od-test'));
+    expect(out).toBe(canonical(path.join(fakeHome, 'od-test')));
   });
 
   it('expands a bare ~ to the user home directory', () => {
-    expect(resolveDataDir('~', projectRoot)).toBe(fakeHome);
+    expect(resolveDataDir('~', projectRoot)).toBe(canonical(fakeHome));
   });
 
   it('expands $HOME/ against the user home directory', () => {
     const out = resolveDataDir('$HOME/od-test', projectRoot);
-    expect(out).toBe(path.join(fakeHome, 'od-test'));
+    expect(out).toBe(canonical(path.join(fakeHome, 'od-test')));
   });
 
   it('expands $HOME\\ (backslash, Windows launcher) against the user home directory', () => {
     const out = resolveDataDir('$HOME\\od-test', projectRoot);
-    expect(out).toBe(path.join(fakeHome, 'od-test'));
+    expect(out).toBe(canonical(path.join(fakeHome, 'od-test')));
   });
 
   it('expands ${HOME}/ against the user home directory', () => {
     const out = resolveDataDir('${HOME}/od-test', projectRoot);
-    expect(out).toBe(path.join(fakeHome, 'od-test'));
+    expect(out).toBe(canonical(path.join(fakeHome, 'od-test')));
   });
 
   it('expands ${HOME}\\ (backslash) against the user home directory', () => {
     const out = resolveDataDir('${HOME}\\od-test', projectRoot);
-    expect(out).toBe(path.join(fakeHome, 'od-test'));
+    expect(out).toBe(canonical(path.join(fakeHome, 'od-test')));
   });
 
   it('expands a bare $HOME to the user home directory', () => {
-    expect(resolveDataDir('$HOME', projectRoot)).toBe(fakeHome);
+    expect(resolveDataDir('$HOME', projectRoot)).toBe(canonical(fakeHome));
   });
 
   it('expands a bare ${HOME} to the user home directory', () => {
-    expect(resolveDataDir('${HOME}', projectRoot)).toBe(fakeHome);
+    expect(resolveDataDir('${HOME}', projectRoot)).toBe(canonical(fakeHome));
   });
 
   it('passes absolute paths through unchanged', async () => {
     const abs = mkdtempSync(path.join(os.tmpdir(), 'rdd-abs-'));
     try {
-      expect(resolveDataDir(abs, projectRoot)).toBe(abs);
+      expect(resolveDataDir(abs, projectRoot)).toBe(canonical(abs));
     } finally {
       await rm(abs, { recursive: true, force: true });
     }
@@ -90,6 +92,6 @@ describe('resolveDataDir', () => {
 
   it('resolves relative paths against projectRoot', () => {
     const out = resolveDataDir('rel-od', projectRoot);
-    expect(out).toBe(path.join(projectRoot, 'rel-od'));
+    expect(out).toBe(canonical(path.join(projectRoot, 'rel-od')));
   });
 });
