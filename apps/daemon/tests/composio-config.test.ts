@@ -126,6 +126,7 @@ describe('composio config', () => {
           category: 'Communication',
           providerConnectorId: 'SLACK',
           authentication: 'composio',
+          toolCount: 48,
           tools: [
             {
               name: 'slack.slack_list_channels',
@@ -148,6 +149,7 @@ describe('composio config', () => {
 
     expect(composioConnectorProvider.getFastDefinitions().find((definition) => definition.id === 'slack')).toMatchObject({
       id: 'slack',
+      toolCount: 48,
       tools: [expect.objectContaining({
         name: 'slack.slack_list_channels',
         curation: expect.objectContaining({ useCases: ['personal_daily_digest'] }),

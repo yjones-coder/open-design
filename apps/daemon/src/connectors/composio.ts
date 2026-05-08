@@ -1329,6 +1329,9 @@ function normalizePersistedConnectorDefinition(value: unknown): ConnectorCatalog
   }
   if (typeof record.providerConnectorId === 'string') definition.providerConnectorId = record.providerConnectorId;
   if (Array.isArray(record.featuredToolNames)) definition.featuredToolNames = record.featuredToolNames.filter((item): item is string => typeof item === 'string');
+  if (typeof record.toolCount === 'number' && Number.isFinite(record.toolCount) && record.toolCount >= 0) {
+    definition.toolCount = record.toolCount;
+  }
   if (record.minimumApproval === 'auto' || record.minimumApproval === 'confirm' || record.minimumApproval === 'disabled') {
     definition.minimumApproval = record.minimumApproval;
   }
