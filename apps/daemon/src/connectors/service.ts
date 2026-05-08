@@ -12,7 +12,7 @@ import {
   type ConnectorToolSafety,
   type ConnectorStatus,
 } from './catalog.js';
-import { composioConnectorProvider, getStaticComposioCatalogDefinitions, type ComposioAuthConfigMetricsSnapshot, type ComposioAuthConfigPrepareResult, type ComposioConnectionStart } from './composio.js';
+import { composioConnectorProvider, getStaticComposioCatalogDefinitions, type ComposioAuthConfigPrepareResult, type ComposioConnectionStart } from './composio.js';
 
 export interface ConnectorExecuteRequest {
   connectorId: string;
@@ -641,10 +641,6 @@ export class ConnectorService {
     }));
 
     return { results };
-  }
-
-  getAuthConfigMetrics(): ComposioAuthConfigMetricsSnapshot {
-    return composioConnectorProvider.getAuthConfigMetrics();
   }
 
   async connect(connectorId: string, options: { accountLabel?: string; credentials?: ConnectorCredentialMaterial; callbackUrl?: string; signal?: AbortSignal } = {}): Promise<ConnectorConnectResult> {

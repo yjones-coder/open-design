@@ -580,14 +580,6 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
     }
   });
 
-  app.get('/api/connectors/auth-configs/metrics', requireLocalDaemonRequest, async (_req: Request, res: Response) => {
-    try {
-      res.json(service.getAuthConfigMetrics());
-    } catch (err) {
-      sendConnectorRouteError(res, err, options.sendApiError);
-    }
-  });
-
   app.post('/api/connectors/:connectorId/connect', requireLocalDaemonRequest, async (req: Request, res: Response) => {
     try {
       const connectorId = req.params.connectorId;

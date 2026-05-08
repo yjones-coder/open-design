@@ -422,46 +422,12 @@ export interface ComposioConnectionCompletion {
 interface ComposioAuthConfigResolution {
   authConfigId: string;
   fromCache: boolean;
-  source: ComposioAuthConfigMetricSource;
 }
 
 export type ComposioAuthConfigPrepareResult =
   | { status: 'ready'; authConfigId: string }
   | { status: 'custom_required'; message: string }
   | { status: 'error'; message: string };
-
-export type ComposioAuthConfigMetricSource =
-  | 'local_cache'
-  | 'discovered_cache'
-  | 'toolkit_lookup'
-  | 'created'
-  | 'in_flight';
-
-export interface ComposioAuthConfigMetricEvent {
-  connectorId: string;
-  toolkitSlug?: string;
-  source: ComposioAuthConfigMetricSource;
-  outcome: 'success' | 'failure';
-  durationMs: number;
-  timestamp: string;
-  error?: string;
-}
-
-export interface ComposioAuthConfigMetricBucket {
-  count: number;
-  success: number;
-  failure: number;
-  minMs: number;
-  maxMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p95Ms: number;
-}
-
-export interface ComposioAuthConfigMetricsSnapshot extends ComposioAuthConfigMetricBucket {
-  bySource: Partial<Record<ComposioAuthConfigMetricSource, ComposioAuthConfigMetricBucket>>;
-  recent: ComposioAuthConfigMetricEvent[];
-}
 
 export class ComposioConnectorProvider {
   private discoveredAuthConfigIds: Record<string, string> | undefined;
@@ -470,7 +436,6 @@ export class ComposioConnectorProvider {
   private readonly definitionsPromises = new Map<string, Promise<ConnectorCatalogDefinition[]>>();
   private definitionsGeneration = 0;
   private readonly authConfigCreationPromises = new Map<string, Promise<string>>();
-  private readonly authConfigMetricEvents: ComposioAuthConfigMetricEvent[] = [];
   private readonly unsupportedManagedAuthConfigs = new Map<string, string>();
   private readonly pendingConnections = new Map<string, ComposioPendingConnection>();
   private persistedDefinitions: ConnectorCatalogDefinition[] | undefined;
@@ -487,7 +452,6 @@ export class ComposioConnectorProvider {
     this.locallyCreatedAuthConfigs.clear();
     this.invalidateDefinitionsCache();
     this.authConfigCreationPromises.clear();
-    this.authConfigMetricEvents.length = 0;
     this.unsupportedManagedAuthConfigs.clear();
   }
 
@@ -739,10 +703,6 @@ export class ComposioConnectorProvider {
     return cancelled;
   }
 
-  getAuthConfigMetrics(): ComposioAuthConfigMetricsSnapshot {
-    return summarizeAuthConfigMetricEvents(this.authConfigMetricEvents);
-  }
-
   async completeConnection(input: { definition: ConnectorCatalogDefinition; state: string; providerConnectionId?: string; status?: string; signal?: AbortSignal }): Promise<ComposioConnectionCompletion> {
     this.pruneExpiredPendingConnections();
 
@@ -846,52 +806,36 @@ export class ComposioConnectorProvider {
   }
 
   private async getOrCreateManagedAuthConfigId(definition: ConnectorCatalogDefinition, signal?: AbortSignal, options: { ignoreCache?: boolean } = {}): Promise<ComposioAuthConfigResolution> {
-    const startedAtMs = Date.now();
     if (!options.ignoreCache) {
       const persisted = this.getPersistedAuthConfigId(definition.id);
       if (persisted) {
-        const source: ComposioAuthConfigMetricSource = 'local_cache';
-        this.recordAuthConfigMetric({ definition, source, outcome: 'success', startedAtMs });
-        return { authConfigId: persisted, fromCache: true, source };
+        return { authConfigId: persisted, fromCache: true };
       }
       const discovered = this.discoveredAuthConfigIds?.[definition.id];
       if (discovered) {
-        const source: ComposioAuthConfigMetricSource = 'discovered_cache';
-        this.recordAuthConfigMetric({ definition, source, outcome: 'success', startedAtMs });
-        return { authConfigId: discovered, fromCache: true, source };
+        return { authConfigId: discovered, fromCache: true };
       }
     }
 
-    let source: ComposioAuthConfigMetricSource = 'toolkit_lookup';
-    try {
-      const existing = await this.getAuthConfigIdForToolkit(definition, signal);
-      if (existing) {
-        this.storeAuthConfigId(definition, existing);
-        this.recordAuthConfigMetric({ definition, source, outcome: 'success', startedAtMs });
-        return { authConfigId: existing, fromCache: false, source };
-      }
-
-      const inFlight = this.authConfigCreationPromises.get(definition.id);
-      if (inFlight) {
-        source = 'in_flight';
-        const authConfigId = await inFlight;
-        this.recordAuthConfigMetric({ definition, source, outcome: 'success', startedAtMs });
-        return { authConfigId, fromCache: false, source };
-      }
-
-      source = 'created';
-      const promise = this.createAndStoreManagedAuthConfigId(definition, signal)
-        .finally(() => {
-          if (this.authConfigCreationPromises.get(definition.id) === promise) this.authConfigCreationPromises.delete(definition.id);
-        });
-      this.authConfigCreationPromises.set(definition.id, promise);
-      const authConfigId = await promise;
-      this.recordAuthConfigMetric({ definition, source, outcome: 'success', startedAtMs });
-      return { authConfigId, fromCache: false, source };
-    } catch (error) {
-      this.recordAuthConfigMetric({ definition, source, outcome: 'failure', startedAtMs, error });
-      throw error;
+    const existing = await this.getAuthConfigIdForToolkit(definition, signal);
+    if (existing) {
+      this.storeAuthConfigId(definition, existing);
+      return { authConfigId: existing, fromCache: false };
     }
+
+    const inFlight = this.authConfigCreationPromises.get(definition.id);
+    if (inFlight) {
+      const authConfigId = await inFlight;
+      return { authConfigId, fromCache: false };
+    }
+
+    const promise = this.createAndStoreManagedAuthConfigId(definition, signal)
+      .finally(() => {
+        if (this.authConfigCreationPromises.get(definition.id) === promise) this.authConfigCreationPromises.delete(definition.id);
+      });
+    this.authConfigCreationPromises.set(definition.id, promise);
+    const authConfigId = await promise;
+    return { authConfigId, fromCache: false };
   }
 
   private async createAndStoreManagedAuthConfigId(definition: ConnectorCatalogDefinition, signal?: AbortSignal): Promise<string> {
@@ -973,42 +917,6 @@ export class ComposioConnectorProvider {
     };
     if (toolkitSlug) this.locallyCreatedAuthConfigs.set(definition.id, { authConfigId, toolkitSlug });
     setComposioAuthConfigId(definition.id, authConfigId);
-  }
-
-  private recordAuthConfigMetric(input: {
-    definition: ConnectorCatalogDefinition;
-    source: ComposioAuthConfigMetricSource;
-    outcome: ComposioAuthConfigMetricEvent['outcome'];
-    startedAtMs: number;
-    error?: unknown;
-  }): void {
-    const durationMs = Math.max(0, Date.now() - input.startedAtMs);
-    const error = input.error instanceof Error ? input.error.message : input.error === undefined ? undefined : String(input.error);
-    const event: ComposioAuthConfigMetricEvent = {
-      connectorId: input.definition.id,
-      ...(input.definition.providerConnectorId ? { toolkitSlug: input.definition.providerConnectorId } : {}),
-      source: input.source,
-      outcome: input.outcome,
-      durationMs,
-      timestamp: new Date().toISOString(),
-      ...(error ? { error } : {}),
-    };
-    this.authConfigMetricEvents.push(event);
-    if (this.authConfigMetricEvents.length > 200) this.authConfigMetricEvents.splice(0, this.authConfigMetricEvents.length - 200);
-    const logPayload = {
-      event: 'composio.auth_config.resolve',
-      connectorId: event.connectorId,
-      toolkitSlug: event.toolkitSlug,
-      source: event.source,
-      outcome: event.outcome,
-      durationMs: event.durationMs,
-      ...(error ? { error } : {}),
-    };
-    if (event.outcome === 'failure') {
-      console.warn('[connectors/composio]', JSON.stringify(logPayload));
-    } else {
-      console.info('[connectors/composio]', JSON.stringify(logPayload));
-    }
   }
 
   private async discoverAuthConfigIds(signal?: AbortSignal): Promise<Record<string, string>> {
@@ -1530,44 +1438,6 @@ function isCustomAuthRequiredMessage(message: string): boolean {
 
 function normalizeCustomAuthRequiredMessage(message: string): string {
   return message || CUSTOM_AUTH_REQUIRED_MESSAGE;
-}
-
-function summarizeAuthConfigMetricEvents(events: readonly ComposioAuthConfigMetricEvent[]): ComposioAuthConfigMetricsSnapshot {
-  const all = summarizeAuthConfigMetricBucket(events);
-  const bySource: Partial<Record<ComposioAuthConfigMetricSource, ComposioAuthConfigMetricBucket>> = {};
-  for (const source of ['local_cache', 'discovered_cache', 'toolkit_lookup', 'created', 'in_flight'] satisfies ComposioAuthConfigMetricSource[]) {
-    const sourceEvents = events.filter((event) => event.source === source);
-    if (sourceEvents.length > 0) bySource[source] = summarizeAuthConfigMetricBucket(sourceEvents);
-  }
-  return {
-    ...all,
-    bySource,
-    recent: events.slice(-20),
-  };
-}
-
-function summarizeAuthConfigMetricBucket(events: readonly ComposioAuthConfigMetricEvent[]): ComposioAuthConfigMetricBucket {
-  if (events.length === 0) {
-    return { count: 0, success: 0, failure: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
-  }
-  const durations = events.map((event) => event.durationMs).sort((a, b) => a - b);
-  const sum = durations.reduce((total, duration) => total + duration, 0);
-  return {
-    count: events.length,
-    success: events.filter((event) => event.outcome === 'success').length,
-    failure: events.filter((event) => event.outcome === 'failure').length,
-    minMs: durations[0] ?? 0,
-    maxMs: durations[durations.length - 1] ?? 0,
-    avgMs: Math.round(sum / durations.length),
-    p50Ms: percentileDuration(durations, 0.5),
-    p95Ms: percentileDuration(durations, 0.95),
-  };
-}
-
-function percentileDuration(sortedDurations: readonly number[], percentile: number): number {
-  if (sortedDurations.length === 0) return 0;
-  const index = Math.min(sortedDurations.length - 1, Math.max(0, Math.ceil(sortedDurations.length * percentile) - 1));
-  return sortedDurations[index] ?? 0;
 }
 
 async function getComposioErrorMessage(response: Response): Promise<string | undefined> {

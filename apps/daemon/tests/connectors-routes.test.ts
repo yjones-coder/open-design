@@ -495,44 +495,6 @@ describe('connector routes', () => {
     expect(lastComposioLinkRequest).toMatchObject({ auth_config_id: 'ac_slack' });
   });
 
-  it('records latency metrics for created and cached Composio auth config resolution', async () => {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve(undefined)));
-    });
-    mockComposioFetch({
-      authConfigs: [],
-      linkResponse: { connected_account_id: 'ca_slack', status: 'ACTIVE', account_label: 'slack@example.com' },
-    });
-    composioConnectorProvider.clearDiscoveryCache();
-    const started = await startServer({ port: 0, returnServer: true });
-    server = started.server;
-    baseUrl = started.url;
-    await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey: 'cmp_test' }),
-    });
-
-    await jsonFetch(`${baseUrl}/api/connectors/slack/connect`, { method: 'POST' });
-    await jsonFetch(`${baseUrl}/api/connectors/slack/connect`, { method: 'POST' });
-    const metrics = await jsonFetch(`${baseUrl}/api/connectors/auth-configs/metrics`);
-
-    expect(metrics.status).toBe(200);
-    expect(metrics.body).toMatchObject({
-      count: expect.any(Number),
-      success: expect.any(Number),
-      failure: 0,
-      bySource: {
-        created: expect.objectContaining({ count: 1, success: 1, failure: 0 }),
-        local_cache: expect.objectContaining({ count: 1, success: 1, failure: 0 }),
-      },
-    });
-    expect(metrics.body.recent).toEqual(expect.arrayContaining([
-      expect.objectContaining({ connectorId: 'slack', toolkitSlug: 'SLACK', source: 'created', outcome: 'success', durationMs: expect.any(Number) }),
-      expect.objectContaining({ connectorId: 'slack', toolkitSlug: 'SLACK', source: 'local_cache', outcome: 'success', durationMs: expect.any(Number) }),
-    ]));
-  });
-
   it('prepares a Composio auth config before connect and then reuses it for the link', async () => {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve(undefined)));
