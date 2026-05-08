@@ -192,6 +192,106 @@ describe('ConnectorsBrowser', () => {
     expect(screen.getByRole('button', { name: 'Load more tools' })).toBeTruthy();
   });
 
+  it('does not fetch drawer tool previews before the Composio key is configured', async () => {
+    const previewConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      id: 'notion',
+      name: 'Notion',
+      status: 'available',
+      toolCount: 48,
+      tools: [],
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+
+    render(<ConnectorsBrowser composioConfigured={false} />);
+
+    await screen.findByText('Notion');
+    expect(screen.getByTestId('connector-grid-wrap').className).toContain('is-masked');
+    expect(screen.queryByTestId('connector-drawer')).toBeNull();
+    expect(fetchConnectorDetail).not.toHaveBeenCalled();
+  });
+
+  it('does not mark failed tool preview fetches as successfully attempted', async () => {
+    const previewConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      id: 'notion',
+      name: 'Notion',
+      status: 'available',
+      toolCount: 48,
+      tools: [],
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(fetchConnectorDetail).mockResolvedValue(null);
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('Notion');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Notion details' }));
+
+    await waitFor(() => expect(fetchConnectorDetail).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchConnectorDetail).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Loading tools…')).toBeTruthy();
+  });
+
+  it('retries failed drawer preview hydration when the catalog refresh key changes', async () => {
+    const previewConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      id: 'notion',
+      name: 'Notion',
+      status: 'available',
+      toolCount: 48,
+      tools: [],
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(fetchConnectorDetail).mockResolvedValue(null);
+
+    const { rerender } = render(
+      <ConnectorsBrowser composioConfigured catalogRefreshKey="initial" />,
+    );
+
+    await screen.findByText('Notion');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Notion details' }));
+    await waitFor(() => expect(fetchConnectorDetail).toHaveBeenCalledTimes(1));
+
+    rerender(<ConnectorsBrowser composioConfigured catalogRefreshKey="refetched" />);
+
+    await waitFor(() => expect(fetchConnectorDetail).toHaveBeenCalledTimes(2));
+  });
+
+  it('retries failed drawer preview hydration when the drawer is reopened', async () => {
+    const previewConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      id: 'notion',
+      name: 'Notion',
+      status: 'available',
+      toolCount: 48,
+      tools: [],
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(fetchConnectorDetail).mockResolvedValue(null);
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('Notion');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Notion details' }));
+    await waitFor(() => expect(fetchConnectorDetail).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByTestId('connector-drawer')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Open Notion details' }));
+
+    await waitFor(() => expect(fetchConnectorDetail).toHaveBeenCalledTimes(2));
+  });
+
   it('cancels pending authorization through the daemon before clearing the local state', async () => {
     const availableConnector: ConnectorDetail = {
       ...configuredComposioConnector,

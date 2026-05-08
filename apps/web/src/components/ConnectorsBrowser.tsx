@@ -316,7 +316,7 @@ export function getConnectorDisplayToolCount(connector: ConnectorDetail): number
 
 export function hasLoadedAllAdvertisedConnectorTools(connector: ConnectorDetail): boolean {
   if (connector.toolsNextCursor) return false;
-  if (connector.toolCount === undefined) return connector.tools.length > 0;
+  if (connector.toolCount === undefined) return true;
   return connector.tools.length >= connector.toolCount;
 }
 
@@ -540,11 +540,13 @@ export function ConnectorsBrowser({
   const [connectorAuthorizationPending, setConnectorAuthorizationPending] = useState<ConnectorAuthorizationPendingState>(() => loadConnectorAuthorizationPending());
   const [detailConnectorId, setDetailConnectorId] = useState<string | null>(null);
   const [toolPreviewLoadingIds, setToolPreviewLoadingIds] = useState<Record<string, boolean>>({});
-  const [toolPreviewAttemptedIds, setToolPreviewAttemptedIds] = useState<Record<string, boolean>>({});
+  const [toolPreviewFetchedIds, setToolPreviewFetchedIds] = useState<Record<string, boolean>>({});
+  const [toolPreviewFailedIds, setToolPreviewFailedIds] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState('');
   const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER_TAB_ID);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const logoTheme = useResolvedTheme();
+  const toolPreviewRetryToken = `${composioConfigured ? 'configured' : 'unconfigured'}:${String(catalogRefreshKey)}`;
 
   const reloadConnectorStatuses = useCallback(async () => {
     const statuses = await fetchConnectorStatuses();
@@ -699,6 +701,7 @@ export function ConnectorsBrowser({
   );
 
   async function hydrateToolPreview(connectorId: string, cursor?: string) {
+    if (!composioConfigured) return;
     if (toolPreviewLoadingIds[connectorId]) return;
     setToolPreviewLoadingIds((curr) => ({ ...curr, [connectorId]: true }));
     try {
@@ -711,8 +714,18 @@ export function ConnectorsBrowser({
         setConnectors((curr) => curr.map((connector) => (
           connector.id === next.id ? mergeConnectorToolPreview(connector, next, cursor !== undefined) : connector
         )));
+        setToolPreviewFetchedIds((curr) => ({ ...curr, [connectorId]: true }));
+        setToolPreviewFailedIds((curr) => {
+          if (curr[connectorId] === undefined) return curr;
+          const nextFailed = { ...curr };
+          delete nextFailed[connectorId];
+          return nextFailed;
+        });
+      } else {
+        setToolPreviewFailedIds((curr) => ({ ...curr, [connectorId]: toolPreviewRetryToken }));
       }
-      setToolPreviewAttemptedIds((curr) => ({ ...curr, [connectorId]: true }));
+    } catch {
+      setToolPreviewFailedIds((curr) => ({ ...curr, [connectorId]: toolPreviewRetryToken }));
     } finally {
       setToolPreviewLoadingIds((curr) => ({ ...curr, [connectorId]: false }));
     }
@@ -720,11 +733,23 @@ export function ConnectorsBrowser({
 
   useEffect(() => {
     if (!detailConnector) return;
+    if (!composioConfigured) return;
     if (hasLoadedAllAdvertisedConnectorTools(detailConnector)) return;
-    if (toolPreviewAttemptedIds[detailConnector.id]) return;
+    if (toolPreviewFetchedIds[detailConnector.id]) return;
+    if (toolPreviewFailedIds[detailConnector.id] === toolPreviewRetryToken) return;
     if (toolPreviewLoadingIds[detailConnector.id]) return;
     void hydrateToolPreview(detailConnector.id);
-  }, [detailConnector, toolPreviewAttemptedIds, toolPreviewLoadingIds]);
+  }, [composioConfigured, detailConnector, toolPreviewFailedIds, toolPreviewFetchedIds, toolPreviewLoadingIds, toolPreviewRetryToken]);
+
+  function openConnectorDetails(connectorId: string) {
+    setToolPreviewFailedIds((curr) => {
+      if (curr[connectorId] === undefined) return curr;
+      const next = { ...curr };
+      delete next[connectorId];
+      return next;
+    });
+    setDetailConnectorId(connectorId);
+  }
 
   async function cancelConnectorAuthorization(connectorId: string) {
     const connector = await cancelConnectorAuthorizationRequest(connectorId);
@@ -853,7 +878,7 @@ export function ConnectorsBrowser({
                   onConnect={(connectorId) => runConnectorAction(connectorId, 'connect')}
                   onDisconnect={(connectorId) => runConnectorAction(connectorId, 'disconnect')}
                   onCancelAuthorization={cancelConnectorAuthorization}
-                  onOpenDetails={(connectorId) => setDetailConnectorId(connectorId)}
+                  onOpenDetails={openConnectorDetails}
                 />
               ))}
             </div>
@@ -889,7 +914,7 @@ export function ConnectorsBrowser({
           toolsLoading={toolsLoading}
           toolsPreviewLoading={Boolean(toolPreviewLoadingIds[detailConnector.id])}
           toolsLoaded={
-            Boolean(toolPreviewAttemptedIds[detailConnector.id])
+            Boolean(toolPreviewFetchedIds[detailConnector.id])
             || hasLoadedAllAdvertisedConnectorTools(detailConnector)
           }
           logoTheme={logoTheme}
