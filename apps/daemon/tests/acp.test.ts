@@ -56,7 +56,7 @@ test('attachAcpSession exposes abort and sends session cancel after session crea
   child.stdin.on('data', (chunk) => writes.push(String(chunk)));
 
   const session = attachAcpSession({
-    child,
+    child: child as never,
     prompt: 'hello',
     cwd: '/tmp/od-project',
     model: null,
