@@ -11,6 +11,7 @@ import type { ConnectorConnectResponse, ConnectorDetail, ConnectorStatusResponse
 import { useT } from '../i18n';
 import type { Dict } from '../i18n/types';
 import {
+  cancelConnectorAuthorization as cancelConnectorAuthorizationRequest,
   connectConnector,
   disconnectConnector,
   fetchConnectorDetail,
@@ -725,7 +726,9 @@ export function ConnectorsBrowser({
     void hydrateToolPreview(detailConnector.id);
   }, [detailConnector, toolPreviewAttemptedIds, toolPreviewLoadingIds]);
 
-  function cancelConnectorAuthorization(connectorId: string) {
+  async function cancelConnectorAuthorization(connectorId: string) {
+    const connector = await cancelConnectorAuthorizationRequest(connectorId);
+    if (connector) updateConnector(connector);
     setConnectorAuthorizationPending((curr) => clearConnectorAuthorizationPending(curr, connectorId));
   }
 

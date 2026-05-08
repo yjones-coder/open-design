@@ -6,6 +6,8 @@ import type { ConnectorDetail } from '@open-design/contracts';
 
 import { ConnectorsBrowser } from '../../src/components/ConnectorsBrowser';
 import {
+  cancelConnectorAuthorization,
+  connectConnector,
   fetchConnectorDetail,
   fetchConnectorDiscovery,
   fetchConnectors,
@@ -13,6 +15,7 @@ import {
 } from '../../src/providers/registry';
 
 vi.mock('../../src/providers/registry', () => ({
+  cancelConnectorAuthorization: vi.fn(),
   connectConnector: vi.fn(),
   disconnectConnector: vi.fn(),
   fetchConnectorDetail: vi.fn(),
@@ -51,11 +54,16 @@ function deferred<T>() {
 describe('ConnectorsBrowser', () => {
   afterEach(() => {
     cleanup();
+    vi.mocked(cancelConnectorAuthorization).mockReset();
+    vi.mocked(connectConnector).mockReset();
     vi.mocked(fetchConnectors).mockReset();
     vi.mocked(fetchConnectorDetail).mockReset();
     vi.mocked(fetchConnectorDiscovery).mockReset();
     vi.mocked(fetchConnectorStatuses).mockReset();
+    vi.mocked(cancelConnectorAuthorization).mockResolvedValue(null);
+    vi.mocked(connectConnector).mockResolvedValue({ connector: null });
     vi.mocked(fetchConnectorDetail).mockResolvedValue(null);
+    window.sessionStorage.clear();
   });
 
   it('masks the grid immediately when the Composio key is cleared locally', async () => {
@@ -182,5 +190,36 @@ describe('ConnectorsBrowser', () => {
     });
     await screen.findByText('update page');
     expect(screen.getByRole('button', { name: 'Load more tools' })).toBeTruthy();
+  });
+
+  it('cancels pending authorization through the daemon before clearing the local state', async () => {
+    const availableConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      status: 'available',
+      auth: { provider: 'composio', configured: true },
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([availableConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([availableConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(connectConnector).mockResolvedValue({
+      connector: availableConnector,
+      auth: {
+        kind: 'redirect_required',
+        redirectUrl: 'https://example.com/oauth',
+        expiresAt: '2026-05-08T10:00:00.000Z',
+      },
+    });
+    vi.mocked(cancelConnectorAuthorization).mockResolvedValue(availableConnector);
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('GitHub');
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await screen.findByRole('button', { name: 'Cancel' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(cancelConnectorAuthorization).toHaveBeenCalledWith('github'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy());
   });
 });

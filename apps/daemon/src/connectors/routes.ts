@@ -637,6 +637,16 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
     }
   });
 
+  app.post('/api/connectors/:connectorId/authorization/cancel', requireLocalDaemonRequest, async (req: Request, res: Response) => {
+    try {
+      const connectorId = req.params.connectorId;
+      if (!connectorId) return options.sendApiError(res, 400, 'CONNECTOR_NOT_FOUND', 'connectorId is required');
+      res.json({ connector: await service.cancelPendingAuthorization(connectorId) });
+    } catch (err) {
+      sendConnectorRouteError(res, err, options.sendApiError);
+    }
+  });
+
   app.delete('/api/connectors/:connectorId/connection', requireLocalDaemonRequest, async (req: Request, res: Response) => {
     try {
       const connectorId = req.params.connectorId;

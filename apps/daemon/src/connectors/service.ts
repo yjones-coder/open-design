@@ -687,6 +687,17 @@ export class ConnectorService {
     return this.toDetail(definition);
   }
 
+  async cancelPendingAuthorization(connectorId: string): Promise<ConnectorDetail> {
+    const definition = this.getFastDefinition(connectorId) ?? await this.getDefinition(connectorId);
+    if (!definition) {
+      throw new ConnectorServiceError('CONNECTOR_NOT_FOUND', 'connector not found', 404);
+    }
+    if (definition.authentication === 'composio') {
+      composioConnectorProvider.cancelPendingConnections(connectorId);
+    }
+    return this.toDetail(definition);
+  }
+
   async completeComposioConnection(input: { connectorId: string; state: string; providerConnectionId?: string; status?: string; signal?: AbortSignal }): Promise<ConnectorDetail> {
     const definition = await this.getDefinition(input.connectorId, input.signal);
     if (!definition) {

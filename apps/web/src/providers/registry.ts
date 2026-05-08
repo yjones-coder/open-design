@@ -514,6 +514,19 @@ export async function disconnectConnector(connectorId: string): Promise<Connecto
   }
 }
 
+export async function cancelConnectorAuthorization(connectorId: string): Promise<ConnectorDetail | null> {
+  try {
+    const resp = await fetch(`/api/connectors/${encodeURIComponent(connectorId)}/authorization/cancel`, {
+      method: 'POST',
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as ConnectorDetailResponse;
+    return json.connector ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function isAppVersionInfo(value: unknown): value is AppVersionInfo {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<AppVersionInfo>;

@@ -742,6 +742,47 @@ describe('connector routes', () => {
     expect(duplicateHtml).toContain('GitHub connected');
   });
 
+  it('cancels pending Composio OAuth state before a stale callback can connect', async () => {
+    await new Promise((resolve, reject) => {
+      if (!server) return resolve(undefined);
+      server.close((error) => (error ? reject(error) : resolve(undefined)));
+    });
+    mockComposioFetch({
+      linkResponse: {
+        connected_account_id: 'ca_github',
+        status: 'INITIATED',
+        redirect_url: 'https://example.com/oauth',
+      },
+    });
+    const started = await startServer({ port: 0, returnServer: true });
+    server = started.server;
+    baseUrl = started.url;
+    await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'cmp_test' }),
+    });
+
+    const connect = await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
+    expect(connect.status).toBe(200);
+    expect(connect.body.auth).toMatchObject({ kind: 'redirect_required' });
+    const callbackUrl = new URL(lastComposioLinkRequest.callback_url);
+
+    const cancel = await jsonFetch(`${baseUrl}/api/connectors/github/authorization/cancel`, { method: 'POST' });
+    expect(cancel.status).toBe(200);
+    expect(cancel.body.connector).toMatchObject({ id: 'github', status: 'available' });
+
+    const staleCallback = await fetch(
+      `${baseUrl}/api/connectors/oauth/callback/github?state=${encodeURIComponent(callbackUrl.searchParams.get('state'))}&status=success&connected_account_id=ca_github`,
+    );
+    const stalePayload = await staleCallback.json();
+
+    expect(staleCallback.status).toBe(400);
+    expect(stalePayload.error.message).toBe('Composio OAuth state is missing or expired');
+    const statuses = await jsonFetch(`${baseUrl}/api/connectors/status`);
+    expect(statuses.body.statuses.github?.status).not.toBe('connected');
+  });
+
   it('accepts bracketed IPv6 loopback host headers for connector callback URLs', async () => {
     const url = new URL(baseUrl);
 

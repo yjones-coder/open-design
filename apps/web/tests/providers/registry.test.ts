@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  cancelConnectorAuthorization,
   CLOUDFLARE_PAGES_PROVIDER_ID,
   connectConnector,
   DEFAULT_DEPLOY_PROVIDER_ID,
@@ -348,6 +349,30 @@ describe('connectConnector', () => {
     });
     expect(open).not.toHaveBeenCalled();
     expect(openExternal).toHaveBeenCalledWith('https://example.com/oauth');
+  });
+});
+
+describe('cancelConnectorAuthorization', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('invalidates pending connector authorization on the daemon', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      connector: { id: 'github', name: 'GitHub', status: 'available', tools: [] },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(cancelConnectorAuthorization('github')).resolves.toEqual({
+      id: 'github',
+      name: 'GitHub',
+      status: 'available',
+      tools: [],
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/connectors/github/authorization/cancel', {
+      method: 'POST',
+    });
   });
 });
 

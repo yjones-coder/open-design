@@ -728,6 +728,17 @@ export class ComposioConnectorProvider {
     }
   }
 
+  cancelPendingConnections(connectorId: string): number {
+    this.pruneExpiredPendingConnections();
+    let cancelled = 0;
+    for (const [state, pending] of this.pendingConnections.entries()) {
+      if (pending.connectorId !== connectorId) continue;
+      this.pendingConnections.delete(state);
+      cancelled += 1;
+    }
+    return cancelled;
+  }
+
   getAuthConfigMetrics(): ComposioAuthConfigMetricsSnapshot {
     return summarizeAuthConfigMetricEvents(this.authConfigMetricEvents);
   }
