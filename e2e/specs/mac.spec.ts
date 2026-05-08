@@ -127,8 +127,7 @@ macDescribe('packaged mac runtime smoke', () => {
       expect(start.source).toBe('installed');
       expect(start.appPath).toBe(install.installedAppPath);
       expectPathInside(start.logPath, join(runtimeNamespaceRoot, 'logs', 'desktop'));
-      expect(start.status).not.toBeNull();
-      expect(start.status?.state).toBe('running');
+      expect(start.pid).toBeGreaterThan(0);
 
       const inspect = await waitForHealthyDesktop();
       expect(inspect.status?.state).toBe('running');
