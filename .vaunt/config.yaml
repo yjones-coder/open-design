@@ -20,6 +20,13 @@ version: 0.0.1
 # Point actions — translate every Open Design contribution event into
 # the point value defined in scoring.ts. Vaunt then aggregates these via
 # sum() to drive tier achievements.
+#
+# Actor/action pairings follow Vaunt's documented matrix
+# (https://docs.vaunt.dev/organizations/achievements/index.html#actor):
+#   - author:      pull_request, review, commit, issue, discussion, star
+#   - reviewers:   pull_request only
+#   - resolved_by: issue
+#   - assignees:   pull_request, issue
 # ───────────────────────────────────────────────────────────────────────
 actions:
   # First merged PR — base 12 + first-time bonus 18 = 30 (lands the user
@@ -46,13 +53,15 @@ actions:
             value: 12
 
   # PR review (collapsed: spec separates "substantial" 4pt vs "approved" 2pt
-  # but Vaunt's review action has no substance signal — using midpoint 3)
+  # but Vaunt's review action has no substance signal — using midpoint 3).
+  # NOTE: actor MUST be `author` for action `review`; `reviewers` is only
+  # valid with action `pull_request` per Vaunt docs.
   - action:
       type: point
       name: pr_review
       triggers:
         - trigger:
-            actor: reviewers
+            actor: author
             action: review
             value: 3
 
@@ -66,17 +75,6 @@ actions:
             actor: author
             action: issue
             value: 5
-
-  # Issue resolved by user (gives credit when somebody closes/answers an issue)
-  - action:
-      type: point
-      name: issue_resolved
-      triggers:
-        - trigger:
-            actor: resolved_by
-            action: issue
-            condition: closed = true
-            value: 6
 
   # Helpful comment on issue
   - action:
@@ -114,6 +112,13 @@ actions:
 
   # Note: scoring.ts also has pr_reverted_penalty: -10 — deferred to v1.5;
   # requires us to define a "reverted" PR label convention first.
+
+  # Note: scoring.ts has discussion_answered_accepted: 6 — Vaunt's discussion
+  # action exposes only the `closed` field, not an "answer accepted" signal,
+  # so we cannot precisely model this rule. The rule is also moot today
+  # because the repo has Discussions disabled. When Discussions are turned on
+  # AND Vaunt exposes an answered field, add it here. Until then, this 6-pt
+  # rule lives only in src/scoring.ts and is awarded by our own bot.
 
   # Note: scoring.ts has star_given: 0 — Vaunt's star action would award the
   # achievement on first star but contribute 0 points, which matches the spec
@@ -158,8 +163,9 @@ achievements:
             actor: author
             action: pull_request_comment
             condition: count() >= 1
+        # Reviewing a PR also counts; actor must be `author` for action `review`.
         - trigger:
-            actor: reviewers
+            actor: author
             action: review
             condition: count() >= 1
 
@@ -171,7 +177,7 @@ achievements:
         - trigger:
             actor: author
             action: point
-            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_resolved, issue_comment, pr_comment, discussion_started) >= 30
+            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_comment, pr_comment, discussion_started) >= 30
 
   - achievement:
       name: Node
@@ -181,7 +187,7 @@ achievements:
         - trigger:
             actor: author
             action: point
-            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_resolved, issue_comment, pr_comment, discussion_started) >= 150
+            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_comment, pr_comment, discussion_started) >= 150
 
   - achievement:
       name: Beacon
@@ -191,7 +197,7 @@ achievements:
         - trigger:
             actor: author
             action: point
-            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_resolved, issue_comment, pr_comment, discussion_started) >= 700
+            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_comment, pr_comment, discussion_started) >= 700
 
   - achievement:
       name: Nova
@@ -201,4 +207,4 @@ achievements:
         - trigger:
             actor: author
             action: point
-            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_resolved, issue_comment, pr_comment, discussion_started) >= 2500
+            condition: sum(pr_first_merge, pr_subsequent_merge, pr_review, issue_opened, issue_comment, pr_comment, discussion_started) >= 2500
