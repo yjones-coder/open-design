@@ -4,10 +4,6 @@ import { dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  MAC_FRAMEWORK_TOP_LEVEL_SIGN_IGNORE,
-  resolveElectronFrameworkVersionSignTargets,
-} from "../src/mac/builder.js";
 import type { ToolPackConfig } from "../src/config.js";
 import { resolveSeededAppConfigPaths, seedPackagedAppConfig, writeLaunchPackagedConfig } from "../src/mac/index.js";
 
@@ -174,65 +170,6 @@ describe("writeLaunchPackagedConfig", () => {
       });
       expect(embeddedConfig).not.toHaveProperty("namespaceBaseRoot");
       expect(embeddedConfig.namespace).toBe("packaged-default");
-    } finally {
-      await rm(root, { force: true, recursive: true });
-    }
-  });
-});
-
-describe("MAC_FRAMEWORK_TOP_LEVEL_SIGN_IGNORE", () => {
-  const isIgnored = (filePath: string): boolean => (
-    MAC_FRAMEWORK_TOP_LEVEL_SIGN_IGNORE.some((pattern) => new RegExp(pattern).test(filePath))
-  );
-
-  it("skips framework top-level and binary symlink paths", () => {
-    expect(
-      isIgnored("/tmp/Open Design.app/Contents/Frameworks/Electron Framework.framework"),
-    ).toBe(true);
-    expect(
-      isIgnored("/tmp/Open Design.app/Contents/Frameworks/Electron Framework.framework/Electron Framework"),
-    ).toBe(true);
-    expect(
-      isIgnored(
-        "/tmp/Open Design.app/Contents/Frameworks/Electron Framework.framework/Versions/Current/Electron Framework",
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps the concrete framework version and bundle paths signable", () => {
-    expect(
-      isIgnored(
-        "/tmp/Open Design.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
-      ),
-    ).toBe(false);
-    expect(
-      isIgnored("/tmp/Open Design.app/Contents/Frameworks/Electron Framework.framework/Versions/A"),
-    ).toBe(false);
-  });
-});
-
-describe("resolveElectronFrameworkVersionSignTargets", () => {
-  it("returns concrete framework version directories", async () => {
-    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
-    try {
-      const frameworksRoot = join(root, "Electron.app", "Contents", "Frameworks");
-      await mkdir(join(frameworksRoot, "Electron Framework.framework", "Versions", "A"), { recursive: true });
-      await mkdir(join(frameworksRoot, "Mantle.framework", "Versions", "A"), { recursive: true });
-      await mkdir(join(frameworksRoot, "Ignored.bundle", "Versions", "A"), { recursive: true });
-
-      await expect(resolveElectronFrameworkVersionSignTargets(root)).resolves.toEqual([
-        "Contents/Frameworks/Electron Framework.framework/Versions/A",
-        "Contents/Frameworks/Mantle.framework/Versions/A",
-      ]);
-    } finally {
-      await rm(root, { force: true, recursive: true });
-    }
-  });
-
-  it("returns no targets when the Electron frameworks directory is absent", async () => {
-    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
-    try {
-      await expect(resolveElectronFrameworkVersionSignTargets(root)).resolves.toEqual([]);
     } finally {
       await rm(root, { force: true, recursive: true });
     }
