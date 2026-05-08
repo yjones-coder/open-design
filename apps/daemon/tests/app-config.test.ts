@@ -14,7 +14,7 @@ import {
 } from 'vitest';
 
 import { readAppConfig, writeAppConfig } from '../src/app-config.js';
-import { isLocalSameOrigin } from '../src/server.js';
+import { isLocalSameOrigin } from '../src/origin-validation.js';
 
 describe('app-config', () => {
   let dataDir: string;
@@ -175,6 +175,81 @@ describe('app-config', () => {
       const cfg = await readAppConfig(dataDir);
       expect(cfg.onboardingCompleted).toBe(true);
       expect(cfg.agentModels).toBeUndefined();
+    });
+
+    it('persists supported per-agent CLI env keys and drops everything else', async () => {
+      await writeAppConfig(dataDir, {
+        agentCliEnv: {
+          claude: {
+            CLAUDE_CONFIG_DIR: '  ~/.claude-2  ',
+            ANTHROPIC_API_KEY: 'sk-should-not-persist',
+          },
+          codex: {
+            CODEX_HOME: '~/.codex-alt',
+            CODEX_BIN: '~/bin/codex-next',
+            OPENAI_API_KEY: 'sk-should-not-persist',
+          },
+          gemini: {
+            GEMINI_API_KEY: 'should-not-persist',
+          },
+          __proto__: {
+            CLAUDE_CONFIG_DIR: 'bad',
+          },
+        },
+      });
+
+      const cfg = await readAppConfig(dataDir);
+
+      expect(cfg.agentCliEnv).toEqual({
+        claude: { CLAUDE_CONFIG_DIR: '~/.claude-2' },
+        codex: { CODEX_HOME: '~/.codex-alt', CODEX_BIN: '~/bin/codex-next' },
+      });
+    });
+
+    it('drops agentCliEnv entries that collide with Object.prototype keys', async () => {
+      await writeAppConfig(dataDir, {
+        agentCliEnv: {
+          toString: {
+            CODEX_HOME: '~/.codex-prototype',
+          },
+          hasOwnProperty: {
+            CLAUDE_CONFIG_DIR: '~/.claude-prototype',
+          },
+          claude: {
+            CLAUDE_CONFIG_DIR: '~/.claude-2',
+          },
+        },
+      });
+
+      const cfg = await readAppConfig(dataDir);
+
+      expect(cfg.agentCliEnv).toEqual({
+        claude: { CLAUDE_CONFIG_DIR: '~/.claude-2' },
+      });
+    });
+
+    it('clears agentCliEnv when null or an empty object is sent', async () => {
+      await writeAppConfig(dataDir, {
+        agentCliEnv: {
+          claude: { CLAUDE_CONFIG_DIR: '~/.claude-2' },
+        },
+        onboardingCompleted: true,
+      });
+      expect((await readAppConfig(dataDir)).agentCliEnv).toBeDefined();
+
+      await writeAppConfig(dataDir, { agentCliEnv: null });
+      let cfg = await readAppConfig(dataDir);
+      expect(cfg.agentCliEnv).toBeUndefined();
+      expect(cfg.onboardingCompleted).toBe(true);
+
+      await writeAppConfig(dataDir, {
+        agentCliEnv: {
+          codex: { CODEX_HOME: '~/.codex-alt' },
+        },
+      });
+      await writeAppConfig(dataDir, { agentCliEnv: {} });
+      cfg = await readAppConfig(dataDir);
+      expect(cfg.agentCliEnv).toBeUndefined();
     });
 
     it('handles corrupted existing file gracefully on write', async () => {
@@ -343,6 +418,18 @@ describe('app-config origin guard', () => {
       headers: { Host: 'evil.com:9999' },
     });
     expect(res.status).toBe(403);
+  });
+
+  it('rejects no-Origin requests that only match configured deployment hosts', async () => {
+    process.env.OD_ALLOWED_ORIGINS = 'https://od.example.com';
+    try {
+      const res = await httpRequest(`${baseUrl}/api/app-config`, {
+        headers: { Host: 'od.example.com' },
+      });
+      expect(res.status).toBe(403);
+    } finally {
+      delete process.env.OD_ALLOWED_ORIGINS;
+    }
   });
 
   it('still rejects non-loopback Origin', async () => {

@@ -1,12 +1,18 @@
 import type {
   AgentInfo,
+  AgentCliEnvPrefs,
   AgentModelPrefs,
+  AgentTestRequest,
   AppVersionInfo,
   AppVersionResponse,
   AudioKind,
   ChatAttachment,
   ChatCommentAttachment,
   ChatMessage,
+  ConnectionTestKind,
+  ConnectionTestProtocol,
+  ConnectionTestRequest,
+  ConnectionTestResponse,
   Conversation,
   DeployConfigResponse,
   DeployProjectFileResponse,
@@ -22,6 +28,7 @@ import type {
   LiveArtifactSummary,
   MediaAspect,
   ProjectDeploymentsResponse,
+  ProviderTestRequest,
   PersistedAgentEvent,
   Project,
   PreviewCommentMember,
@@ -45,7 +52,13 @@ import type {
   UpdateDeployConfigRequest,
 } from '@open-design/contracts';
 
-export type { PreviewCommentMember, PreviewCommentSelectionKind } from '@open-design/contracts';
+export type {
+  CloudflarePagesDeploySelection,
+  CloudflarePagesDeploymentInfo,
+  CloudflarePagesZonesResponse,
+  PreviewCommentMember,
+  PreviewCommentSelectionKind,
+} from '@open-design/contracts';
 
 export type ExecMode = 'daemon' | 'api';
 export type ApiProtocol = 'anthropic' | 'openai' | 'azure' | 'google';
@@ -126,6 +139,7 @@ export interface LiveArtifactPreviewRequest {
 export interface MediaProviderCredentials {
   apiKey: string;
   baseUrl: string;
+  model?: string;
 }
 
 export interface ApiProtocolConfig {
@@ -141,6 +155,7 @@ export interface ApiProtocolConfig {
 // other one's choice. Missing entries fall back to the agent's first
 // declared model (`'default'` — let the CLI pick).
 export type AgentModelChoice = AgentModelPrefs;
+export type AgentCliEnvConfig = AgentCliEnvPrefs;
 
 export type AppTheme = 'system' | 'light' | 'dark';
 
@@ -248,6 +263,7 @@ export interface AppConfig {
   skillId: string | null;
   designSystemId: string | null;
   theme?: AppTheme;
+  accentColor?: string;
   // True once the user has been through the welcome onboarding modal at
   // least once (saved or skipped). Bootstrap skips the auto-popup when
   // this is set so refreshing the page doesn't re-prompt.
@@ -258,6 +274,8 @@ export interface AppConfig {
   // Pre-existing configs without this field fall through to the agent's
   // declared default.
   agentModels?: Record<string, AgentModelChoice>;
+  // Per-agent non-secret CLI config locations injected into detection and runs.
+  agentCliEnv?: AgentCliEnvConfig;
   // Caps the upstream completion length in API mode. Defaults to 8192 when
   // unset; raise it for providers (e.g. MiMo) that allow longer responses.
   maxTokens?: number;
@@ -338,9 +356,14 @@ export interface PromptTemplateDetail extends PromptTemplateSummary {
 
 export type {
   AgentInfo,
+  AgentTestRequest,
   AppVersionInfo,
   AppVersionResponse,
   AudioKind,
+  ConnectionTestKind,
+  ConnectionTestProtocol,
+  ConnectionTestRequest,
+  ConnectionTestResponse,
   Conversation,
   DeployConfigResponse,
   DeployProjectFileResponse,
@@ -366,6 +389,7 @@ export type {
   ProjectKind,
   ProjectMetadata,
   ProjectTemplate,
+  ProviderTestRequest,
   CodexPetSummary,
   CodexPetsResponse,
   SyncCommunityPetsRequest,
