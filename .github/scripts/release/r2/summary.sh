@@ -9,6 +9,8 @@ for name in BASE_VERSION ENABLE_LINUX ENABLE_MAC ENABLE_WIN GITHUB_STEP_SUMMARY 
 done
 
 node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+import { readFileSync } from "node:fs";
+
 const env = process.env;
 const enabled = (name) => env[name] === "true";
 const macArtifactMode = env.MAC_ARTIFACT_MODE ?? "dmg-and-zip";
@@ -16,12 +18,18 @@ const optional = (name) => {
   const value = env[name];
   return value == null || value.length === 0 ? null : value;
 };
+const joinUrl = (base, path) => {
+  if (base == null) {
+    return null;
+  }
+  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+};
 
 const reportUrl = optional("R2_REPORT_URL");
 const platformReport = (platform) => reportUrl == null ? null : {
-  manifest: `${reportUrl}${platform}/manifest.json`,
-  screenshot: `${reportUrl}${platform}/screenshots/open-design-${platform}-smoke.png`,
-  vitestLog: `${reportUrl}${platform}/vitest.log`,
+  manifest: joinUrl(reportUrl, `${platform}/manifest.json`),
+  screenshot: joinUrl(reportUrl, `${platform}/screenshots/open-design-${platform}-smoke.png`),
+  vitestLog: joinUrl(reportUrl, `${platform}/vitest.log`),
 };
 
 const platforms = {
@@ -65,38 +73,128 @@ if (platforms.linux.enabled) {
 
 const githubReleaseEnabled = env.GITHUB_RELEASE_ENABLED === "true";
 const versionTag = optional("VERSION_TAG");
-const summary = {
-  schemaVersion: 1,
-  channel: env.RELEASE_CHANNEL,
-  version: env.RELEASE_VERSION,
-  baseVersion: env.BASE_VERSION,
-  stateSource: env.STATE_SOURCE,
-  r2: {
-    versionPrefix: optional("R2_VERSION_PREFIX"),
-    metadataUrl: optional("R2_METADATA_URL"),
-    versionMetadataUrl: optional("R2_VERSION_METADATA_URL"),
-    reportUrl,
-  },
-  platforms,
-  github: {
-    release: {
-      enabled: githubReleaseEnabled,
-      tag: githubReleaseEnabled ? versionTag : null,
-    },
-    tag: {
-      enabled: githubReleaseEnabled,
-      name: githubReleaseEnabled ? versionTag : null,
-    },
-  },
+const titleCase = (value) => `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+const md = (value) => String(value).replaceAll("|", "\\|").replaceAll("\n", " ");
+const code = (value) => value == null || value === "" ? "-" : `\`${md(value)}\``;
+const link = (label, url) => url == null || url === "" ? "-" : `[${md(label)}](${url})`;
+const linkList = (items) => {
+  const links = items
+    .filter((item) => item.url != null && item.url !== "")
+    .map((item) => link(item.label, item.url));
+
+  return links.length === 0 ? "-" : links.join("<br>");
+};
+const boolLabel = (value) => value ? "Yes" : "No";
+const platformStatus = (platform, label) => {
+  if (!platform.enabled) {
+    return "Skipped";
+  }
+  return platform.signed ? `${label} signed` : label;
 };
 
+const overviewRows = [
+  ["Channel", code(env.RELEASE_CHANNEL)],
+  ["Version", code(env.RELEASE_VERSION)],
+  ["Base version", code(env.BASE_VERSION)],
+  ["State source", code(env.STATE_SOURCE)],
+  ["Mac signed", boolLabel(env.RELEASE_SIGNED === "true")],
+  ["Linux enabled", boolLabel(platforms.linux.enabled)],
+];
 if (env.RELEASE_CHANNEL === "nightly") {
-  summary.nightlyNumber = Number(env.NIGHTLY_NUMBER);
+  overviewRows.push(["Nightly number", code(env.NIGHTLY_NUMBER)]);
 }
 
-console.log(`## ${env.RELEASE_CHANNEL} release`);
-console.log("");
-console.log("```json");
-console.log(JSON.stringify(summary, null, 2));
-console.log("```");
+const overviewTable = [
+  "| Field | Value |",
+  "| --- | --- |",
+  ...overviewRows.map(([field, value]) => `| ${md(field)} | ${value} |`),
+].join("\n");
+
+const releaseLinks = [
+  ["Latest metadata", optional("R2_METADATA_URL")],
+  ["Version metadata", optional("R2_VERSION_METADATA_URL")],
+  ["Report root", reportUrl],
+]
+  .filter(([, url]) => url != null)
+  .map(([label, url]) => `- ${link(label, url)}`);
+
+const platformRows = [
+  [
+    "macOS arm64",
+    platformStatus(platforms.mac, "Published"),
+    linkList([
+      { label: "DMG", url: platforms.mac.artifacts?.dmg },
+      { label: "ZIP", url: platforms.mac.artifacts?.zip },
+    ]),
+    link("latest-mac.yml", platforms.mac.feed),
+  ],
+  [
+    "Windows x64",
+    platformStatus(platforms.win, "Published"),
+    linkList([{ label: "Installer", url: platforms.win.artifacts?.installer }]),
+    link("latest.yml", platforms.win.feed),
+  ],
+  [
+    "Linux x64",
+    platformStatus(platforms.linux, "Published"),
+    linkList([{ label: "AppImage", url: platforms.linux.artifacts?.appImage }]),
+    "-",
+  ],
+];
+
+const platformTable = [
+  "| Platform | Status | Assets | Feed |",
+  "| --- | --- | --- | --- |",
+  ...platformRows.map((row) => `| ${row.map(md).join(" | ")} |`),
+].join("\n");
+
+const reportRows = [
+  [
+    "macOS arm64",
+    platforms.mac.enabled ? "Published" : "Skipped",
+    linkList([
+      { label: "manifest", url: platforms.mac.e2e?.manifest },
+      { label: "screenshot", url: platforms.mac.e2e?.screenshot },
+      { label: "vitest.log", url: platforms.mac.e2e?.vitestLog },
+    ]),
+  ],
+  [
+    "Windows x64",
+    platforms.win.enabled ? "Published" : "Skipped",
+    linkList([
+      { label: "manifest", url: platforms.win.e2e?.manifest },
+      { label: "screenshot", url: platforms.win.e2e?.screenshot },
+      { label: "vitest.log", url: platforms.win.e2e?.vitestLog },
+    ]),
+  ],
+  ["Linux x64", platforms.linux.enabled ? "Not collected" : "Skipped", "-"],
+];
+
+const reportTable = [
+  "| Platform | Status | Links |",
+  "| --- | --- | --- |",
+  ...reportRows.map((row) => `| ${row.map(md).join(" | ")} |`),
+].join("\n");
+
+const repository = optional("GITHUB_REPOSITORY");
+const githubReleaseSection = githubReleaseEnabled && versionTag != null
+  ? [
+      "### GitHub release",
+      "",
+      `- Tag: ${code(versionTag)}`,
+      repository == null ? null : `- Release: ${link(versionTag, `https://github.com/${repository}/releases/tag/${versionTag}`)}`,
+    ].filter((line) => line != null).join("\n")
+  : "";
+
+const templatePath = optional("SUMMARY_TEMPLATE_PATH") ?? ".github/scripts/release/r2/summary.md";
+const template = readFileSync(templatePath, "utf8");
+const output = template
+  .replaceAll("{{TITLE}}", `${titleCase(env.RELEASE_CHANNEL)} release ${env.RELEASE_VERSION}`)
+  .replaceAll("{{OVERVIEW_TABLE}}", overviewTable)
+  .replaceAll("{{RELEASE_LINKS}}", releaseLinks.length === 0 ? "- None" : releaseLinks.join("\n"))
+  .replaceAll("{{PLATFORM_TABLE}}", platformTable)
+  .replaceAll("{{REPORT_TABLE}}", reportTable)
+  .replaceAll("{{GITHUB_RELEASE_SECTION}}", githubReleaseSection);
+
+console.log(output.trimEnd());
 NODE

@@ -13,6 +13,7 @@ on:
         default: stable
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -582,3 +583,7 @@ jobs:
           R2_WIN_FEED_URL: ${{ steps.r2.outputs.win_feed_url }}
           R2_WIN_INSTALLER_URL: ${{ steps.r2.outputs.win_installer_url }}
         run: bash .github/scripts/release/r2/summary.sh
+
+      - name: Cleanup workflow artifacts
+        if: ${{ success() }}
+        run: bash .github/scripts/release/github/cleanup-artifacts.sh

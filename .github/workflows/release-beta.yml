@@ -20,6 +20,7 @@ on:
         default: false
 
 permissions:
+  actions: write
   contents: read
 
 concurrency:
@@ -505,6 +506,7 @@ jobs:
       }}
     runs-on: ubuntu-latest
     env:
+      GH_TOKEN: ${{ github.token }}
       AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_RELEASES_AK }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_RELEASES_SK }}
       AWS_DEFAULT_REGION: auto
@@ -602,3 +604,7 @@ jobs:
           R2_WIN_FEED_URL: ${{ steps.r2.outputs.win_feed_url }}
           R2_WIN_INSTALLER_URL: ${{ steps.r2.outputs.win_installer_url }}
         run: bash .github/scripts/release/r2/summary.sh
+
+      - name: Cleanup workflow artifacts
+        if: ${{ success() }}
+        run: bash .github/scripts/release/github/cleanup-artifacts.sh
