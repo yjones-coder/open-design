@@ -24,7 +24,7 @@ interface AcpSessionOptions {
   mcpServers?: AcpMcpServerInput[];
 }
 
-interface ModelOption {
+export interface ModelOption {
   id: string;
   label: string;
 }

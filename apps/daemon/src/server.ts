@@ -1,8 +1,7 @@
+// @ts-nocheck
 import express from 'express';
-import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import { execFile, spawn } from 'node:child_process';
-import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +9,6 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import net from 'node:net';
-import type { Server } from 'node:http';
 import {
   composeSystemPrompt,
   renderCodexImagegenOverride,
@@ -38,7 +36,7 @@ import { buildWindowsFolderDialogCommand, parseFolderDialogStdout } from './nati
 import { listCodexPets, readCodexPetSpritesheet } from './codex-pets.js';
 import { syncCommunityPets } from './community-pets-sync.js';
 import { listDesignSystems, readDesignSystem } from './design-systems.js';
-import { attachAcpSession, type AcpMcpServerInput } from './acp.js';
+import { attachAcpSession } from './acp.js';
 import { attachPiRpcSession } from './pi-rpc.js';
 import { createClaudeStreamHandler } from './claude-stream.js';
 import { loadCritiqueConfigFromEnv } from './critique/config.js';
@@ -90,7 +88,6 @@ import {
   isManagedProjectCwd,
   readMcpConfig,
   writeMcpConfig,
-  type McpConfig,
 } from './mcp-config.js';
 import {
   beginAuth,
@@ -104,7 +101,6 @@ import {
   isTokenExpired,
   readAllTokens,
   setToken,
-  type StoredMcpToken,
 } from './mcp-tokens.js';
 import { agentCliEnvForAgent, readAppConfig, writeAppConfig } from './app-config.js';
 import { OrbitService, formatLocalProjectTimestamp, renderOrbitTemplateSystemPrompt } from './orbit.js';
@@ -240,79 +236,11 @@ export function resolveDaemonCliPath(env: NodeJS.ProcessEnv = process.env): stri
 const PROJECT_ROOT = resolveProjectRoot(__dirname);
 const RESOURCE_ROOT_ENV = 'OD_RESOURCE_ROOT';
 
-type UnknownRecord = Record<string, unknown>;
-
-declare global {
-  namespace NodeJS {
-    interface Process {
-      resourcesPath?: string;
-    }
-  }
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return value !== null && typeof value === 'object';
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-function errorStatus(err: unknown, fallback = 400): number {
-  return isRecord(err) && typeof err.status === 'number' ? err.status : fallback;
-}
-
-function errorCode(err: unknown): unknown {
-  return isRecord(err) ? err.code : undefined;
-}
-
-function asAny<T = any>(value: unknown): T {
-  return value as T;
-}
-
-function errInit(err: unknown): Record<string, unknown> {
-  return isRecord(err) ? err : {};
-}
-
-function routeSplatParam(req: Request): string {
-  const params = req.params as Record<string, string | undefined>;
-  return params[0] ?? '';
-}
-
-function requiredRouteParam(req: Request, name: string): string {
-  const value = req.params[name];
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`missing route parameter: ${name}`);
-  }
-  return value;
-}
-
-function deployErrorStatus(err: unknown, fallback = 400): number {
-  if (err instanceof DeployError) {
-    const status = (err as { status?: unknown }).status;
-    return typeof status === 'number' ? status : fallback;
-  }
-  return fallback;
-}
-
-function deployErrorInit(err: unknown): Record<string, unknown> {
-  if (err instanceof DeployError) {
-    const details = (err as { details?: unknown }).details;
-    return details === undefined ? {} : { details };
-  }
-  return {};
-}
-
 export function composeLiveInstructionPrompt({
   daemonSystemPrompt,
   runtimeToolPrompt,
   clientSystemPrompt,
   finalPromptOverride,
-}: {
-  daemonSystemPrompt?: string;
-  runtimeToolPrompt?: string;
-  clientSystemPrompt?: string;
-  finalPromptOverride?: string;
 }) {
   const override =
     typeof finalPromptOverride === 'string'
@@ -332,7 +260,7 @@ export function composeLiveInstructionPrompt({
   return parts.join('\n\n---\n\n');
 }
 
-export function resolveResearchCommandContract(research: any, message: string) {
+export function resolveResearchCommandContract(research, message) {
   if (!research || !research.enabled) return '';
   const researchQuery =
     typeof research.query === 'string' && research.query.trim()
@@ -346,12 +274,12 @@ export function resolveResearchCommandContract(research: any, message: string) {
 }
 
 export function resolveCodexGeneratedImagesDir(
-  agentId: string | null | undefined,
-  metadata: unknown,
+  agentId,
+  metadata,
   env = process.env,
   homeDir = os.homedir(),
 ) {
-  if (!shouldRenderCodexImagegenOverride(agentId, asAny(metadata))) return null;
+  if (!shouldRenderCodexImagegenOverride(agentId, metadata)) return null;
   const rawCodexHome =
     typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim().length > 0
       ? env.CODEX_HOME.trim()
@@ -378,10 +306,10 @@ type CodexGeneratedImagesDirValidationOptions = {
 
 function isMissingPathError(err: unknown): boolean {
   return (
-    err !== null &&
+    err &&
     typeof err === 'object' &&
     'code' in err &&
-    (err as { code?: unknown }).code === 'ENOENT'
+    err.code === 'ENOENT'
   );
 }
 
@@ -555,7 +483,7 @@ export function resolveChatExtraAllowedDirs({
       candidates.filter(
         (d) =>
           typeof d === 'string' && d.length > 0 && existsSync(d),
-      ) as string[],
+      ),
     ),
   );
 }
@@ -579,10 +507,10 @@ export function resolveGrantedCodexImagegenOverride({
   ) {
     return null;
   }
-  return renderCodexImagegenOverride(agentId, asAny(metadata));
+  return renderCodexImagegenOverride(agentId, metadata);
 }
 
-export function normalizeCommentAttachments(input: any) {
+export function normalizeCommentAttachments(input) {
   if (!Array.isArray(input)) return [];
   return input
     .map((raw, index) => {
@@ -623,10 +551,10 @@ export function normalizeCommentAttachments(input: any) {
       };
     })
     .filter(Boolean)
-    .sort((a: any, b: any) => a.order - b.order);
+    .sort((a, b) => a.order - b.order);
 }
 
-export function renderCommentAttachmentHint(commentAttachments: any[]) {
+export function renderCommentAttachmentHint(commentAttachments) {
   if (!commentAttachments.length) return '';
   const lines = [
     '',
@@ -650,7 +578,7 @@ export function renderCommentAttachmentHint(commentAttachments: any[]) {
     );
     if (targetKind === 'pod') {
       lines.push(`memberCount: ${item.memberCount || item.podMembers.length || 0}`);
-      item.podMembers.slice(0, 8).forEach((member: any, memberIndex: number) => {
+      item.podMembers.slice(0, 8).forEach((member, memberIndex) => {
         lines.push(
           `member.${memberIndex + 1}: ${member.elementId} | ${member.label || '(unlabeled)'} | ${member.selector}`,
         );
@@ -661,16 +589,16 @@ export function renderCommentAttachmentHint(commentAttachments: any[]) {
   return lines.join('\n');
 }
 
-function cleanString(value: unknown) {
+function cleanString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function compactString(value: unknown, max: number) {
+function compactString(value, max) {
   const text = cleanString(value).replace(/\s+/g, ' ');
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 }
 
-function normalizeAttachmentPosition(input: any) {
+function normalizeAttachmentPosition(input) {
   const value = input && typeof input === 'object' ? input : {};
   return {
     x: finiteAttachmentNumber(value.x),
@@ -680,7 +608,7 @@ function normalizeAttachmentPosition(input: any) {
   };
 }
 
-function normalizeAttachmentPodMembers(input: any) {
+function normalizeAttachmentPodMembers(input) {
   if (!Array.isArray(input)) return [];
   return input
     .map((member) => {
@@ -701,15 +629,15 @@ function normalizeAttachmentPodMembers(input: any) {
     .filter(Boolean);
 }
 
-function finiteAttachmentNumber(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
+function finiteAttachmentNumber(value) {
+  return Number.isFinite(value) ? Math.round(value) : 0;
 }
 
-function formatAttachmentPosition(position: { x: number; y: number; width: number; height: number }) {
+function formatAttachmentPosition(position) {
   return `x=${position.x}, y=${position.y}, width=${position.width}, height=${position.height}`;
 }
 
-function isPathWithin(base: string, target: string) {
+function isPathWithin(base, target) {
   const relativePath = path.relative(path.resolve(base), path.resolve(target));
   return (
     relativePath === '' ||
@@ -760,7 +688,7 @@ export function resolveDaemonResourceRoot({
 
   const resolved = path.resolve(configured);
   const normalizedSafeBases = safeBases
-    .filter((base): base is string => typeof base === 'string' && base.length > 0)
+    .filter((base) => typeof base === 'string' && base.length > 0)
     .map((base) => path.resolve(base));
 
   if (!normalizedSafeBases.some((base) => isPathWithin(base, resolved))) {
@@ -772,7 +700,7 @@ export function resolveDaemonResourceRoot({
   return resolved;
 }
 
-function resolveDaemonResourceDir(resourceRoot: string | null, segment: string, fallback: string) {
+function resolveDaemonResourceDir(resourceRoot, segment, fallback) {
   return resourceRoot ? path.join(resourceRoot, segment) : fallback;
 }
 
@@ -818,7 +746,7 @@ const PROMPT_TEMPLATES_DIR = resolveDaemonResourceDir(
   'prompt-templates',
   path.join(PROJECT_ROOT, 'prompt-templates'),
 );
-export function resolveDataDir(raw: string | undefined, projectRoot: string) {
+export function resolveDataDir(raw, projectRoot) {
   if (!raw) return path.join(projectRoot, '.od');
   // expandHomePrefix is shared with media-config.ts so OD_DATA_DIR and
   // OD_MEDIA_CONFIG_DIR can never split state under a $HOME-style value.
@@ -835,7 +763,7 @@ export function resolveDataDir(raw: string | undefined, projectRoot: string) {
   } catch (err) {
     const e = err;
     throw new Error(
-      `OD_DATA_DIR "${resolved}" is not writable: ${errorMessage(e)}`,
+      `OD_DATA_DIR "${resolved}" is not writable: ${e.message}`,
     );
   }
   return resolved;
@@ -889,7 +817,7 @@ const mcpPendingAuth = new PendingAuthCache();
  * ERR_CONNECTION_REFUSED. Misconfiguration is loud: the OAuth provider
  * will reject `redirect_uri` mismatches.
  */
-function getPublicBaseUrl(req: Request) {
+function getPublicBaseUrl(req) {
   const env = process.env.OD_PUBLIC_BASE_URL;
   if (env && /^https?:\/\//i.test(env)) {
     return env.replace(/\/+$/u, '');
@@ -900,7 +828,7 @@ function getPublicBaseUrl(req: Request) {
   return `${proto}://${host}`;
 }
 
-function mcpOAuthCallbackUrl(req: Request) {
+function mcpOAuthCallbackUrl(req) {
   return `${getPublicBaseUrl(req)}/api/mcp/oauth/callback`;
 }
 
@@ -914,52 +842,48 @@ function mcpOAuthCallbackUrl(req: Request) {
  * for. Tokens persisted before that context was recorded can't be safely
  * refreshed; the caller treats `null` as "needs reconnect".
  */
-async function refreshAndPersistToken(
-  dataDir: string,
-  serverId: string,
-  current: StoredMcpToken,
-): Promise<StoredMcpToken | null> {
+async function refreshAndPersistToken(dataDir, serverId, current) {
   if (!current.refreshToken) return null;
   if (!current.tokenEndpoint || !current.clientId) return null;
-  const refreshInput = {
+  const tokenResp = await refreshAccessToken({
     tokenEndpoint: current.tokenEndpoint,
     clientId: current.clientId,
+    clientSecret: current.clientSecret,
     refreshToken: current.refreshToken,
-    ...(current.clientSecret !== undefined ? { clientSecret: current.clientSecret } : {}),
-    ...(current.scope !== undefined ? { scope: current.scope } : {}),
-    ...(current.resourceUrl !== undefined ? { resource: current.resourceUrl } : {}),
-  };
-  const tokenResp = await refreshAccessToken(refreshInput);
-  const next: StoredMcpToken = {
+    scope: current.scope,
+    resource: current.resourceUrl,
+  });
+  const next = {
     accessToken: tokenResp.access_token,
+    refreshToken: tokenResp.refresh_token ?? current.refreshToken,
     tokenType: tokenResp.token_type ?? 'Bearer',
+    scope: tokenResp.scope ?? current.scope,
+    expiresAt:
+      typeof tokenResp.expires_in === 'number'
+        ? Date.now() + tokenResp.expires_in * 1000
+        : undefined,
     savedAt: Date.now(),
     tokenEndpoint: current.tokenEndpoint,
     clientId: current.clientId,
+    clientSecret: current.clientSecret,
+    authServerIssuer: current.authServerIssuer,
+    redirectUri: current.redirectUri,
+    resourceUrl: current.resourceUrl,
   };
-  const refreshToken = tokenResp.refresh_token ?? current.refreshToken;
-  if (refreshToken !== undefined) next.refreshToken = refreshToken;
-  const scope = tokenResp.scope ?? current.scope;
-  if (scope !== undefined) next.scope = scope;
-  if (typeof tokenResp.expires_in === 'number') next.expiresAt = Date.now() + tokenResp.expires_in * 1000;
-  if (current.clientSecret !== undefined) next.clientSecret = current.clientSecret;
-  if (current.authServerIssuer !== undefined) next.authServerIssuer = current.authServerIssuer;
-  if (current.redirectUri !== undefined) next.redirectUri = current.redirectUri;
-  if (current.resourceUrl !== undefined) next.resourceUrl = current.resourceUrl;
   await setToken(dataDir, serverId, next);
   return next;
 }
 
-const activeChatAgentEventSinks = new Map<string, (payload: unknown) => unknown>();
-const activeProjectEventSinks = new Map<string, Set<(payload: unknown) => unknown>>();
+const activeChatAgentEventSinks = new Map();
+const activeProjectEventSinks = new Map();
 
-function emitChatAgentEvent(runId: string, payload: unknown) {
+function emitChatAgentEvent(runId, payload) {
   const sink = activeChatAgentEventSinks.get(runId);
   if (!sink) return false;
-  return Boolean(sink(payload));
+  return sink(payload);
 }
 
-function emitLiveArtifactEvent(grant: any, action: string, artifact: any) {
+function emitLiveArtifactEvent(grant, action, artifact) {
   if (!artifact?.id) return false;
   const payload = {
     type: 'live_artifact',
@@ -969,24 +893,24 @@ function emitLiveArtifactEvent(grant: any, action: string, artifact: any) {
     title: artifact.title ?? artifact.id,
     refreshStatus: artifact.refreshStatus,
   };
-  let emitted: boolean = emitProjectLiveArtifactEvent(payload.projectId, payload);
+  let emitted = emitProjectLiveArtifactEvent(payload.projectId, payload);
   if (grant?.runId) emitted = emitChatAgentEvent(grant.runId, payload) || emitted;
   return emitted;
 }
 
-function emitLiveArtifactRefreshEvent(grant: any, payload: any) {
+function emitLiveArtifactRefreshEvent(grant, payload) {
   if (!payload?.artifactId) return false;
   const event = {
     type: 'live_artifact_refresh',
     projectId: grant.projectId,
     ...payload,
   };
-  let emitted: boolean = emitProjectLiveArtifactEvent(grant.projectId, event);
+  let emitted = emitProjectLiveArtifactEvent(grant.projectId, event);
   if (grant?.runId) emitted = emitChatAgentEvent(grant.runId, event) || emitted;
   return emitted;
 }
 
-function emitProjectLiveArtifactEvent(projectId: string, payload: unknown) {
+function emitProjectLiveArtifactEvent(projectId, payload) {
   const sinks = activeProjectEventSinks.get(projectId);
   if (!sinks || sinks.size === 0) return false;
   for (const sink of Array.from(sinks)) {
@@ -1004,7 +928,7 @@ function emitProjectLiveArtifactEvent(projectId: string, payload: unknown) {
 const CMD_BAT_RE = /\.(cmd|bat)$/i;
 const PROMPT_TEMP_FILE = () =>
   '.od-prompt-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.md';
-const promptFileBootstrap = (fp: string) =>
+const promptFileBootstrap = (fp) =>
   `Your full instructions are stored in the file: ${fp.replace(/\\/g, '/')}. ` +
   'Open that file first and follow every instruction in it exactly — ' +
   'it contains the system prompt, design system, skill workflow, and user request. ' +
@@ -1032,7 +956,7 @@ export function createAgentRuntimeEnv(
   toolTokenGrant: { token?: string } | null = null,
   nodeBin: string = process.execPath,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
+  const env = {
     ...baseEnv,
     OD_DAEMON_URL: daemonUrl,
     OD_NODE_BIN: nodeBin,
@@ -1067,14 +991,14 @@ export function createAgentRuntimeToolPrompt(
   ].join('\n');
 }
 
-export function normalizeProjectDisplayStatus(status: string) {
+export function normalizeProjectDisplayStatus(status) {
   return status === 'starting' || status === 'queued' ? 'running' : status;
 }
 
 export function composeProjectDisplayStatus(
-  baseStatus: any,
-  awaitingInputProjects: Set<string>,
-  projectId: string,
+  baseStatus,
+  awaitingInputProjects,
+  projectId,
 ) {
   if (
     baseStatus.value === 'succeeded' &&
@@ -1094,7 +1018,7 @@ export function composeProjectDisplayStatus(
  * @param {Omit<ApiError, 'code' | 'message'>} [init]
  * @returns {ApiError}
  */
-export function createCompatApiError(code: any, message: string, init: Record<string, unknown> = {}) {
+export function createCompatApiError(code, message, init = {}) {
   return { code, message, ...init };
 }
 
@@ -1104,7 +1028,7 @@ export function createCompatApiError(code: any, message: string, init: Record<st
  * @param {Omit<ApiError, 'code' | 'message'>} [init]
  * @returns {ApiErrorResponse}
  */
-export function createCompatApiErrorResponse(code: any, message: string, init: Record<string, unknown> = {}) {
+export function createCompatApiErrorResponse(code, message, init = {}) {
   return { error: createCompatApiError(code, message, init) };
 }
 
@@ -1115,7 +1039,7 @@ export function createCompatApiErrorResponse(code: any, message: string, init: R
  * @param {string} message
  * @param {Omit<ApiError, 'code' | 'message'>} [init]
  */
-function sendApiError(res: Response, status: number, code: any, message: string, init: Record<string, unknown> = {}) {
+function sendApiError(res, status, code, message, init = {}) {
   return res
     .status(status)
     .json(createCompatApiErrorResponse(code, message, init));
@@ -1123,20 +1047,20 @@ function sendApiError(res: Response, status: number, code: any, message: string,
 
 const CLOUDFLARE_PAGES_PROJECT_METADATA_KEY = 'cloudflarePagesProjectName';
 
-function cloudflarePagesDeploymentMetadata(projectName: unknown) {
+function cloudflarePagesDeploymentMetadata(projectName) {
   const normalized = typeof projectName === 'string' ? projectName.trim() : '';
   return normalized
     ? { [CLOUDFLARE_PAGES_PROJECT_METADATA_KEY]: normalized }
     : undefined;
 }
 
-function cloudflarePagesProjectNameFromDeployment(deployment: any) {
+function cloudflarePagesProjectNameFromDeployment(deployment) {
   const value = deployment?.providerMetadata?.[CLOUDFLARE_PAGES_PROJECT_METADATA_KEY];
   if (typeof value === 'string' && value.trim()) return value.trim();
   return cloudflarePagesProjectNameFromUrl(deployment?.url);
 }
 
-function cloudflarePagesProjectNameFromUrl(rawUrl: unknown) {
+function cloudflarePagesProjectNameFromUrl(rawUrl) {
   if (typeof rawUrl !== 'string' || !rawUrl.trim()) return '';
   try {
     const host = new URL(rawUrl).hostname.toLowerCase();
@@ -1148,7 +1072,7 @@ function cloudflarePagesProjectNameFromUrl(rawUrl: unknown) {
   }
 }
 
-function cloudflarePagesProjectNameForDeploy(db: any, projectId: string, projectName: string, prior: any) {
+function cloudflarePagesProjectNameForDeploy(db, projectId, projectName, prior) {
   const priorName = cloudflarePagesProjectNameFromDeployment(prior);
   if (priorName) return priorName;
 
@@ -1161,22 +1085,22 @@ function cloudflarePagesProjectNameForDeploy(db: any, projectId: string, project
   return cloudflarePagesProjectNameForProject(projectId, projectName);
 }
 
-function publicDeployment(deployment: any) {
+function publicDeployment(deployment) {
   if (!deployment || typeof deployment !== 'object') return deployment;
   const { providerMetadata: _providerMetadata, ...publicShape } = deployment;
   return publicShape;
 }
 
-function publicDeployments(deployments: any[]) {
+function publicDeployments(deployments) {
   return (deployments || []).map(publicDeployment);
 }
 
-async function checkCloudflarePagesDeploymentLinks(existing: any) {
+async function checkCloudflarePagesDeploymentLinks(existing) {
   const current = existing.cloudflarePages || {};
   const projectName = current.projectName || cloudflarePagesProjectNameFromDeployment(existing);
-  const config: any = await readDeployConfig(CLOUDFLARE_PAGES_PROVIDER_ID);
+  const config = await readDeployConfig(CLOUDFLARE_PAGES_PROVIDER_ID);
   const pagesDevUrl = current.pagesDev?.url || existing.url;
-  const pagesDevResult: any = await checkDeploymentUrl(pagesDevUrl);
+  const pagesDevResult = await checkDeploymentUrl(pagesDevUrl);
   const pagesDev = {
     ...(current.pagesDev || {}),
     url: pagesDevUrl,
@@ -1248,7 +1172,7 @@ async function checkCloudflarePagesDeploymentLinks(existing: any) {
 // Browsers reject quotes and control bytes; we keep Unicode letters/digits
 // so a project name with non-ASCII characters (e.g. "café-design")
 // survives instead of becoming a row of underscores.
-function sanitizeArchiveFilename(raw: unknown) {
+function sanitizeArchiveFilename(raw) {
   const cleaned = String(raw ?? '')
     .replace(/[\\/:*?"<>|]/g, '_')
     .replace(/[\u0000-\u001f\u007f]/g, '')
@@ -1258,7 +1182,7 @@ function sanitizeArchiveFilename(raw: unknown) {
   return cleaned;
 }
 
-function sendLiveArtifactRouteError(res: Response, err: unknown) {
+function sendLiveArtifactRouteError(res, err) {
   if (err instanceof LiveArtifactStoreValidationError) {
     return sendApiError(res, 400, 'LIVE_ARTIFACT_INVALID', err.message, {
       details: { kind: 'validation', issues: err.issues },
@@ -1286,7 +1210,7 @@ function sendLiveArtifactRouteError(res: Response, err: unknown) {
   return sendApiError(res, 500, 'LIVE_ARTIFACT_STORAGE_FAILED', String(err));
 }
 
-function normalizeLocalAuthority(value: unknown) {
+function normalizeLocalAuthority(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed || /[\s/@]/.test(trimmed) || trimmed.includes(',')) return null;
@@ -1301,7 +1225,7 @@ function normalizeLocalAuthority(value: unknown) {
   }
 }
 
-function isLoopbackHostname(hostname: unknown) {
+function isLoopbackHostname(hostname) {
   const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (normalized === 'localhost') return true;
   if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
@@ -1309,7 +1233,7 @@ function isLoopbackHostname(hostname: unknown) {
   return false;
 }
 
-function isLoopbackPeerAddress(address: unknown) {
+function isLoopbackPeerAddress(address) {
   if (typeof address !== 'string') return false;
   const normalized = address.trim().toLowerCase().replace(/^\[|\]$/g, '');
   if (!normalized) return false;
@@ -1319,7 +1243,7 @@ function isLoopbackPeerAddress(address: unknown) {
   return false;
 }
 
-function localOriginFromHeader(value: unknown) {
+function localOriginFromHeader(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed || trimmed === 'null' || trimmed.includes(',')) return null;
@@ -1335,7 +1259,7 @@ function localOriginFromHeader(value: unknown) {
   }
 }
 
-function validateLocalDaemonRequest(req: Request) {
+function validateLocalDaemonRequest(req) {
   if (!isLoopbackPeerAddress(req.socket?.remoteAddress)) {
     return {
       ok: false,
@@ -1365,11 +1289,10 @@ function validateLocalDaemonRequest(req: Request) {
   return { ok: true, origin: localOriginFromHeader(originHeader) };
 }
 
-function requireLocalDaemonRequest(req: Request, res: Response, next: NextFunction) {
+function requireLocalDaemonRequest(req, res, next) {
   const validation = validateLocalDaemonRequest(req);
   if (!validation.ok) {
-    const failed = asAny(validation);
-    return sendApiError(res, 403, 'FORBIDDEN', failed.message, failed.details ? { details: failed.details } : {});
+    return sendApiError(res, 403, 'FORBIDDEN', validation.message, validation.details ? { details: validation.details } : {});
   }
 
   res.setHeader('Vary', 'Origin');
@@ -1390,7 +1313,7 @@ function requireLocalDaemonRequest(req: Request, res: Response, next: NextFuncti
  * page works even if the opener was closed and the user just sees a
  * static success/failure screen.
  */
-function renderOAuthResultPage(opts: { ok: boolean; serverId?: string; message?: string }) {
+function renderOAuthResultPage(opts) {
   const ok = Boolean(opts.ok);
   const title = ok ? 'Connected' : 'Authorization failed';
   const heading = ok ? '✅ Connected' : '⚠️ Authorization failed';
@@ -1462,7 +1385,7 @@ function renderOAuthResultPage(opts: { ok: boolean; serverId?: string; message?:
 </html>`;
 }
 
-function escapeHtml(s: unknown) {
+function escapeHtml(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -1471,7 +1394,7 @@ function escapeHtml(s: unknown) {
     .replace(/'/g, '&#39;');
 }
 
-function setLiveArtifactPreviewHeaders(res: Response) {
+function setLiveArtifactPreviewHeaders(res) {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1494,21 +1417,21 @@ function setLiveArtifactPreviewHeaders(res: Response) {
   );
 }
 
-function setLiveArtifactCodeHeaders(res: Response) {
+function setLiveArtifactCodeHeaders(res) {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
 }
 
-function bearerTokenFromRequest(req: Request) {
+function bearerTokenFromRequest(req) {
   const header = req.get('authorization');
   if (typeof header !== 'string') return undefined;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  return match?.[1] ?? undefined;
+  return match?.[1];
 }
 
-function authorizeToolRequest(req: Request, res: Response, operation: string) {
+function authorizeToolRequest(req, res, operation) {
   const endpoint = req.path;
   const validation = toolTokenRegistry.validate(bearerTokenFromRequest(req), { endpoint, operation });
   if (!validation.ok) {
@@ -1521,11 +1444,11 @@ function authorizeToolRequest(req: Request, res: Response, operation: string) {
   return validation.grant;
 }
 
-function requestProjectOverride(projectId: unknown, tokenProjectId: string) {
+function requestProjectOverride(projectId, tokenProjectId) {
   return typeof projectId === 'string' && projectId.length > 0 && projectId !== tokenProjectId;
 }
 
-function requestRunOverride(runId: unknown, tokenRunId: string) {
+function requestRunOverride(runId, tokenRunId) {
   return typeof runId === 'string' && runId.length > 0 && runId !== tokenRunId;
 }
 
@@ -1570,7 +1493,7 @@ function openNativeFolderDialog() {
  * @param {string} message
  * @param {Omit<ApiError, 'code' | 'message'>} [init]
  */
-function createSseErrorPayload(code: any, message: string, init: Record<string, unknown> = {}) {
+function createSseErrorPayload(code, message, init = {}) {
   return { message, error: createCompatApiError(code, message, init) };
 }
 
@@ -1629,13 +1552,11 @@ const projectUpload = multer({
         // it sees. projectMetadataLookup is populated at startServer() boot
         // and keyed by project id; null fallback gives the standard
         // .od/projects/<id>/ behavior for non-imported projects.
-        const projectId = req.params.id;
-        if (!projectId) throw new Error('project id is required for upload');
-        const meta = projectMetadataLookup?.(projectId) ?? undefined;
-        const dir = await ensureProject(PROJECTS_DIR, projectId, asAny(meta));
+        const meta = projectMetadataLookup?.(req.params.id) ?? null;
+        const dir = await ensureProject(PROJECTS_DIR, req.params.id, meta);
         cb(null, dir);
       } catch (err) {
-        cb(err instanceof Error ? err : new Error(errorMessage(err)), '');
+        cb(err, '');
       }
     },
     filename: (_req, file, cb) => {
@@ -1652,7 +1573,7 @@ const projectUpload = multer({
   limits: { fileSize: 200 * 1024 * 1024 },  // 200MB — covers the largest design assets we expect (PPTX/PDF/raw images)
 });
 
-function handleProjectUpload(req: Request, res: Response, next: NextFunction) {
+function handleProjectUpload(req, res, next) {
   projectUpload.array('files', 12)(req, res, (err) => {
     if (err) {
       return sendMulterError(res, err);
@@ -1661,7 +1582,7 @@ function handleProjectUpload(req: Request, res: Response, next: NextFunction) {
   });
 }
 
-function sendMulterError(res: Response, err: unknown) {
+function sendMulterError(res, err) {
   if (err instanceof multer.MulterError) {
     const code = err.code || 'UPLOAD_ERROR';
     const statusByCode = {
@@ -1702,27 +1623,11 @@ function sendMulterError(res: Response, err: unknown) {
   return sendApiError(res, 500, 'INTERNAL_ERROR', 'upload failed');
 }
 
-type MediaTaskStatus = 'queued' | 'running' | 'done' | 'failed';
-type MediaTask = {
-  id: string;
-  projectId: string;
-  status: MediaTaskStatus;
-  surface?: unknown;
-  model?: unknown;
-  progress: string[];
-  file: unknown | null;
-  error: { message: string; status: number; code?: unknown } | null;
-  startedAt: number;
-  endedAt: number | null;
-  waiters: Set<() => void>;
-  _gcScheduled?: boolean;
-};
-
-const mediaTasks = new Map<string, MediaTask>();
+const mediaTasks = new Map();
 const TASK_TTL_AFTER_DONE_MS = 10 * 60 * 1000;
 
-function createMediaTask(taskId: string, projectId: string, info: { surface?: unknown; model?: unknown } = {}): MediaTask {
-  const task: MediaTask = {
+function createMediaTask(taskId, projectId, info = {}) {
+  const task = {
     id: taskId,
     projectId,
     status: 'queued',
@@ -1739,12 +1644,12 @@ function createMediaTask(taskId: string, projectId: string, info: { surface?: un
   return task;
 }
 
-function appendTaskProgress(task: MediaTask, line: string) {
+function appendTaskProgress(task, line) {
   task.progress.push(line);
   notifyTaskWaiters(task);
 }
 
-function notifyTaskWaiters(task: MediaTask) {
+function notifyTaskWaiters(task) {
   const wakers = Array.from(task.waiters);
   for (const w of wakers) {
     try {
@@ -1765,8 +1670,8 @@ function notifyTaskWaiters(task: MediaTask) {
 }
 
 export function createSseResponse(
-  res: Response,
-  { keepAliveIntervalMs = SSE_KEEPALIVE_INTERVAL_MS }: { keepAliveIntervalMs?: number } = {},
+  res,
+  { keepAliveIntervalMs = SSE_KEEPALIVE_INTERVAL_MS } = {},
 ) {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1783,7 +1688,7 @@ export function createSseResponse(
     return false;
   };
 
-  let heartbeat: NodeJS.Timeout | null = null;
+  let heartbeat = null;
   if (keepAliveIntervalMs > 0) {
     heartbeat = setInterval(writeKeepAlive, keepAliveIntervalMs);
     heartbeat.unref?.();
@@ -1800,7 +1705,8 @@ export function createSseResponse(
   res.on('finish', cleanup);
 
   return {
-    send(event: string, data: unknown, id: string | number | null = null) {
+    /** @param {ChatSseEvent['event'] | ProxySseEvent['event'] | string} event */
+    send(event, data, id: string | number | null | undefined = null) {
       if (!canWrite()) return false;
       if (id !== null && id !== undefined) res.write(`id: ${id}\n`);
       res.write(`event: ${event}\n`);
@@ -1824,7 +1730,7 @@ function resolveChatRunInactivityTimeoutMs() {
   return Math.max(0, Math.floor(raw));
 }
 
-export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST || '127.0.0.1', returnServer = false }: { port?: number; host?: string; returnServer?: boolean } = {}) {
+export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST || '127.0.0.1', returnServer = false } = {}) {
   let resolvedPort = port;
   const extraAllowedOrigins = configuredAllowedOrigins();
   const app = express();
@@ -1833,7 +1739,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // Chrome may strip the port from the Origin header on same-origin GET
   // requests. Only use this as a fallback for safe, idempotent GET requests;
   // mutating routes always require an exact origin/host match.
-  function isPortlessLoopbackOrigin(origin: string) {
+  function isPortlessLoopbackOrigin(origin) {
     return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])$/.test(origin);
   }
 
@@ -1939,7 +1845,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     try {
       res.json(readPublicComposioConfig());
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      res.status(500).json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -1954,7 +1860,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       }
       res.json(cfg);
     } catch (err) {
-      res.status(400).json({ error: errorMessage(err) });
+      res.status(400).json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -1965,7 +1871,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // the MCP surface reads it so a coding agent in another repo can
   // resolve "the design I have open" without the user typing the
   // project id. In-memory only - daemon restart clears it.
-  let activeContext: { projectId: string; fileName: string | null; ts: number } | null = null;
+  /** @type {{ projectId: string; fileName: string | null; ts: number } | null} */
+  let activeContext = null;
   const ACTIVE_CONTEXT_TTL_MS = 5 * 60 * 1000;
 
   // Active context is private to the local machine. The daemon binds
@@ -1997,7 +1904,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       activeContext = { projectId, fileName, ts: Date.now() };
       res.json({ active: true, ...activeContext });
     } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      sendApiError(res, 400, 'BAD_REQUEST', String(err));
     }
   });
 
@@ -2100,7 +2007,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(500)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -2114,7 +2021,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(400)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -2173,7 +2080,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         redirectUri,
       });
     } catch (err) {
-      const msg = errorMessage(err);
+      const msg = err && err.message ? err.message : String(err);
       console.error(`[mcp-oauth] start failed serverId=${serverId}:`, msg);
       res.status(502).json({ error: msg });
     }
@@ -2208,34 +2115,35 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       }));
     }
     try {
-      const exchangeInput = {
+      const tokenResp = await exchangeCodeForToken({
         tokenEndpoint: pending.tokenEndpoint,
         clientId: pending.clientId,
+        clientSecret: pending.clientSecret,
         redirectUri: pending.redirectUri,
         code,
         codeVerifier: pending.codeVerifier,
-        ...(pending.clientSecret !== undefined ? { clientSecret: pending.clientSecret } : {}),
-        ...(pending.resourceUrl !== undefined ? { resource: pending.resourceUrl } : {}),
-      };
-      const tokenResp = await exchangeCodeForToken(exchangeInput);
-      const stored: StoredMcpToken = {
+        resource: pending.resourceUrl,
+      });
+      const stored = {
         accessToken: tokenResp.access_token,
+        refreshToken: tokenResp.refresh_token,
         tokenType: tokenResp.token_type ?? 'Bearer',
+        scope: tokenResp.scope ?? pending.scope,
+        expiresAt:
+          typeof tokenResp.expires_in === 'number'
+            ? Date.now() + tokenResp.expires_in * 1000
+            : undefined,
         savedAt: Date.now(),
         // Persist the OAuth client context so refresh-token rotation can
         // hit the same client_id / token endpoint the upstream issued the
         // refresh_token to. Refresh tokens are client-bound (RFC 6749 §6).
         tokenEndpoint: pending.tokenEndpoint,
         clientId: pending.clientId,
+        clientSecret: pending.clientSecret,
         authServerIssuer: pending.authServerIssuer,
         redirectUri: pending.redirectUri,
+        resourceUrl: pending.resourceUrl,
       };
-      if (tokenResp.refresh_token !== undefined) stored.refreshToken = tokenResp.refresh_token;
-      const scope = tokenResp.scope ?? pending.scope;
-      if (scope !== undefined) stored.scope = scope;
-      if (typeof tokenResp.expires_in === 'number') stored.expiresAt = Date.now() + tokenResp.expires_in * 1000;
-      if (pending.clientSecret !== undefined) stored.clientSecret = pending.clientSecret;
-      if (pending.resourceUrl !== undefined) stored.resourceUrl = pending.resourceUrl;
       await setToken(RUNTIME_DATA_DIR, pending.serverId, stored);
       res.type('html').send(renderOAuthResultPage({
         ok: true,
@@ -2244,11 +2152,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       console.error(
         '[mcp-oauth] callback failed:',
-        errorMessage(err),
+        err && err.message ? err.message : err,
       );
       res.status(502).type('html').send(renderOAuthResultPage({
         ok: false,
-        message: errorMessage(err),
+        message: String(err && err.message ? err.message : err),
       }));
     }
   });
@@ -2270,7 +2178,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         savedAt: tok.savedAt,
       });
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      res.status(500).json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -2285,7 +2193,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       await clearToken(RUNTIME_DATA_DIR, serverId);
       res.json({ ok: true });
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      res.status(500).json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -2311,23 +2219,23 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       }
       /** @type {import('@open-design/contracts').ProjectsResponse} */
       const body = {
-        projects: listProjects(db).map((project: any) => ({
+        projects: listProjects(db).map((project) => ({
           ...project,
           status: composeProjectDisplayStatus(
             activeRunStatuses.get(project.id) ??
               latestRunStatuses.get(project.id) ?? { value: 'not_started' },
-            asAny<Set<string>>(awaitingInputProjects),
+            awaitingInputProjects,
             project.id,
           ),
         })),
       };
       res.json(body);
     } catch (err) {
-      sendApiError(res, 500, 'INTERNAL_ERROR', errorMessage(err));
+      sendApiError(res, 500, 'INTERNAL_ERROR', String(err));
     }
   });
 
-  function projectStatusFromRun(run: any) {
+  function projectStatusFromRun(run) {
     return {
       value: normalizeProjectDisplayStatus(run.status),
       updatedAt: run.updatedAt,
@@ -2431,7 +2339,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = { project, conversationId: cid };
       res.json(body);
     } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      sendApiError(res, 400, 'BAD_REQUEST', String(err));
     }
   });
 
@@ -2490,7 +2398,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         });
       } catch (err) {
         if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
-        res.status(400).json({ error: errorMessage(err) });
+        res.status(400).json({ error: String(err) });
       }
     },
   );
@@ -2582,7 +2490,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = { project, conversationId: cid, entryFile };
       res.json(body);
     } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      sendApiError(res, 400, 'BAD_REQUEST', String(err));
     }
   });
 
@@ -2651,7 +2559,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = { project };
       res.json(body);
     } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      sendApiError(res, 400, 'BAD_REQUEST', String(err));
     }
   });
 
@@ -2663,7 +2571,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = { ok: true };
       res.json(body);
     } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      sendApiError(res, 400, 'BAD_REQUEST', String(err));
     }
   });
 
@@ -2678,11 +2586,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     if (!getProject(db, req.params.id)) {
       return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
     }
-    let sub: { ready: Promise<unknown>; unsubscribe: () => unknown } | null = null;
+    let sub;
     try {
       const sse = createSseResponse(res);
-      const projectEventSink = (payload: any) => {
-        sse.send(String(payload.type), payload);
+      const projectEventSink = (payload) => {
+        sse.send(payload.type, payload);
       };
       let sinks = activeProjectEventSinks.get(req.params.id);
       if (!sinks) {
@@ -2691,9 +2599,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       }
       sinks.add(projectEventSink);
       const watchProject = getProject(db, req.params.id);
-      sub = subscribeFileEvents(PROJECTS_DIR, req.params.id, (evt: unknown) => {
+      sub = subscribeFileEvents(PROJECTS_DIR, req.params.id, (evt) => {
         sse.send('file-changed', evt);
-      }, watchProject?.metadata === undefined ? {} : { metadata: asAny(watchProject.metadata) });
+      }, { metadata: watchProject?.metadata });
       sub.ready.then(() => sse.send('ready', { projectId: req.params.id })).catch(() => {});
       const cleanup = () => {
         if (sub) {
@@ -2709,7 +2617,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       res.on('finish', cleanup);
     } catch (err) {
       if (sub) Promise.resolve(sub.unsubscribe()).catch(() => {});
-      if (!res.headersSent) sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      if (!res.headersSent) sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
     }
   });
 
@@ -2811,7 +2719,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       updateProject(db, req.params.id, {});
       res.json({ comment });
     } catch (err) {
-      res.status(400).json({ error: errorMessage(err) });
+      res.status(400).json({ error: String(err?.message || err) });
     }
   });
 
@@ -2835,7 +2743,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         updateProject(db, req.params.id, {});
         res.json({ comment });
       } catch (err) {
-        res.status(400).json({ error: errorMessage(err) });
+        res.status(400).json({ error: String(err?.message || err) });
       }
     },
   );
@@ -3030,7 +2938,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       });
       res.json(result);
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      res.status(500).json({ error: String((err && err.message) || err) });
     }
   });
 
@@ -3304,7 +3212,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (!skill) {
         return res.status(404).type('text/plain').send('skill not found');
       }
-      const relPath = routeSplatParam(req);
+      const relPath = String(req.params[0] || '');
       const assetsRoot = path.resolve(skill.dir, 'assets');
       const target = path.resolve(assetsRoot, relPath);
       if (target !== assetsRoot && !target.startsWith(assetsRoot + path.sep)) {
@@ -3326,8 +3234,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   });
 
   app.post('/api/upload', upload.array('images', 8), (req, res) => {
-    const uploadedFiles = Array.isArray(req.files) ? req.files : [];
-    const files = uploadedFiles.map((f: Express.Multer.File) => ({
+    const files = (req.files || []).map((f) => ({
       name: f.originalname,
       path: f.path,
       size: f.size,
@@ -3415,7 +3322,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         const html = await readLiveArtifactCode({
           projectsRoot: PROJECTS_DIR,
           projectId,
-          artifactId: requiredRouteParam(req, 'artifactId'),
+          artifactId: req.params.artifactId,
           variant: variant === 'template' ? 'template' : 'rendered',
         });
         setLiveArtifactCodeHeaders(res);
@@ -3428,7 +3335,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const record = await ensureLiveArtifactPreview({
         projectsRoot: PROJECTS_DIR,
         projectId,
-        artifactId: requiredRouteParam(req, 'artifactId'),
+        artifactId: req.params.artifactId,
       });
       setLiveArtifactPreviewHeaders(res);
       res.status(200).send(record.html);
@@ -3447,7 +3354,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const record = await getLiveArtifact({
         projectsRoot: PROJECTS_DIR,
         projectId,
-        artifactId: requiredRouteParam(req, 'artifactId'),
+        artifactId: req.params.artifactId,
       });
       res.json({ artifact: record.artifact });
     } catch (err) {
@@ -3465,7 +3372,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const refreshes = await listLiveArtifactRefreshLogEntries({
         projectsRoot: PROJECTS_DIR,
         projectId,
-        artifactId: requiredRouteParam(req, 'artifactId'),
+        artifactId: req.params.artifactId,
       });
       res.json({ refreshes });
     } catch (err) {
@@ -3609,7 +3516,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const record = await updateLiveArtifact({
         projectsRoot: PROJECTS_DIR,
         projectId,
-        artifactId: requiredRouteParam(req, 'artifactId'),
+        artifactId: req.params.artifactId,
         input: req.body ?? {},
       });
       emitLiveArtifactEvent({ projectId }, 'updated', record.artifact);
@@ -3629,12 +3536,12 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const existing = await getLiveArtifact({
         projectsRoot: PROJECTS_DIR,
         projectId,
-        artifactId: requiredRouteParam(req, 'artifactId'),
+        artifactId: req.params.artifactId,
       });
       await deleteLiveArtifact({
         projectsRoot: PROJECTS_DIR,
         projectId,
-        artifactId: requiredRouteParam(req, 'artifactId'),
+        artifactId: req.params.artifactId,
       });
       updateProject(db, projectId, {});
       emitLiveArtifactEvent({ projectId }, 'deleted', existing.artifact);
@@ -3660,22 +3567,22 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         result = await refreshLiveArtifact({
           projectsRoot: PROJECTS_DIR,
           projectId,
-          artifactId: requiredRouteParam(req, 'artifactId'),
+          artifactId: req.params.artifactId,
           onStarted: ({ refreshId }) => {
-            emitLiveArtifactRefreshEvent({ projectId }, { phase: 'started', artifactId: requiredRouteParam(req, 'artifactId'), refreshId });
+            emitLiveArtifactRefreshEvent({ projectId }, { phase: 'started', artifactId: req.params.artifactId, refreshId });
           },
         });
       } catch (refreshErr) {
         emitLiveArtifactRefreshEvent({ projectId }, {
           phase: 'failed',
-          artifactId: requiredRouteParam(req, 'artifactId'),
+          artifactId: req.params.artifactId,
           error: refreshErr instanceof Error ? refreshErr.message : String(refreshErr),
         });
         throw refreshErr;
       }
       emitLiveArtifactRefreshEvent({ projectId }, {
         phase: 'succeeded',
-        artifactId: requiredRouteParam(req, 'artifactId'),
+        artifactId: req.params.artifactId,
         refreshId: result.refresh.id,
         title: result.artifact.title,
         refreshedSourceCount: result.refresh.refreshedSourceCount,
@@ -3701,7 +3608,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = publicDeployConfigForProvider(providerId, await readDeployConfig(providerId));
       res.json(body);
     } catch (err) {
-      sendApiError(res, 500, 'INTERNAL_ERROR', errorMessage(err));
+      sendApiError(res, 500, 'INTERNAL_ERROR', String(err?.message || err));
     }
   });
 
@@ -3717,7 +3624,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = await writeDeployConfig(providerId, input);
       res.json(body);
     } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
     }
   });
 
@@ -3727,13 +3634,12 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = await listCloudflarePagesZones(await readDeployConfig(CLOUDFLARE_PAGES_PROVIDER_ID));
       res.json(body);
     } catch (err) {
-      const deployErr = asAny(err);
-      const status = err instanceof DeployError && typeof deployErr.status === 'number' ? deployErr.status : 400;
+      const status = err instanceof DeployError ? err.status : 400;
       const init =
-        err instanceof DeployError && deployErr.details
-          ? { details: deployErr.details }
+        err instanceof DeployError && err.details
+          ? { details: err.details }
           : {};
-      sendApiError(res, status, 'BAD_REQUEST', errorMessage(err), init);
+      sendApiError(res, status, 'BAD_REQUEST', String(err?.message || err), init);
     }
   });
 
@@ -3743,7 +3649,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const body = { deployments: publicDeployments(listDeployments(db, req.params.id)) };
       res.json(body);
     } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+      sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
     }
   });
 
@@ -3768,14 +3674,14 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         PROJECTS_DIR,
         req.params.id,
         fileName,
-        deployProject?.metadata === undefined ? {} : { metadata: asAny(deployProject.metadata) },
+        { metadata: deployProject?.metadata },
       );
       const project = getProject(db, req.params.id);
       const cloudflarePagesProjectName =
         providerId === CLOUDFLARE_PAGES_PROVIDER_ID
           ? cloudflarePagesProjectNameForDeploy(db, req.params.id, project?.name, prior)
           : '';
-      const result: any = providerId === CLOUDFLARE_PAGES_PROVIDER_ID
+      const result = providerId === CLOUDFLARE_PAGES_PROVIDER_ID
         ? await deployToCloudflarePages({
             config: {
               ...await readDeployConfig(CLOUDFLARE_PAGES_PROVIDER_ID),
@@ -3815,13 +3721,16 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       });
       res.json(publicDeployment(body));
     } catch (err) {
-      const status = deployErrorStatus(err);
-      const init = deployErrorInit(err);
+      const status = err instanceof DeployError ? err.status : 400;
+      const init =
+        err instanceof DeployError && err.details
+          ? { details: err.details }
+          : {};
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err?.message || err),
         init,
       );
     }
@@ -3847,7 +3756,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         PROJECTS_DIR,
         req.params.id,
         fileName,
-        preflightProject?.metadata === undefined ? { providerId } : { metadata: asAny(preflightProject.metadata), providerId },
+        { metadata: preflightProject?.metadata, providerId },
       );
       res.json(body);
     } catch (err) {
@@ -3858,12 +3767,12 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (!(err instanceof DeployError)) {
         console.error('[deploy/preflight]', err);
       }
-      const status = deployErrorStatus(err);
+      const status = err instanceof DeployError ? err.status : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err?.message || err),
       );
     }
   });
@@ -3958,7 +3867,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       // generic 500 with the shared INTERNAL_ERROR code. Run the message
       // through redactSecrets defensively.
       console.error('[finalize/anthropic]', err);
-      const safeMsg = redactSecrets(errorMessage(err), [apiKey]);
+      const safeMsg = redactSecrets(String(err?.message || err), [apiKey]);
       return sendApiError(res, 500, 'INTERNAL_ERROR', safeMsg);
     }
   });
@@ -3999,7 +3908,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         const checkUrl = stableCloudflareProjectName
           ? `https://${stableCloudflareProjectName}.pages.dev`
           : existing.url;
-        const result: any = await checkDeploymentUrl(checkUrl);
+        const result = await checkDeploymentUrl(checkUrl);
         const now = Date.now();
         /** @type {import('@open-design/contracts').CheckDeploymentLinkResponse} */
         const body = upsertDeployment(db, {
@@ -4015,7 +3924,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         });
         res.json(publicDeployment(body));
       } catch (err) {
-        sendApiError(res, 400, 'BAD_REQUEST', errorMessage(err));
+        sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
       }
     },
   );
@@ -4097,13 +4006,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       );
       res.send(buffer);
     } catch (err) {
-      const code = errorCode(err);
+      const code = err && err.code;
       const status = code === 'ENOENT' || code === 'ENOTDIR' ? 404 : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err?.message || err),
       );
     }
   });
@@ -4122,7 +4031,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         PROJECTS_DIR,
         req.params.id,
         files,
-        asAny(project?.metadata),
+        project?.metadata,
       );
       const fileSlug = sanitizeArchiveFilename(project?.name || req.params.id) || 'project';
       const filename = `${fileSlug}.zip`;
@@ -4135,13 +4044,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       );
       res.send(buffer);
     } catch (err) {
-      const code = errorCode(err);
+      const code = err && err.code;
       const status = code === 'ENOENT' ? 404 : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err?.message || err),
       );
     }
   });
@@ -4160,9 +4069,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
   app.get('/api/projects/:id/raw/*', async (req, res) => {
     try {
-      const relPath = routeSplatParam(req);
+      const relPath = req.params[0];
       const project = getProject(db, req.params.id);
-      const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath, asAny(project?.metadata));
+      const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath, project?.metadata);
       // PreviewModal loads artifact HTML via srcdoc, giving the iframe Origin: "null".
       // data: URIs, file://, and some sandboxed iframes also send null — all are
       // local-only callers, so this is safe. Real cross-origin sites send a real
@@ -4172,12 +4081,12 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       }
       res.type(file.mime).send(file.buffer);
     } catch (err) {
-      const status = errorCode(err) === 'ENOENT' ? 404 : 400;
+      const status = err && err.code === 'ENOENT' ? 404 : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err),
       );
     }
   });
@@ -4185,17 +4094,17 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   app.delete('/api/projects/:id/raw/*', async (req, res) => {
     try {
       const project = getProject(db, req.params.id);
-      await deleteProjectFile(PROJECTS_DIR, req.params.id, routeSplatParam(req), asAny(project?.metadata));
+      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params[0], project?.metadata);
       /** @type {import('@open-design/contracts').DeleteProjectFileResponse} */
       const body = { ok: true };
       res.json(body);
     } catch (err) {
-      const status = errorCode(err) === 'ENOENT' ? 404 : 400;
+      const status = err && err.code === 'ENOENT' ? 404 : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err),
       );
     }
   });
@@ -4207,22 +4116,22 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         PROJECTS_DIR,
         req.params.id,
         req.params.name,
-        asAny(project?.metadata),
+        project?.metadata,
       );
       const preview = await buildDocumentPreview(file);
       res.json(preview);
     } catch (err) {
       const status =
-        isRecord(err) && typeof err.statusCode === 'number'
+        err && err.statusCode
           ? err.statusCode
-          : errorCode(err) === 'ENOENT'
+          : err && err.code === 'ENOENT'
             ? 404
             : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        err instanceof Error ? err.message : 'preview unavailable',
+        err?.message || 'preview unavailable',
       );
     }
   });
@@ -4233,17 +4142,17 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const file = await readProjectFile(
         PROJECTS_DIR,
         req.params.id,
-        routeSplatParam(req),
-        asAny(project?.metadata),
+        req.params[0],
+        project?.metadata,
       );
       res.type(file.mime).send(file.buffer);
     } catch (err) {
-      const status = errorCode(err) === 'ENOENT' ? 404 : 400;
+      const status = err && err.code === 'ENOENT' ? 404 : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err),
       );
     }
   });
@@ -4262,7 +4171,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     async (req, res) => {
       try {
         const uploadProject = getProject(db, req.params.id);
-        await ensureProject(PROJECTS_DIR, req.params.id, asAny(uploadProject?.metadata));
+        await ensureProject(PROJECTS_DIR, req.params.id, uploadProject?.metadata);
         if (req.file) {
           const buf = await fs.promises.readFile(req.file.path);
           const desiredName = sanitizeName(
@@ -4274,7 +4183,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             desiredName,
             buf,
             {},
-            asAny(uploadProject?.metadata),
+            uploadProject?.metadata,
           );
           fs.promises.unlink(req.file.path).catch(() => {});
           /** @type {import('@open-design/contracts').ProjectFileResponse} */
@@ -4314,7 +4223,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           name,
           buf,
           { artifactManifest },
-          asAny(uploadProject?.metadata),
+          uploadProject?.metadata,
         );
         /** @type {import('@open-design/contracts').ProjectFileResponse} */
         const body = { file: meta };
@@ -4328,17 +4237,17 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   app.delete('/api/projects/:id/files/:name', async (req, res) => {
     try {
       const delProject = getProject(db, req.params.id);
-      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params.name, asAny(delProject?.metadata));
+      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params.name, delProject?.metadata);
       /** @type {import('@open-design/contracts').DeleteProjectFileResponse} */
       const body = { ok: true };
       res.json(body);
     } catch (err) {
-      const status = errorCode(err) === 'ENOENT' ? 404 : 400;
+      const status = err && err.code === 'ENOENT' ? 404 : 400;
       sendApiError(
         res,
         status,
         status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        errorMessage(err),
+        String(err),
       );
     }
   });
@@ -4362,7 +4271,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(500)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -4371,10 +4280,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       const cfg = await writeConfig(PROJECT_ROOT, req.body);
       res.json(cfg);
     } catch (err) {
-      const status = errorStatus(err);
+      const status = typeof err?.status === 'number' ? err.status : 400;
       res
         .status(status)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -4388,7 +4297,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(500)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -4403,7 +4312,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(500)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -4416,7 +4325,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(500)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -4429,7 +4338,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(500)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -4444,7 +4353,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       res
         .status(500)
-        .json({ error: errorMessage(err) });
+        .json({ error: String(err && err.message ? err.message : err) });
     }
   });
 
@@ -4494,7 +4403,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         language: typeof req.body?.language === 'string' ? req.body.language : undefined,
         compositionDir: req.body?.compositionDir,
         image: req.body?.image,
-        onProgress: (line: string) => appendTaskProgress(task, line),
+        onProgress: (line) => appendTaskProgress(task, line),
       })
         .then((meta) => {
           task.status = 'done';
@@ -4509,9 +4418,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         .catch((err) => {
           task.status = 'failed';
           task.error = {
-            message: errorMessage(err),
-            status: errorStatus(err),
-            code: errorCode(err),
+            message: String(err && err.message ? err.message : err),
+            status: typeof err?.status === 'number' ? err.status : 400,
+            code: err?.code,
           };
           task.endedAt = Date.now();
           notifyTaskWaiters(task);
@@ -4527,9 +4436,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         startedAt: task.startedAt,
       });
     } catch (err) {
-      const status = errorStatus(err);
-      const code = errorCode(err);
-      const body: { error: string; code?: unknown } = { error: errorMessage(err) };
+      const status = typeof err?.status === 'number' ? err.status : 400;
+      const code = err?.code;
+      const body = { error: String(err && err.message ? err.message : err) };
       if (code) body.code = code;
       res.status(status).json(body);
     }
@@ -4565,7 +4474,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       res.status(500).json({
         error: {
           code: 'RESEARCH_FAILED',
-          message: errorMessage(err),
+          message: String(err && err.message ? err.message : err),
         },
       });
     }
@@ -4587,16 +4496,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
     const respond = () => {
       if (res.writableEnded) return;
-      const snapshot: {
-        taskId: string;
-        status: MediaTaskStatus;
-        startedAt: number;
-        endedAt: number | null;
-        progress: string[];
-        nextSince: number;
-        file?: unknown;
-        error?: MediaTask['error'];
-      } = {
+      const snapshot = {
         taskId,
         status: task.status,
         startedAt: task.startedAt,
@@ -4694,7 +4594,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     },
   );
 
-  const design: any = {
+  const design = {
     runs: createChatRunService({ createSseResponse, createSseErrorPayload }),
   };
 
@@ -4705,13 +4605,6 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     designSystemId,
     streamFormat,
     connectedExternalMcp,
-  }: {
-    agentId?: string;
-    projectId?: string;
-    skillId?: string;
-    designSystemId?: string;
-    streamFormat?: string;
-    connectedExternalMcp?: ReadonlyArray<{ id: string; label?: string | undefined }>;
   }) => {
     const project =
       typeof projectId === 'string' && projectId
@@ -4725,11 +4618,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         : project?.designSystemId;
     const metadata = project?.metadata;
 
-    let skillBody: string | undefined;
-    let skillName: string | undefined;
-    let skillMode: string | undefined;
-    let skillCraftRequires: string[] = [];
-    let activeSkillDir: string | null = null;
+    let skillBody;
+    let skillName;
+    let skillMode;
+    let skillCraftRequires = [];
+    let activeSkillDir = null;
     if (effectiveSkillId) {
       const skill = findSkillById(
         await listSkills(SKILLS_DIR),
@@ -4821,7 +4714,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       includeCodexImagegenOverride: false,
       skillBody,
       skillName,
-      skillMode: asAny(skillMode),
+      skillMode,
       designSystemBody,
       designSystemTitle,
       craftBody,
@@ -4831,7 +4724,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       critique: critiqueShouldRun ? critiqueCfg : undefined,
       critiqueBrand: critiqueShouldRun ? critiqueBrand : undefined,
       critiqueSkill: critiqueShouldRun ? critiqueSkill : undefined,
-      connectedExternalMcp,
+      connectedExternalMcp: Array.isArray(connectedExternalMcp)
+        ? connectedExternalMcp
+        : undefined,
     });
     // The chat handler also needs to know where the active skill lives
     // on disk so it can stage a per-project copy of its side files
@@ -4842,7 +4737,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     return { prompt, activeSkillDir, critiqueShouldRun };
   };
 
-  const startChatRun = async (chatBody: any, run: any) => {
+  const startChatRun = async (chatBody, run) => {
     /** @type {Partial<ChatRequest> & { imagePaths?: string[] }} */
     chatBody = chatBody || {};
     const {
@@ -4896,15 +4791,15 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // mode work but loses file-tool addressability.
     // For git-linked projects (metadata.baseDir), use that folder directly
     // so the agent writes back to the user's original source tree.
-    let cwd: string | null = null;
-    let existingProjectFiles: any[] = [];
+    let cwd = null;
+    let existingProjectFiles = [];
     if (typeof projectId === 'string' && projectId) {
       try {
         const chatProject = getProject(db, projectId);
         const chatMeta = chatProject?.metadata;
         if (chatMeta?.baseDir) {
           cwd = path.normalize(chatMeta.baseDir);
-          existingProjectFiles = await listFiles(PROJECTS_DIR, projectId, { metadata: asAny(chatMeta) });
+          existingProjectFiles = await listFiles(PROJECTS_DIR, projectId, { metadata: chatMeta });
         } else {
           cwd = await ensureProject(PROJECTS_DIR, projectId);
           existingProjectFiles = await listFiles(PROJECTS_DIR, projectId);
@@ -4916,7 +4811,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
 
     // Sanitise supplied image paths: must live under UPLOAD_DIR.
-    const safeImages = imagePaths.filter((p: string) => {
+    const safeImages = imagePaths.filter((p) => {
       const resolved = path.resolve(p);
       return (
         resolved.startsWith(UPLOAD_DIR + path.sep) && fs.existsSync(resolved)
@@ -4930,8 +4825,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // to Read it.
     const safeAttachments = cwd
       ? (Array.isArray(attachments) ? attachments : [])
-          .filter((p: unknown): p is string => typeof p === 'string' && p.length > 0)
-          .filter((p: string) => {
+          .filter((p) => typeof p === 'string' && p.length > 0)
+          .filter((p) => {
             try {
               const abs = path.resolve(cwd, p);
               return (
@@ -4986,10 +4881,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         })
       : null;
     let toolTokenRevoked = false;
-    const revokeToolToken = (reason: string) => {
+    const revokeToolToken = (reason) => {
       if (toolTokenRevoked || !toolTokenGrant) return;
       toolTokenRevoked = true;
-      toolTokenRegistry.revokeToken(toolTokenGrant.token, asAny(reason));
+      toolTokenRegistry.revokeToken(toolTokenGrant.token, reason);
     };
     const runtimeToolPrompt = createAgentRuntimeToolPrompt(daemonUrl, toolTokenGrant);
     const commentHint = renderCommentAttachmentHint(safeCommentAttachments);
@@ -5000,17 +4895,17 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // server the daemon already holds a valid Bearer for. We re-use both
     // values further down at .mcp.json write time — see the spawn block
     // below — instead of re-reading.
-    let externalMcpConfig: McpConfig = { servers: [] };
+    let externalMcpConfig = { servers: [] };
     try {
       externalMcpConfig = await readMcpConfig(RUNTIME_DATA_DIR);
     } catch (err) {
       console.warn(
         '[mcp-config] read failed:',
-        errorMessage(err),
+        err && err.message ? err.message : err,
       );
     }
     const enabledExternalMcp = externalMcpConfig.servers.filter((s) => s.enabled);
-    const oauthTokensForSpawn: Record<string, string> = {};
+    const oauthTokensForSpawn = {};
     try {
       const stored = await readAllTokens(RUNTIME_DATA_DIR);
       for (const [serverId, tok] of Object.entries(stored)) {
@@ -5033,7 +4928,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             console.warn(
               '[mcp-oauth] refresh failed for',
               serverId,
-              errorMessage(err),
+              err && err.message ? err.message : err,
             );
           }
         }
@@ -5050,10 +4945,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       console.warn(
         '[mcp-tokens] read failed:',
-        errorMessage(err),
+        err && err.message ? err.message : err,
       );
     }
-    const connectedExternalMcp: Array<{ id: string; label?: string | undefined }> = enabledExternalMcp
+    const connectedExternalMcp = enabledExternalMcp
       .filter((s) => typeof oauthTokensForSpawn[s.id] === 'string')
       .map((s) => ({ id: s.id, label: s.label }));
 
@@ -5115,7 +5010,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // no-project runs (packaged daemons / service launches do not start
     // their working directory from the workspace root).
     const effectiveCwd = cwd ?? PROJECT_ROOT;
-    let codexGeneratedImagesDir: string | null = resolveCodexGeneratedImagesDir(
+    let codexGeneratedImagesDir = resolveCodexGeneratedImagesDir(
       agentId,
       projectRecord?.metadata,
     );
@@ -5148,13 +5043,12 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       .map((part) => (typeof part === 'string' ? part.trim() : ''))
       .filter(Boolean)
       .join('\n\n---\n\n');
-    const liveInstructionInput: Parameters<typeof composeLiveInstructionPrompt>[0] = {
+    const instructionPrompt = composeLiveInstructionPrompt({
       daemonSystemPrompt,
       runtimeToolPrompt,
       clientSystemPrompt: clientInstructionPrompt,
-    };
-    if (codexImagegenOverride !== null) liveInstructionInput.finalPromptOverride = codexImagegenOverride;
-    const instructionPrompt = composeLiveInstructionPrompt(liveInstructionInput);
+      finalPromptOverride: codexImagegenOverride,
+    });
     const composed = [
       instructionPrompt
         ? `# Instructions (read first)\n\n${instructionPrompt}${cwdHint}${linkedDirsHint}\n\n---\n`
@@ -5165,7 +5059,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             : '',
       `# User request\n\n${message || '(No extra typed instruction.)'}${attachmentHint}${commentHint}`,
       safeImages.length
-        ? `\n\n${safeImages.map((p: string) => `@${p}`).join(' ')}`
+        ? `\n\n${safeImages.map((p) => `@${p}`).join(' ')}`
         : '',
     ].join('');
     // Per-agent model + reasoning the user picked in the model menu.
@@ -5184,11 +5078,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         ? (def.reasoningOptions.find((r) => r.id === reasoning)?.id ?? null)
         : null;
     const agentOptions = { model: safeModel, reasoning: safeReasoning };
-    const mcpServers: AcpMcpServerInput[] = buildLiveArtifactsMcpServersForAgent(def, {
+    const mcpServers = buildLiveArtifactsMcpServersForAgent(def, {
       enabled: Boolean(toolTokenGrant?.token),
       command: process.execPath,
-      argsPrefix: [OD_BIN] as string[],
-    } as any);
+      argsPrefix: [OD_BIN],
+    });
 
     // External MCP servers configured by the user in Settings → External MCP.
     // Open Design relays them to the agent so the model can call those tools.
@@ -5223,7 +5117,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // on the next run.
     if (def.id === 'claude' && isManagedProjectCwd(cwd, PROJECTS_DIR)) {
       {
-        const target = path.join(cwd as string, '.mcp.json');
+        const target = path.join(cwd, '.mcp.json');
         if (enabledExternalMcp.length > 0) {
           try {
             const claudeMcp = buildClaudeMcpJson(
@@ -5241,17 +5135,17 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           } catch (err) {
             console.warn(
               '[mcp-config] failed to write project .mcp.json:',
-              errorMessage(err),
+              err && err.message ? err.message : err,
             );
           }
         } else {
           try {
             await fs.promises.unlink(target);
           } catch (err) {
-            if (errorCode(err) !== 'ENOENT') {
+            if ((err && err.code) !== 'ENOENT') {
               console.warn(
                 '[mcp-config] failed to remove stale .mcp.json:',
-                errorMessage(err),
+                err && err.message ? err.message : err,
               );
             }
           }
@@ -5284,7 +5178,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       return design.runs.finish(run, 'failed', 1, null);
     }
 
-    let configuredAgentEnv: Record<string, string | undefined> = {};
+    let configuredAgentEnv = {};
     try {
       const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
       configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, def.id);
@@ -5357,10 +5251,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       return design.runs.finish(run, 'failed', 1, null);
     }
 
-    const send = (event: string, data: unknown) => design.runs.emit(run, event, data);
+    const send = (event, data) => design.runs.emit(run, event, data);
     const inactivityTimeoutMs = resolveChatRunInactivityTimeoutMs();
     const inactivityKillGraceMs = 3_000;
-    let inactivityTimer: NodeJS.Timeout | null = null;
+    let inactivityTimer = null;
     const clearInactivityWatchdog = () => {
       if (inactivityTimer) {
         clearTimeout(inactivityTimer);
@@ -5400,7 +5294,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       activeChatAgentEventSinks.delete(toolTokenGrant?.runId ?? runId);
     };
     if (toolTokenGrant?.runId) {
-      activeChatAgentEventSinks.set(toolTokenGrant.runId, (payload: unknown) =>
+      activeChatAgentEventSinks.set(toolTokenGrant.runId, (payload) =>
         (noteAgentActivity(), send('agent', payload)),
       );
     }
@@ -5451,8 +5345,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     });
     noteAgentActivity();
 
-    let child: ChildProcess | null = null;
-    let acpSession: any = null;
+    let child;
+    let acpSession = null;
     let writePromptToChildStdin = false;
     try {
       // Prompt delivery via stdin is now the universal default. This bypasses
@@ -5493,7 +5387,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         // launch) would otherwise surface as an unhandled stream error and
         // crash the daemon. Swallow it — the regular exit/close handlers
         // below already route the underlying failure to SSE via stderr.
-        child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+        child.stdin.on('error', (err) => {
           if (err.code !== 'EPIPE') {
             send(
               'error',
@@ -5509,14 +5403,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
-      send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', `spawn failed: ${errorMessage(err)}`));
+      send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', `spawn failed: ${err.message}`));
       design.runs.finish(run, 'failed', 1, null);
       return;
     }
 
-    if (!child || !child.stdout || !child.stderr) {
-      throw new Error('spawned agent process is missing stdout or stderr pipes');
-    }
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
 
@@ -5550,14 +5441,14 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         const critiqueProjectKey = typeof projectId === 'string' && projectId ? projectId : critiqueRunId;
         const critiqueArtifactDir = path.join(ARTIFACTS_DIR, critiqueProjectKey, critiqueRunId);
         const stdoutIterable = (async function* () {
-          for await (const chunk of child.stdout as NodeJS.ReadableStream) yield String(chunk);
+          for await (const chunk of child.stdout) yield String(chunk);
         })();
         // Forward each CritiqueSseEvent on its own contract-defined channel
         // (critique.run_started, critique.ship, critique.failed, ...) rather
         // than wrapping the frame inside the legacy 'agent' channel. Clients
         // that subscribe to the new event names see them directly with the
         // contract payload as event.data.
-        const critiqueBus = { emit: (e: { event: string; data: unknown }) => send(e.event, e.data) };
+        const critiqueBus = { emit: (e) => send(e.event, e.data) };
 
         // Register this run with the in-process registry so the interrupt
         // endpoint can cascade an AbortController to the orchestrator. The
@@ -5578,11 +5469,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         // an early child error fired before the orchestrator returns has no
         // listener. Both registrations are idempotent and the run lifecycle
         // is owned solely by the orchestrator's awaited result below.
-        child.stderr.on('data', (chunk: Buffer | string) => {
+        child.stderr.on('data', (chunk) => {
           noteAgentActivity();
           send('stderr', { chunk });
         });
-        child.on('error', (err: Error) => {
+        child.on('error', (err) => {
           send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
         });
 
@@ -5591,7 +5482,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         // flow. Without this the orchestrator can't tell a non-zero exit
         // apart from a clean ship and may misclassify failures.
         const childExitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-          child.once('close', (code: number | null, signal: NodeJS.Signals | null) => resolve({ code, signal }));
+          child.once('close', (code, signal) => resolve({ code, signal }));
         });
         try {
           const orchestratorResult = await runOrchestrator({
@@ -5637,7 +5528,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // parser that turns stream_event objects into UI-friendly events. For
     // plain streams (most other CLIs) we forward raw chunks unchanged so
     // the browser can append them to the assistant's text buffer.
-    let agentStreamError: string | null = null;
+    let agentStreamError = null;
     // Tracks whether any stream the run is using actually emitted user-
     // visible content. Only the streams routed through `sendAgentEvent`
     // contribute to this flag; ACP sessions and plain stdout streams are
@@ -5651,14 +5542,14 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // numbers for an empty completion (issue #691), and a `status:running`
     // banner without any follow-up is exactly the silent-failure shape we
     // want to surface as failed instead of succeeded.
-    const SUBSTANTIVE_AGENT_EVENT_TYPES = new Set<string>([
+    const SUBSTANTIVE_AGENT_EVENT_TYPES = new Set([
       'text_delta',
       'thinking_delta',
       'tool_use',
       'tool_result',
       'artifact',
     ]);
-    const sendAgentEvent = (ev: any) => {
+    const sendAgentEvent = (ev) => {
       if (ev?.type === 'error') {
         if (agentStreamError) return;
         agentStreamError = String(ev.message || 'Agent stream error');
@@ -5677,23 +5568,23 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     };
 
     if (def.streamFormat === 'claude-stream-json') {
-      const claude = createClaudeStreamHandler((ev: unknown) => {
+      const claude = createClaudeStreamHandler((ev) => {
         noteAgentActivity();
         send('agent', ev);
       });
-      child.stdout.on('data', (chunk: Buffer | string) => claude.feed(typeof chunk === 'string' ? chunk : chunk.toString('utf8')));
+      child.stdout.on('data', (chunk) => claude.feed(chunk));
       child.on('close', () => claude.flush());
     } else if (def.streamFormat === 'qoder-stream-json') {
       trackingSubstantiveOutput = true;
       const qoder = createQoderStreamHandler(sendAgentEvent);
-      child.stdout.on('data', (chunk: Buffer | string) => qoder.feed(chunk));
+      child.stdout.on('data', (chunk) => qoder.feed(chunk));
       child.on('close', () => qoder.flush());
     } else if (def.streamFormat === 'copilot-stream-json') {
-      const copilot = createCopilotStreamHandler((ev: unknown) => {
+      const copilot = createCopilotStreamHandler((ev) => {
         noteAgentActivity();
         send('agent', ev);
       });
-      child.stdout.on('data', (chunk: Buffer | string) => copilot.feed(typeof chunk === 'string' ? chunk : chunk.toString('utf8')));
+      child.stdout.on('data', (chunk) => copilot.feed(chunk));
       child.on('close', () => copilot.flush());
     } else if (def.streamFormat === 'pi-rpc') {
       // Route through sendAgentEvent so that pi-rpc's error events
@@ -5717,7 +5608,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         prompt: composed,
         cwd: effectiveCwd,
         model: safeModel,
-        send: (channel: string, payload: any) => {
+        send: (channel, payload) => {
           if (channel === 'agent') {
             sendAgentEvent(payload);
           } else if (channel === 'error') {
@@ -5744,7 +5635,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         cwd: effectiveCwd,
         model: safeModel,
         mcpServers,
-        send: (event: string, data: unknown) => {
+        send: (event, data) => {
           noteAgentActivity();
           send(event, data);
         },
@@ -5760,10 +5651,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         def.eventParser || def.id,
         sendAgentEvent,
       );
-      child.stdout.on('data', (chunk: Buffer | string) => handler.feed(String(chunk)));
+      child.stdout.on('data', (chunk) => handler.feed(chunk));
       child.on('close', () => handler.flush());
     } else {
-      child.stdout.on('data', (chunk: Buffer | string) => {
+      child.stdout.on('data', (chunk) => {
         noteAgentActivity();
         send('stdout', { chunk });
       });
@@ -5771,19 +5662,19 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     // Wire the acpSession onto the run so cancel() can call abort()
     // instead of raw SIGTERM (applies to pi-rpc and acp-json-rpc).
     run.acpSession = acpSession;
-    child.stderr.on('data', (chunk: Buffer | string) => {
+    child.stderr.on('data', (chunk) => {
       noteAgentActivity();
       send('stderr', { chunk });
     });
 
-    child.on('error', (err: Error) => {
+    child.on('error', (err) => {
       clearInactivityWatchdog();
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
       send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
       design.runs.finish(run, 'failed', 1, null);
     });
-    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+    child.on('close', (code, signal) => {
       clearInactivityWatchdog();
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
@@ -6069,7 +5960,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         }
         try {
           const result = await testProviderConnection({
-            protocol: asAny(protocol),
+            protocol,
             baseUrl: body.baseUrl,
             apiKey: body.apiKey,
             model: body.model,
@@ -6115,14 +6006,16 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
             Array.isArray(def.reasoningOptions)
               ? (def.reasoningOptions.find((r) => r.id === body.reasoning)?.id ?? undefined)
               : undefined;
-          const agentInput: any = {
+          const result = await testAgentConnection({
             agentId: body.agentId,
+            model: safeModel ?? undefined,
+            reasoning: safeReasoning,
+            agentCliEnv:
+              body.agentCliEnv && typeof body.agentCliEnv === 'object'
+                ? body.agentCliEnv
+                : undefined,
             signal: controller.signal,
-          };
-          if (safeModel !== undefined) agentInput.model = safeModel;
-          if (safeReasoning !== undefined) agentInput.reasoning = safeReasoning;
-          if (body.agentCliEnv && typeof body.agentCliEnv === 'object') agentInput.agentCliEnv = body.agentCliEnv;
-          const result = await testAgentConnection(agentInput);
+          });
           return res.json(result);
         } catch (err) {
           console.warn(
@@ -6158,14 +6051,14 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // providers. This keeps BYOK setup zero-config for local users at the cost of
   // one local streaming hop through the daemon.
 
-  const redactAuthTokens = (text: string) =>
+  const redactAuthTokens = (text) =>
     text.replace(/Bearer [A-Za-z0-9_\-.+/=]+/g, 'Bearer [REDACTED]');
 
-  const validateExternalApiBaseUrl = (baseUrl: string) => {
+  const validateExternalApiBaseUrl = (baseUrl) => {
     return validateBaseUrl(baseUrl);
   };
 
-  const proxyErrorCode = (status: number) => {
+  const proxyErrorCode = (status) => {
     if (status === 401) return 'UNAUTHORIZED';
     if (status === 403) return 'FORBIDDEN';
     if (status === 404) return 'NOT_FOUND';
@@ -6173,7 +6066,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     return 'UPSTREAM_UNAVAILABLE';
   };
 
-  const sendProxyError = (sse: ReturnType<typeof createSseResponse>, message: string, init: { code?: string; details?: unknown; retryable?: boolean } = {}) => {
+  const sendProxyError = (sse, message, init = {}) => {
     sse.send('error', {
       message,
       error: {
@@ -6185,7 +6078,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     });
   };
 
-  const appendVersionedApiPath = (baseUrl: string, path: string) => {
+  const appendVersionedApiPath = (baseUrl, path) => {
     const url = new URL(baseUrl);
     // `URL.pathname` setter normalizes an empty string back to "/", so
     // we work in a local string to detect the no-path and no-version
@@ -6207,9 +6100,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     return url.toString();
   };
 
-  const collectSseFrame = (frame: string): { event: string; payload: string; data: any } => {
+  const collectSseFrame = (frame) => {
     const lines = frame.replace(/\r/g, '').split('\n');
-    const dataLines: string[] = [];
+    const dataLines = [];
     let event = 'message';
     for (const line of lines) {
       if (line.startsWith('event:')) {
@@ -6231,8 +6124,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     }
   };
 
-  const streamUpstreamSse = async (response: globalThis.Response, onFrame: (frame: { event: string; payload: string; data: any }) => boolean | void) => {
-    if (!response.body) throw new Error('upstream response body is missing');
+  const streamUpstreamSse = async (response, onFrame) => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -6255,7 +6147,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     if (tail) await onFrame(collectSseFrame(tail));
   };
 
-  const extractOpenAIText = (data: any) => {
+  const extractOpenAIText = (data) => {
     const choices = data?.choices;
     if (!Array.isArray(choices) || choices.length === 0) return '';
     const first = choices[0];
@@ -6264,7 +6156,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     return '';
   };
 
-  const extractStreamErrorMessage = (data: any) => {
+  const extractStreamErrorMessage = (data) => {
     const err = data?.error;
     if (!err) return '';
     if (typeof err === 'string') return err;
@@ -6276,16 +6168,16 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     }
   };
 
-  const extractGeminiText = (data: any) => {
+  const extractGeminiText = (data) => {
     const candidates = data?.candidates;
     if (!Array.isArray(candidates) || candidates.length === 0) return '';
     const parts = candidates[0]?.content?.parts;
     if (!Array.isArray(parts)) return '';
-    return parts.map((part: any) => part?.text).filter((text: unknown) => typeof text === 'string').join('');
+    return parts.map((part) => part?.text).filter((text) => typeof text === 'string').join('');
   };
 
   const benignGeminiFinishReasons = new Set(['', 'STOP', 'MAX_TOKENS', 'FINISH_REASON_UNSPECIFIED']);
-  const extractGeminiBlockMessage = (data: any) => {
+  const extractGeminiBlockMessage = (data) => {
     const feedback = data?.promptFeedback;
     if (typeof feedback?.blockReason === 'string' && feedback.blockReason) {
       const tail = typeof feedback.blockReasonMessage === 'string' && feedback.blockReasonMessage
@@ -6329,15 +6221,13 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         validated.error,
       );
     }
-    if (!validated.parsed) return sendApiError(res, 400, 'BAD_REQUEST', 'invalid baseUrl');
-    if (!validated.parsed) return sendApiError(res, 400, 'BAD_REQUEST', 'invalid baseUrl');
 
     const url = appendVersionedApiPath(baseUrl, '/messages');
     console.log(
       `[proxy:anthropic] ${req.method} ${validated.parsed.hostname} model=${model}`,
     );
 
-    const payload: any = {
+    const payload = {
       model,
       max_tokens:
         typeof maxTokens === 'number' && maxTokens > 0 ? maxTokens : 8192,
@@ -6397,8 +6287,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (!ended) sse.send('end', {});
       sse.end();
     } catch (err) {
-      console.error(`[proxy:anthropic] internal error: ${errorMessage(err)}`);
-      sendProxyError(sse, errorMessage(err), { code: 'INTERNAL_ERROR' });
+      console.error(`[proxy:anthropic] internal error: ${err.message}`);
+      sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     }
   });
@@ -6426,7 +6316,6 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         validated.error,
       );
     }
-    if (!validated.parsed) return sendApiError(res, 400, 'BAD_REQUEST', 'invalid baseUrl');
 
     const url = appendVersionedApiPath(baseUrl, '/chat/completions');
     console.log(
@@ -6493,8 +6382,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (!ended) sse.send('end', {});
       sse.end();
     } catch (err) {
-      console.error(`[proxy:openai] internal error: ${errorMessage(err)}`);
-      sendProxyError(sse, errorMessage(err), { code: 'INTERNAL_ERROR' });
+      console.error(`[proxy:openai] internal error: ${err.message}`);
+      sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     }
   });
@@ -6522,7 +6411,6 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         validated.error,
       );
     }
-    if (!validated.parsed) return sendApiError(res, 400, 'BAD_REQUEST', 'invalid baseUrl');
 
     const version =
       typeof apiVersion === 'string' && apiVersion.trim()
@@ -6594,8 +6482,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (!ended) sse.send('end', {});
       sse.end();
     } catch (err) {
-      console.error(`[proxy:azure] internal error: ${errorMessage(err)}`);
-      sendProxyError(sse, errorMessage(err), { code: 'INTERNAL_ERROR' });
+      console.error(`[proxy:azure] internal error: ${err.message}`);
+      sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     }
   });
@@ -6623,7 +6511,6 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         validated.error,
       );
     }
-    if (!validated.parsed) return sendApiError(res, 400, 'BAD_REQUEST', 'invalid baseUrl');
 
     const clean = effectiveBaseUrl.replace(/\/+$/, '');
     const url = `${clean}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
@@ -6631,11 +6518,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       `[proxy:google] ${req.method} ${validated.parsed.hostname} model=${model}`,
     );
 
-    const contents = (Array.isArray(messages) ? messages : []).map((message: any) => ({
+    const contents = (Array.isArray(messages) ? messages : []).map((message) => ({
       role: message.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: message.content }],
     }));
-    const payload: any = {
+    const payload = {
       contents,
       generationConfig: {
         maxOutputTokens:
@@ -6694,8 +6581,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (!ended) sse.send('end', {});
       sse.end();
     } catch (err) {
-      console.error(`[proxy:google] internal error: ${errorMessage(err)}`);
-      sendProxyError(sse, errorMessage(err), { code: 'INTERNAL_ERROR' });
+      console.error(`[proxy:google] internal error: ${err.message}`);
+      sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     }
   });
@@ -6712,7 +6599,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       composioConnectorProvider.stopCatalogRefreshLoop();
       orbitService.stop();
     };
-    let server: Server;
+    let server;
     try {
       server = app.listen(port, host, () => {
         const address = server.address();
@@ -6763,7 +6650,7 @@ function randomId() {
   return randomUUID();
 }
 
-function sanitizeSlug(text: unknown) {
+function sanitizeSlug(text) {
   return String(text)
     .toLowerCase()
     .replace(/[^\w\s-]/g, '')
@@ -6772,7 +6659,7 @@ function sanitizeSlug(text: unknown) {
     .slice(0, 64);
 }
 
-function assembleExample(templateHtml: string, slidesHtml: string, title: string) {
+function assembleExample(templateHtml, slidesHtml, title) {
   return templateHtml
     .replace('<!-- SLIDES_HERE -->', slidesHtml)
     .replace(

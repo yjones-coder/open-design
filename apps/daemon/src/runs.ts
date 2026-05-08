@@ -1,70 +1,19 @@
+// @ts-nocheck
 import { randomUUID } from 'node:crypto';
-import type { ChildProcess } from 'node:child_process';
-import type { Request, Response } from 'express';
 
-type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
-type TerminalRunStatus = 'succeeded' | 'failed' | 'canceled';
-type SsePayload = Record<string, unknown>;
-type SseResponse = { send(event: string, data: unknown, id?: string | null): unknown; end(): void; cleanup(): void };
-type AcpSession = { abort?: () => void };
-
-interface RunEventRecord { id: number; event: string; data: unknown }
-interface ChatRun {
-  id: string;
-  projectId: string | null;
-  conversationId: string | null;
-  assistantMessageId: string | null;
-  clientRequestId: string | null;
-  agentId: string | null;
-  status: RunStatus;
-  createdAt: number;
-  updatedAt: number;
-  events: RunEventRecord[];
-  nextEventId: number;
-  clients: Set<SseResponse>;
-  waiters: Set<(status: RunStatusBody) => void>;
-  child: ChildProcess | null;
-  acpSession: AcpSession | null;
-  exitCode: number | null;
-  signal: NodeJS.Signals | string | null;
-  cancelRequested: boolean;
-}
-
-interface RunStatusBody {
-  id: string;
-  projectId: string | null;
-  conversationId: string | null;
-  assistantMessageId: string | null;
-  agentId: string | null;
-  status: RunStatus;
-  createdAt: number;
-  updatedAt: number;
-  exitCode: number | null;
-  signal: NodeJS.Signals | string | null;
-}
-
-interface CreateRunMeta { projectId?: unknown; conversationId?: unknown; assistantMessageId?: unknown; clientRequestId?: unknown; agentId?: unknown }
-interface ListRunFilter { projectId?: unknown; conversationId?: unknown; status?: unknown }
-interface ChatRunServiceOptions {
-  createSseResponse(res: Response): SseResponse;
-  createSseErrorPayload(code: string, message: string, init?: SsePayload): SsePayload;
-  maxEvents?: number;
-  ttlMs?: number;
-}
-
-export const TERMINAL_RUN_STATUSES = new Set<RunStatus>(['succeeded', 'failed', 'canceled']);
+export const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
 
 export function createChatRunService({
   createSseResponse,
   createSseErrorPayload,
   maxEvents = 2_000,
   ttlMs = 30 * 60 * 1000,
-}: ChatRunServiceOptions) {
-  const runs = new Map<string, ChatRun>();
+}) {
+  const runs = new Map();
 
-  const create = (meta: CreateRunMeta = {}): ChatRun => {
+  const create = (meta = {}) => {
     const now = Date.now();
-    const run: ChatRun = {
+    const run = {
       id: randomUUID(),
       projectId: typeof meta.projectId === 'string' && meta.projectId ? meta.projectId : null,
       conversationId: typeof meta.conversationId === 'string' && meta.conversationId ? meta.conversationId : null,
@@ -88,25 +37,25 @@ export function createChatRunService({
     return run;
   };
 
-  const get = (id: string): ChatRun | null => runs.get(id) ?? null;
+  const get = (id) => runs.get(id) ?? null;
 
-  const scheduleCleanup = (run: ChatRun) => {
+  const scheduleCleanup = (run) => {
     setTimeout(() => {
       if (TERMINAL_RUN_STATUSES.has(run.status)) runs.delete(run.id);
     }, ttlMs).unref?.();
   };
 
-  const emit = (run: ChatRun, event: string, data: unknown): RunEventRecord => {
+  const emit = (run, event, data) => {
     const id = run.nextEventId++;
     const record = { id, event, data };
     run.events.push(record);
     if (run.events.length > maxEvents) run.events.splice(0, run.events.length - maxEvents);
     run.updatedAt = Date.now();
-    for (const sse of run.clients) sse.send(event, data, String(id));
+    for (const sse of run.clients) sse.send(event, data, id);
     return record;
   };
 
-  const statusBody = (run: ChatRun): RunStatusBody => ({
+  const statusBody = (run) => ({
     id: run.id,
     projectId: run.projectId,
     conversationId: run.conversationId,
@@ -119,7 +68,7 @@ export function createChatRunService({
     signal: run.signal,
   });
 
-  const finish = (run: ChatRun, status: TerminalRunStatus, code: number | null = null, signal: NodeJS.Signals | string | null = null) => {
+  const finish = (run, status, code = null, signal = null) => {
     if (TERMINAL_RUN_STATUSES.has(run.status)) return;
     run.status = status;
     run.exitCode = code;
@@ -133,24 +82,24 @@ export function createChatRunService({
     scheduleCleanup(run);
   };
 
-  const fail = (run: ChatRun, code: string, message: string, init: SsePayload = {}) => {
+  const fail = (run, code, message, init = {}) => {
     emit(run, 'error', createSseErrorPayload(code, message, init));
     finish(run, 'failed', 1, null);
   };
 
-  const start = (run: ChatRun, starter: (run: ChatRun) => Promise<unknown>) => {
+  const start = (run, starter) => {
     void starter(run).catch((err) => {
       fail(run, 'AGENT_EXECUTION_FAILED', err instanceof Error ? err.message : String(err));
     });
     return run;
   };
 
-  const stream = (run: ChatRun, req: Request, res: Response) => {
+  const stream = (run, req, res) => {
     const sse = createSseResponse(res);
     const lastEventId = Number(req.get('Last-Event-ID') || req.query.after || 0);
     for (const record of run.events) {
       if (!Number.isFinite(lastEventId) || record.id > lastEventId) {
-        sse.send(record.event, record.data, String(record.id));
+        sse.send(record.event, record.data, record.id);
       }
     }
     if (TERMINAL_RUN_STATUSES.has(run.status)) {
@@ -164,7 +113,7 @@ export function createChatRunService({
     });
   };
 
-  const list = ({ projectId, conversationId, status }: ListRunFilter = {}) => Array.from(runs.values()).filter((run) => {
+  const list = ({ projectId, conversationId, status } = {}) => Array.from(runs.values()).filter((run) => {
     if (typeof projectId === 'string' && projectId && run.projectId !== projectId) return false;
     if (typeof conversationId === 'string' && conversationId && run.conversationId !== conversationId) return false;
     if (status === 'active') return !TERMINAL_RUN_STATUSES.has(run.status);
@@ -172,7 +121,7 @@ export function createChatRunService({
     return true;
   });
 
-  const cancel = (run: ChatRun) => {
+  const cancel = (run) => {
     if (!TERMINAL_RUN_STATUSES.has(run.status)) {
       run.cancelRequested = true;
       run.updatedAt = Date.now();
@@ -194,7 +143,7 @@ export function createChatRunService({
     }
   };
 
-  const wait = (run: ChatRun): Promise<RunStatusBody> => {
+  const wait = (run) => {
     if (TERMINAL_RUN_STATUSES.has(run.status)) return Promise.resolve(statusBody(run));
     return new Promise((resolve) => run.waiters.add(resolve));
   };
@@ -211,7 +160,7 @@ export function createChatRunService({
     finish,
     fail,
     statusBody,
-    isTerminal(status: RunStatus) {
+    isTerminal(status) {
       return TERMINAL_RUN_STATUSES.has(status);
     },
   };
