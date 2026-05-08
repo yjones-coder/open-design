@@ -20,19 +20,32 @@ function generateInstallationId(): string {
 export function PrivacySection({ cfg, setCfg }: Props): JSX.Element {
   const t = useT();
   const telemetry: TelemetryConfig = cfg.telemetry ?? {};
-  // `installationId === undefined` means the user has never seen the consent
-  // surface. After the first decision it's either a uuid (opted in) or
-  // `null` (declined). That gates the consent card vs the toggle row.
-  const hasMadeConsentDecision = cfg.installationId !== undefined;
+  // `privacyDecisionAt` gates the consent surface. installationId is only
+  // the anonymous reporting id and can be rotated by Delete my data without
+  // making the first-run banner appear again.
+  const hasMadeConsentDecision = cfg.privacyDecisionAt != null;
 
   function patchTelemetry(patch: Partial<TelemetryConfig>): void {
-    setCfg((c) => ({ ...c, telemetry: { ...(c.telemetry ?? {}), ...patch } }));
+    setCfg((c) => {
+      const nextTelemetry = { ...(c.telemetry ?? {}), ...patch };
+      const shouldHaveId = Object.values(nextTelemetry).some((v) => v === true);
+      return {
+        ...c,
+        installationId:
+          shouldHaveId && !c.installationId
+            ? generateInstallationId()
+            : c.installationId,
+        privacyDecisionAt: Date.now(),
+        telemetry: nextTelemetry,
+      };
+    });
   }
 
   function shareUsage(): void {
     setCfg((c) => ({
       ...c,
       installationId: generateInstallationId(),
+      privacyDecisionAt: Date.now(),
       telemetry: { metrics: true, content: true, artifactManifest: false },
     }));
   }
@@ -41,6 +54,16 @@ export function PrivacySection({ cfg, setCfg }: Props): JSX.Element {
     setCfg((c) => ({
       ...c,
       installationId: null,
+      privacyDecisionAt: Date.now(),
+      telemetry: { metrics: false, content: false, artifactManifest: false },
+    }));
+  }
+
+  function deleteMyData(): void {
+    setCfg((c) => ({
+      ...c,
+      installationId: generateInstallationId(),
+      privacyDecisionAt: c.privacyDecisionAt ?? Date.now(),
       telemetry: { metrics: false, content: false, artifactManifest: false },
     }));
   }
@@ -97,7 +120,7 @@ export function PrivacySection({ cfg, setCfg }: Props): JSX.Element {
             <button
               type="button"
               className="ghost"
-              onClick={declineUsage}
+              onClick={deleteMyData}
               style={{ alignSelf: 'flex-start' }}
             >
               <Icon name="refresh" size={13} />

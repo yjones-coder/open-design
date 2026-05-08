@@ -443,6 +443,25 @@ describe('app-config telemetry prefs', () => {
     expect(cfg.installationId).toBeUndefined();
   });
 
+  it('persists privacyDecisionAt as a timestamp', async () => {
+    await writeAppConfig(dataDir, { privacyDecisionAt: 1778244000000 });
+    const cfg = await readAppConfig(dataDir);
+    expect(cfg.privacyDecisionAt).toBe(1778244000000);
+  });
+
+  it('clears privacyDecisionAt when null is sent', async () => {
+    await writeAppConfig(dataDir, { privacyDecisionAt: 1778244000000 });
+    await writeAppConfig(dataDir, { privacyDecisionAt: null });
+    const cfg = await readAppConfig(dataDir);
+    expect(cfg.privacyDecisionAt).toBeNull();
+  });
+
+  it('drops privacyDecisionAt of wrong type', async () => {
+    await writeAppConfig(dataDir, { privacyDecisionAt: 'yesterday' } as any);
+    const cfg = await readAppConfig(dataDir);
+    expect(cfg.privacyDecisionAt).toBeUndefined();
+  });
+
   it('persists full telemetry prefs', async () => {
     await writeAppConfig(dataDir, {
       telemetry: { metrics: true, content: true, artifactManifest: false },

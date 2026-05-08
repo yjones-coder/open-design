@@ -29,11 +29,14 @@ const OUTPUT_MAX_BYTES = 16 * 1024;
 const ARTIFACTS_MAX_ITEMS = 50;
 const SESSION_ID_MAX = 200; // Langfuse drops sessionIds longer than this.
 const HARD_BATCH_MAX_BYTES = 1024 * 1024;
-const FETCH_TIMEOUT_MS = 5000;
+const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
+const DEFAULT_FETCH_RETRIES = 1;
 
 export interface LangfuseConfig {
   authHeader: string;
   baseUrl: string;
+  timeoutMs: number;
+  retries: number;
 }
 
 export interface RunSummary {
@@ -134,7 +137,27 @@ export function readLangfuseConfig(
   const authHeader =
     'Basic ' +
     Buffer.from(`${publicKey}:${secretKey}`, 'utf8').toString('base64');
-  return { authHeader, baseUrl };
+  return {
+    authHeader,
+    baseUrl,
+    timeoutMs: parsePositiveInt(
+      env.LANGFUSE_TIMEOUT_MS,
+      DEFAULT_FETCH_TIMEOUT_MS,
+    ),
+    retries: parseNonNegativeInt(env.LANGFUSE_RETRIES, DEFAULT_FETCH_RETRIES),
+  };
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseNonNegativeInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 // Byte-aware UTF-8 truncation. JS String.length counts UTF-16 code units,
@@ -298,48 +321,70 @@ async function postLangfuseBatch(
   batch: unknown[],
   fetchImpl: typeof fetch,
 ): Promise<void> {
-  try {
-    const response = await fetchImpl(`${config.baseUrl}/api/public/ingestion`, {
-      method: 'POST',
-      headers: {
-        Authorization: config.authHeader,
-        'Content-Type': 'application/json',
-      },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      body: JSON.stringify({ batch }),
-    });
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      console.warn(
-        `[langfuse-trace] Ingestion failed ${response.status}: ${body.slice(0, 200)}`,
-      );
-      return;
-    }
-    // Langfuse legacy ingestion responds with HTTP 207 Multi-Status whose
-    // body shape is `{ successes: [...], errors: [...] }`. `response.ok`
-    // is true for 207, so per-event validation errors slip through unless
-    // we look at the body. Surface them so a malformed payload doesn't
-    // silently disappear server-side.
-    const body = await response.text().catch(() => '');
-    if (!body) return;
-    let parsed: unknown;
+  const attempts = config.retries + 1;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      parsed = JSON.parse(body);
-    } catch {
+      const response = await fetchImpl(`${config.baseUrl}/api/public/ingestion`, {
+        method: 'POST',
+        headers: {
+          Authorization: config.authHeader,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(config.timeoutMs),
+        body: JSON.stringify({ batch }),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        if (
+          attempt < attempts &&
+          (response.status === 429 || response.status >= 500)
+        ) {
+          await waitBeforeRetry(attempt);
+          continue;
+        }
+        console.warn(
+          `[langfuse-trace] Ingestion failed ${response.status}: ${body.slice(0, 200)}`,
+        );
+        return;
+      }
+      // Langfuse legacy ingestion responds with HTTP 207 Multi-Status whose
+      // body shape is `{ successes: [...], errors: [...] }`. `response.ok`
+      // is true for 207, so per-event validation errors slip through unless
+      // we look at the body. Surface them so a malformed payload doesn't
+      // silently disappear server-side.
+      const body = await response.text().catch(() => '');
+      if (!body) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return;
+      }
+      const errors =
+        parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? (parsed as { errors?: unknown }).errors
+          : undefined;
+      if (Array.isArray(errors) && errors.length > 0) {
+        console.warn(
+          `[langfuse-trace] Per-event errors (${errors.length}): ${JSON.stringify(errors).slice(0, 500)}`,
+        );
+      }
+      return;
+    } catch (error) {
+      if (attempt < attempts) {
+        await waitBeforeRetry(attempt);
+        continue;
+      }
+      console.warn(`[langfuse-trace] Fetch error: ${String(error)}`);
       return;
     }
-    const errors =
-      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? (parsed as { errors?: unknown }).errors
-        : undefined;
-    if (Array.isArray(errors) && errors.length > 0) {
-      console.warn(
-        `[langfuse-trace] Per-event errors (${errors.length}): ${JSON.stringify(errors).slice(0, 500)}`,
-      );
-    }
-  } catch (error) {
-    console.warn(`[langfuse-trace] Fetch error: ${String(error)}`);
   }
+}
+
+function waitBeforeRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) =>
+    setTimeout(resolve, Math.min(250 * attempt, 1000)),
+  );
 }
 
 export async function reportRunCompleted(

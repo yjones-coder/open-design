@@ -41,6 +41,7 @@ export interface AppConfigPrefs {
   disabledDesignSystems?: string[];
   installationId?: string | null;
   telemetry?: TelemetryPrefs;
+  privacyDecisionAt?: number | null;
   orbit?: OrbitConfigPrefs;
 }
 
@@ -55,6 +56,7 @@ const ALLOWED_KEYS: ReadonlySet<keyof AppConfigPrefs> = new Set([
   'disabledDesignSystems',
   'installationId',
   'telemetry',
+  'privacyDecisionAt',
   'orbit',
 ] as const);
 
@@ -219,6 +221,17 @@ function applyConfigValue(
     } else {
       delete target[key];
     }
+  }
+  if (key === 'privacyDecisionAt') {
+    if (
+      value === null ||
+      (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+    ) {
+      target[key] = value;
+    } else {
+      delete target[key];
+    }
+    return;
   }
   if (key === 'orbit') {
     const validated = validateOrbit(value);

@@ -304,8 +304,12 @@ export interface AppConfig {
   // Anonymous install identifier for telemetry. Generated locally the first
   // time a user opts in via Settings → Privacy. `null` after the user
   // explicitly opts out (or rotates "Delete my data"); `undefined` when the
-  // user has never seen the consent surface.
+  // daemon has not assigned an anonymous id yet.
   installationId?: string | null;
+  // Unix-millis timestamp recording that the first-run privacy prompt was
+  // resolved. This is independent from installationId so Delete my data can
+  // rotate or clear the anonymous id without re-opening the consent banner.
+  privacyDecisionAt?: number | null;
   // Privacy preferences governing what (if anything) is shipped to the
   // Langfuse-backed telemetry endpoint. All three default to off until the
   // user makes an explicit choice.

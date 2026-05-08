@@ -40,6 +40,8 @@ function makeCtx(overrides: Partial<ReportContext> = {}): ReportContext {
 const TEST_CONFIG: LangfuseConfig = {
   authHeader: 'Basic dGVzdA==',
   baseUrl: 'https://us.cloud.langfuse.com',
+  timeoutMs: 20_000,
+  retries: 0,
 };
 
 describe('readLangfuseConfig', () => {
@@ -84,6 +86,28 @@ describe('readLangfuseConfig', () => {
       LANGFUSE_BASE_URL: 'https://cloud.langfuse.com//',
     });
     expect(cfg!.baseUrl).toBe('https://cloud.langfuse.com');
+  });
+
+  it('reads optional timeout and retry tuning from env', () => {
+    const cfg = readLangfuseConfig({
+      LANGFUSE_PUBLIC_KEY: 'pk',
+      LANGFUSE_SECRET_KEY: 'sk',
+      LANGFUSE_TIMEOUT_MS: '45000',
+      LANGFUSE_RETRIES: '2',
+    });
+    expect(cfg!.timeoutMs).toBe(45_000);
+    expect(cfg!.retries).toBe(2);
+  });
+
+  it('falls back when timeout and retry env values are invalid', () => {
+    const cfg = readLangfuseConfig({
+      LANGFUSE_PUBLIC_KEY: 'pk',
+      LANGFUSE_SECRET_KEY: 'sk',
+      LANGFUSE_TIMEOUT_MS: '-1',
+      LANGFUSE_RETRIES: '-2',
+    });
+    expect(cfg!.timeoutMs).toBe(20_000);
+    expect(cfg!.retries).toBe(1);
   });
 });
 
@@ -433,6 +457,19 @@ describe('reportRunCompleted', () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Fetch error'),
     );
+  });
+
+  it('retries once when fetch rejects before warning', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce(new Response('{}', { status: 207 }));
+    await reportRunCompleted(makeCtx(), {
+      config: { ...TEST_CONFIG, retries: 1 },
+      fetchImpl: fetchSpy as any,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('only warns (does not throw) when ingestion responds non-2xx', async () => {

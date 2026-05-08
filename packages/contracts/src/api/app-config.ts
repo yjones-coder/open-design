@@ -30,6 +30,14 @@ export interface AppConfigPrefs {
   disabledDesignSystems?: string[];
   installationId?: string | null;
   telemetry?: TelemetryPrefs;
+  /**
+   * Unix-millis timestamp of when the user resolved the first-run privacy
+   * consent surface (Share or Decline). Set on first decision and on
+   * subsequent toggles in Settings → Privacy. Independent of
+   * installationId so that "Delete my data" can rotate the id without
+   * re-popping the consent banner.
+   */
+  privacyDecisionAt?: number | null;
   orbit?: OrbitConfigPrefs;
 }
 

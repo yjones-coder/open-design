@@ -356,6 +356,7 @@ export async function syncComposioConfigToDaemon(
 const DAEMON_OWNED_KEYS = new Set<keyof AppConfig>([
   'installationId',
   'telemetry',
+  'privacyDecisionAt',
 ]);
 
 export function saveConfig(config: AppConfig): void {
@@ -406,6 +407,17 @@ export function mergeDaemonConfig(
   }
   if (daemonConfig.telemetry !== undefined) {
     next.telemetry = { ...daemonConfig.telemetry };
+  }
+  if (daemonConfig.privacyDecisionAt !== undefined) {
+    next.privacyDecisionAt = daemonConfig.privacyDecisionAt;
+  } else if (
+    daemonConfig.installationId !== undefined ||
+    daemonConfig.telemetry !== undefined
+  ) {
+    // One-shot migration for configs created before privacyDecisionAt
+    // existed. If the daemon already has an id or telemetry prefs, the user
+    // has resolved the first-run prompt and should not see it again.
+    next.privacyDecisionAt = Date.now();
   }
   return next;
 }
@@ -464,6 +476,7 @@ export async function syncConfigToDaemon(
     orbit: normalizeOrbit(config.orbit),
     installationId: config.installationId,
     telemetry: config.telemetry,
+    privacyDecisionAt: config.privacyDecisionAt,
   };
   try {
     const response = await fetch('/api/app-config', {

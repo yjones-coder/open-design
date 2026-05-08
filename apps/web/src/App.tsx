@@ -252,11 +252,10 @@ export function App() {
         // Hold the welcome modal until the user has resolved the privacy
         // consent banner. Showing both at the same time made the banner
         // race the Settings dialog (it briefly flashed and was then
-        // covered by the modal backdrop). When `installationId` is still
-        // undefined we let the banner own the foreground; the Share /
-        // Not now handlers re-trigger the welcome modal once the
-        // consent decision is persisted.
-        if (!next.onboardingCompleted && next.installationId !== undefined) {
+        // covered by the modal backdrop). `privacyDecisionAt` is the
+        // durable consent gate; installationId can rotate later when the
+        // user clicks Delete my data without re-opening this banner.
+        if (!next.onboardingCompleted && next.privacyDecisionAt != null) {
           setSettingsWelcome(true);
           setSettingsOpen(true);
         }
@@ -716,18 +715,19 @@ export function App() {
       ) : null}
       {/* First-run privacy consent banner. Stays mounted in the bottom-right
           until the user picks Share or Don't share (gating on
-          `installationId === undefined`). The banner sits above the
+          `privacyDecisionAt`). The banner sits above the
           Settings welcome modal — first-run users on a fresh install
           would otherwise see the welcome modal pop on top of the banner
           and have no way to read or interact with the consent decision
           until they closed Settings. */}
-      {config.installationId === undefined ? (
+      {config.privacyDecisionAt == null ? (
         <PrivacyConsentModal
           onShare={() => {
             const installationId = generateInstallationIdSafe();
             void handleConfigPersist({
               ...latestPersistedConfigRef.current,
               installationId,
+              privacyDecisionAt: Date.now(),
               telemetry: { metrics: true, content: true, artifactManifest: false },
             });
             // Hand the foreground over to the welcome modal now that the
@@ -742,6 +742,7 @@ export function App() {
             void handleConfigPersist({
               ...latestPersistedConfigRef.current,
               installationId: null,
+              privacyDecisionAt: Date.now(),
               telemetry: { metrics: false, content: false, artifactManifest: false },
             });
             if (!latestPersistedConfigRef.current.onboardingCompleted) {
