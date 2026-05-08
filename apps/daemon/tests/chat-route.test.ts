@@ -678,7 +678,7 @@ describe('chat prompt helpers', () => {
         daemonSystemPrompt: 'daemon prompt',
         runtimeToolPrompt: 'runtime tools',
         clientSystemPrompt: 'client media contract',
-        ...(validationFailedOverride ? { finalPromptOverride: validationFailedOverride } : {}),
+        finalPromptOverride: validationFailedOverride,
       });
 
       expect(validatedDir).toBeNull();

@@ -40,7 +40,7 @@ function minimalAgentDef(partial: Pick<TestAgentDef, 'bin'> & Partial<TestAgentD
     buildArgs: partial.buildArgs ?? (() => []),
     streamFormat: partial.streamFormat ?? 'plain',
     ...rest,
-  };
+  } as unknown as TestAgentDef;
 }
 
 const codex = requireAgent('codex');
@@ -241,7 +241,7 @@ test('codex model picker includes current OpenAI choices in priority order', asy
     assert.ok(detected);
     assert.equal(detected.available, true);
     assert.equal(detected.version, 'codex 1.0.0');
-    assert.deepEqual(detected.models.map((m) => m.id), expectedModels);
+    assert.deepEqual(detected.models.map((m: { id: string }) => m.id), expectedModels);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -336,7 +336,7 @@ test('live artifact MCP discovery can use daemon-resolved CLI command', () => {
     buildLiveArtifactsMcpServersForAgent(hermes, {
       command: process.execPath,
       argsPrefix: ['/workspace/apps/daemon/dist/cli.js'],
-    }),
+    } as unknown as Parameters<typeof buildLiveArtifactsMcpServersForAgent>[1]),
     [
       {
         name: 'open-design-live-artifacts',
@@ -790,7 +790,7 @@ test('qoder args omit empty, non-string, and relative image attachment entries',
     './uploads/logo.png',
     'uploads/hero.png',
     '/tmp/uploads/logo.png',
-  ]);
+  ], []);
 
   assert.deepEqual(
     args.filter((arg) => arg === '--attachment').length,
@@ -814,7 +814,10 @@ test('qoder adapter inherits QODER_PERSONAL_ACCESS_TOKEN from daemon env', () =>
 });
 
 test('qoder adapter does not define static secret env', () => {
-  assert.equal(qoder.env?.QODER_PERSONAL_ACCESS_TOKEN, undefined);
+  assert.equal(
+    (qoder as TestAgentDef & { env?: Record<string, string> }).env?.QODER_PERSONAL_ACCESS_TOKEN,
+    undefined,
+  );
 });
 
 test('detectAgents keeps qoder unavailable with fallback metadata when qodercli is missing', async () => {
@@ -829,7 +832,7 @@ test('detectAgents keeps qoder unavailable with fallback metadata when qodercli 
     assert.ok(detected);
     assert.equal(detected.available, false);
     assert.equal(detected.bin, 'qodercli');
-    assert.deepEqual(detected.models.map((m) => m.id), [
+    assert.deepEqual(detected.models.map((m: { id: string }) => m.id), [
       'default',
       'lite',
       'efficient',
@@ -1753,9 +1756,10 @@ test('deepseek entry does not advertise deepseek-tui as a fallback bin', () => {
   // the first /api/chat run fail. Pin the absence so the fallback can't
   // drift back without an accompanying buildArgs branch + test.
   assert.equal(
-    Array.isArray(deepseek.fallbackBins) && deepseek.fallbackBins.length > 0,
+    Array.isArray((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins)
+      && ((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins?.length ?? 0) > 0,
     false,
-    `deepseek must not declare fallbackBins until the deepseek-tui-only invocation is implemented and tested; got ${JSON.stringify(deepseek.fallbackBins)}`,
+    `deepseek must not declare fallbackBins until the deepseek-tui-only invocation is implemented and tested; got ${JSON.stringify((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins)}`,
   );
 });
 
