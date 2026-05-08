@@ -161,6 +161,96 @@ export const id: Dict = {
   'entry.loadingWorkspace': 'Memuat workspace...',
   'entry.tabImageTemplates': 'Templat gambar',
   'entry.tabVideoTemplates': 'Templat video',
+  'launchpad.placeholder': 'Build anything — a mobile app, a deck, an image…',
+  'launchpad.heroBrand': 'Open Design',
+  'launchpad.heroTagline': 'Design anything from a single prompt.',
+  'launchpad.tileMobile': 'Mobile App',
+  'launchpad.tileWeb': 'Web Dashboard',
+  'launchpad.tileLanding': 'Landing Page',
+  'launchpad.tileDeck': 'Pitch Deck',
+  'launchpad.tileImage': 'Image',
+  'launchpad.tileVideo': 'Video',
+  'launchpad.tileAudio': 'Audio',
+  'launchpad.tileConnector': 'Live Data',
+  'launchpad.tileHintMobile': 'Tab nav, card feed, primary CTA',
+  'launchpad.tileHintWeb': 'Sidebar nav, data table, stat cards',
+  'launchpad.tileHintLanding': 'Hero, feature grid, signup CTA',
+  'launchpad.tileHintDeck': '10 slides: vision, problem, solution, ask',
+  'launchpad.tileHintImage': 'Brand-aligned hero or illustration',
+  'launchpad.tileHintVideo': '5-second motion clip with smooth reveal',
+  'launchpad.tileHintAudio': 'Short product jingle or voice-over',
+  'launchpad.tileHintConnector': 'Pulls live metrics from a connected tool',
+  'launchpad.tileStarterMobile':
+    'Design a modern mobile app with bottom tab navigation, a feed of cards, and a primary CTA. Use a clean, neutral palette.',
+  'launchpad.tileStarterWeb':
+    'Design a responsive web admin dashboard with a sidebar nav, a sortable data table, and stat cards at the top.',
+  'launchpad.tileStarterLanding':
+    'Design a modern product landing page with a hero section, a 3-column feature grid, social proof, and a signup CTA.',
+  'launchpad.tileStarterDeck':
+    'Create a 10-slide product overview deck covering vision, problem, solution, product, traction, team, and ask.',
+  'launchpad.tileStarterImage':
+    'Create a hero illustration: minimalist, brand-aligned, with a clear focal subject and soft accent palette.',
+  'launchpad.tileStarterVideo':
+    'Generate a 5-second product motion clip with smooth easing and a subtle reveal of one key feature.',
+  'launchpad.tileStarterAudio':
+    'Generate a 10-second upbeat product intro jingle in a modern, friendly tone.',
+  'launchpad.tileStarterConnector':
+    'Build a dashboard that pulls live data from a connected tool and visualizes the top product metric, with a status header and a trend chart.',
+  'launchpad.tileGoLabel': 'Start',
+  'launchpad.moreCapabilities': 'Looking for inspiration?',
+  'launchpad.browseExamples': 'Browse 50+ template skills',
+    'launchpad.capPrototype': 'Prototype',
+  'launchpad.capArtifact': 'Artifact',
+  'launchpad.capDeck': 'Slide Deck',
+  'launchpad.capTemplate': 'Template',
+  'launchpad.capImage': 'Image',
+  'launchpad.capVideo': 'Video',
+  'launchpad.capAudio': 'Audio',
+  'launchpad.formFactorLabel': 'Form',
+  'launchpad.formFactorMobile': 'Mobile App',
+  'launchpad.formFactorWeb': 'Web Dashboard',
+  'launchpad.formFactorLanding': 'Landing Page',
+  'launchpad.fidelityLabel': 'Fidelity',
+  'launchpad.fidelityWireframe': 'Wireframe',
+  'launchpad.fidelityHiFi': 'Hi-fi',
+  'launchpad.tileStarterArtifact':
+    'Build a small interactive web artifact: a single-purpose tool that takes an input, processes it, and shows a clear, useful result.',
+  'launchpad.tileStarterTemplate':
+    'Create a reusable starter template that other projects can build on — a layout, component set, or page skeleton with placeholders for content.',
+  'launchpad.settingsToggle': 'Settings',
+  'launchpad.settingsEmpty': 'Defaults applied for this capability.',
+  'launchpad.settingsComingSoon': 'More options for this capability coming soon.',
+  'launchpad.examplesTitle': 'What you can design',
+  'launchpad.examplesViewAll': 'Browse all',
+  'launchpad.exampleOpenLabel': 'Open this design',
+  'launchpad.exampleHabitName': 'Daily habit tracker',
+  'launchpad.exampleHabitPrompt':
+    'Design a clean mobile habit-tracking app: 5 daily habits with streak counters, a weekly heatmap, and a calm minimal palette.',
+  'launchpad.exampleDashName': 'SaaS revenue cockpit',
+  'launchpad.exampleDashPrompt':
+    'Design a SaaS admin dashboard: ARR / MRR cards at the top, a revenue trend chart, and a customer table with filters and sortable columns.',
+  'launchpad.exampleLandingName': 'AI startup launch page',
+  'launchpad.exampleLandingPrompt':
+    'Design a modern AI product launch page: a bold hero with an animated headline, a 3-feature grid, customer logos, and a signup CTA.',
+  'launchpad.exampleDeckName': 'Series A investor deck',
+  'launchpad.exampleDeckPrompt':
+    'Create a 12-slide Series A pitch deck: vision, problem, market, product, traction, team, and ask. Editorial typography with generous whitespace.',
+  'launchpad.examplePosterName': 'Bauhaus brand poster',
+  'launchpad.examplePosterPrompt':
+    'Generate a Bauhaus-inspired brand poster: a bold geometric composition, primary palette (red, blue, yellow), strong typographic stack.',
+  'launchpad.exampleVideoName': 'Product reveal in 5s',
+  'launchpad.exampleVideoPrompt':
+    'Generate a 5-second product reveal video: smooth camera push-in, key feature highlighted with a subtle motion-graphic overlay.',
+  'launchpad.recentTitle': 'Recent activity',
+  'launchpad.recentEmpty': 'No projects yet — pick a tile above or describe what you want to build.',
+  'launchpad.resume': 'Resume',
+  'launchpad.create': 'Buat',
+  'launchpad.attach': 'Attach',
+  'launchpad.import': 'Import',
+  'launchpad.legacyToggle': 'Open legacy view',
+  'launchpad.legacyBadge': 'Legacy',
+  'launchpad.modeBadge': 'Demo · Launchpad IA',
+
 
   'promptTemplates.searchPlaceholder': 'Cari templat...',
   'promptTemplates.countLabel': '{n} hasil',

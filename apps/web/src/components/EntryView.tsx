@@ -61,6 +61,10 @@ interface Props {
   onAdoptPet: () => void;
   onAdoptPetInline: (petId: string) => void;
   onTogglePet: () => void;
+  // Optional escape hatch back to the demo Launchpad layout. Rendered as a
+  // small pill next to the avatar menu when set; absent on production
+  // builds so the legacy header stays unchanged.
+  onSwitchToLaunchpad?: () => void;
 }
 
 const SIDEBAR_MIN = 320;
@@ -239,6 +243,7 @@ export function EntryView({
   onAdoptPet,
   onAdoptPetInline,
   onTogglePet,
+  onSwitchToLaunchpad,
 }: Props) {
   const t = useT();
   const [topTab, setTopTab] = useState<TopTab>('designs');
@@ -442,7 +447,18 @@ export function EntryView({
   }, [avatarMenuOpen]);
 
   const avatarMenu = (
-    <div className="avatar-menu" ref={avatarMenuRef}>
+    <div className="avatar-menu launchpad-legacy-return" ref={avatarMenuRef}>
+      {onSwitchToLaunchpad ? (
+        <button
+          type="button"
+          className="ghost launchpad-legacy-btn"
+          onClick={onSwitchToLaunchpad}
+          title={t('launchpad.modeBadge')}
+          style={{ marginRight: 8 }}
+        >
+          ← {t('launchpad.modeBadge')}
+        </button>
+      ) : null}
       <button
         type="button"
         className="settings-icon-btn"

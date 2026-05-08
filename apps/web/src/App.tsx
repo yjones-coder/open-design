@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { EntryView } from './components/EntryView';
+import { Launchpad } from './components/Launchpad';
 import type { CreateInput } from './components/NewProjectPanel';
 import { PetOverlay } from './components/pet/PetOverlay';
 import { migrateCustomPetAtlas } from './components/pet/pets';
@@ -64,8 +65,37 @@ function normalizeSavedComposioConfig(config: AppConfig['composio']): AppConfig[
   return { ...(config ?? {}) };
 }
 
+// Demo IA toggle — `?ia=legacy` falls back to the original EntryView so
+// reviewers can A/B compare on the same build. Default is the new
+// Launchpad layout. The flag is captured once on first render so a
+// later URL change does not re-shuffle layouts mid-session; refresh to
+// switch.
+function readIaMode(): 'launchpad' | 'legacy' {
+  if (typeof window === 'undefined') return 'launchpad';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const value = params.get('ia');
+    if (value === 'legacy') return 'legacy';
+  } catch {
+    // ignore — fall through to the default below.
+  }
+  return 'launchpad';
+}
+
+function setIaModeInUrl(next: 'launchpad' | 'legacy'): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (next === 'legacy') {
+    url.searchParams.set('ia', 'legacy');
+  } else {
+    url.searchParams.delete('ia');
+  }
+  window.history.replaceState(null, '', url.toString());
+}
+
 export function App() {
   const [config, setConfig] = useState<AppConfig>(() => loadConfig());
+  const [iaMode, setIaMode] = useState<'launchpad' | 'legacy'>(() => readIaMode());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsWelcome, setSettingsWelcome] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('execution');
@@ -559,6 +589,20 @@ export function App() {
           onProjectChange={handleProjectChange}
           onProjectsRefresh={refreshProjects}
         />
+      ) : iaMode === 'launchpad' ? (
+        <Launchpad
+          skills={enabledSkills}
+          projects={projects}
+          config={config}
+          loading={bootstrapping}
+          onCreateProject={handleCreateProject}
+          onOpenProject={handleOpenProject}
+          onOpenSettings={() => openSettings()}
+          onSwitchToLegacy={() => {
+            setIaModeInUrl('legacy');
+            setIaMode('legacy');
+          }}
+        />
       ) : (
         <EntryView
           skills={enabledSkills}
@@ -581,6 +625,10 @@ export function App() {
           onAdoptPet={openPetSettings}
           onAdoptPetInline={handleAdoptPet}
           onTogglePet={handleTogglePet}
+          onSwitchToLaunchpad={() => {
+            setIaModeInUrl('launchpad');
+            setIaMode('launchpad');
+          }}
         />
       )}
       <PetOverlay

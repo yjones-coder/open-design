@@ -11561,3 +11561,695 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   font-size: 11px;
   white-space: pre-wrap;
 }
+
+/* ============================================================
+   Launchpad — demo IA shell. Center prompt + surface tiles +
+   timeline. No sidebar, no top tabs, no foot pills, no PetRail.
+   ============================================================ */
+
+.launchpad-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.launchpad-chrome-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.launchpad-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.launchpad-legacy-btn {
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+}
+
+.launchpad-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+  position: relative;
+}
+
+.launchpad-main.is-drag-hover {
+  background: var(--accent-tint);
+}
+
+.launchpad-content {
+  width: 100%;
+  max-width: 760px;
+  padding: clamp(48px, 9vh, 96px) 32px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+
+/* --- Hero ------------------------------------------------- */
+
+.launchpad-hero {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Brand-first hero hierarchy. Product name uses the serif at display
+ * scale so the splash anchors on identity; tagline below sits at body
+ * size as supporting copy. Inverts the previous eyebrow + headline
+ * pattern where the tagline carried the visual weight. */
+.launchpad-hero-brand {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: clamp(44px, 6.5vw, 72px);
+  line-height: 1.02;
+  font-weight: 500;
+  color: var(--text-strong);
+  letter-spacing: -0.025em;
+}
+
+.launchpad-hero-tagline {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* --- Prompt bar + tiles ----------------------------------- */
+
+.launchpad-prompt-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.launchpad-prompt-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 14px 16px 12px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.launchpad-prompt-bar:focus-within {
+  border-color: var(--accent);
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 3px var(--accent-tint);
+}
+
+.launchpad-prompt-input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.5;
+  min-height: 56px;
+  padding: 0;
+}
+
+.launchpad-prompt-input::placeholder {
+  color: var(--text-faint);
+}
+
+.launchpad-prompt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.launchpad-prompt-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.launchpad-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.launchpad-tool-btn:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+.launchpad-tool-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.launchpad-create-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* --- Capability tabs ---------------------------------------
+ * Compact horizontal chip strip that lives ABOVE the composer.
+ * Picks the modality (UI / Deck / Image / Video / Audio).
+ * Selection is sticky — one tab is always active. Tabs do not auto-
+ * launch a project; they configure the Create button. Wraps to a
+ * second row at narrow viewports.
+ */
+.launchpad-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.launchpad-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease,
+    color 140ms ease, transform 140ms ease;
+}
+
+.launchpad-tab:hover:not(.is-active) {
+  border-color: var(--border-strong);
+  color: var(--text-strong);
+  transform: translateY(-1px);
+}
+
+.launchpad-tab.is-active {
+  border-color: var(--accent);
+  background: var(--accent-tint, rgba(255, 100, 60, 0.1));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.launchpad-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-tint, rgba(255, 100, 60, 0.2));
+}
+
+.launchpad-tab-glyph {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.launchpad-tab-label {
+  font-size: 12.5px;
+}
+
+/* --- Settings disclosure (below composer) ------------------
+ * Holds the per-capability product-form picker. Closed by default;
+ * the toggle bar shows a one-line summary so the chosen form stays
+ * visible without forcing the panel open.
+ */
+.launchpad-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--radius);
+  background: transparent;
+  overflow: hidden;
+}
+
+.launchpad-settings.is-open {
+  background: var(--bg-subtle, var(--bg-panel));
+}
+
+.launchpad-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  width: 100%;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.launchpad-settings-toggle:hover {
+  color: var(--text-strong);
+  background: var(--bg-subtle, var(--bg-panel));
+}
+
+.launchpad-settings-toggle-label {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.launchpad-settings-toggle-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.launchpad-settings-chev {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.launchpad-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border-soft, var(--border));
+}
+
+.launchpad-settings-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.launchpad-segmented-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.launchpad-segmented-label {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 60px;
+}
+
+.launchpad-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.launchpad-segmented-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius) - 3px);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.launchpad-segmented-btn:hover:not(.is-active) {
+  background: var(--bg-subtle, var(--bg-hover));
+  color: var(--text-strong);
+}
+
+.launchpad-segmented-btn.is-active {
+  background: var(--accent);
+  color: var(--bg-panel);
+}
+
+/* --- "More" row (Browse template skills →) ----------------- */
+.launchpad-more {
+  margin-top: 4px;
+  padding: 0 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+}
+
+.launchpad-more-link {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text-link, var(--accent));
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.launchpad-more-link:hover {
+  color: var(--accent);
+}
+
+/* --- Timeline --------------------------------------------- */
+
+/* --- Examples gallery --- */
+.launchpad-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.launchpad-examples-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.launchpad-examples-title {
+  margin: 0;
+  font-family: var(--font-display, 'Tiempos Headline', 'Charter', Georgia, serif);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--text-primary, #1f1f1f);
+}
+
+.launchpad-examples-browse {
+  font-size: 12.5px;
+}
+
+.launchpad-examples-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 880px) {
+  .launchpad-examples-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 540px) {
+  .launchpad-examples-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.launchpad-example {
+  display: flex;
+}
+
+.launchpad-example-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--surface-elevated, #fff);
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
+  overflow: hidden;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+.launchpad-example-btn:hover,
+.launchpad-example-btn:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(201, 100, 66, 0.35);
+  box-shadow: 0 12px 28px -16px rgba(31, 31, 31, 0.18);
+  outline: none;
+}
+
+.launchpad-example-btn:focus-visible {
+  border-color: var(--accent, #c96442);
+  box-shadow: 0 0 0 2px rgba(201, 100, 66, 0.18);
+}
+
+.launchpad-example-thumb {
+  display: block;
+  aspect-ratio: 5 / 3;
+  width: 100%;
+  background: #f6f3ed;
+  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+}
+
+.launchpad-example-thumb svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Per-thumbnail tinted backgrounds — each capability gets a distinct
+   pastel so the grid feels curated rather than monochrome. */
+.launchpad-example-thumb-mobile-habit .launchpad-example-thumb {
+  background: linear-gradient(135deg, #fbeee5 0%, #f6f1e7 100%);
+}
+.launchpad-example-thumb-web-dash .launchpad-example-thumb {
+  background: linear-gradient(135deg, #eef2fb 0%, #f6f1e7 100%);
+}
+.launchpad-example-thumb-web-landing .launchpad-example-thumb {
+  background: linear-gradient(135deg, #f0f5ee 0%, #f6f1e7 100%);
+}
+.launchpad-example-thumb-deck-stack .launchpad-example-thumb {
+  background: linear-gradient(135deg, #f6f1e7 0%, #ece6da 100%);
+}
+.launchpad-example-thumb-poster-bauhaus .launchpad-example-thumb {
+  background: linear-gradient(135deg, #f9efde 0%, #f6f1e7 100%);
+}
+.launchpad-example-thumb-video-reveal .launchpad-example-thumb {
+  background: linear-gradient(135deg, #1f1f1f 0%, #2a2a2c 100%);
+}
+
+.launchpad-example-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+}
+
+.launchpad-example-badge {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent, #c96442);
+}
+
+.launchpad-example-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--text-primary, #1f1f1f);
+}
+
+/* Hover-revealed "Open this design →" pill, anchored to the top-right
+   of the thumbnail so it never overlaps the meta footer text. */
+.launchpad-example-cta {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(31, 31, 31, 0.78);
+  backdrop-filter: blur(6px);
+  border-radius: 999px;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
+}
+
+.launchpad-example-btn:hover .launchpad-example-cta,
+.launchpad-example-btn:focus-visible .launchpad-example-cta {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.launchpad-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.launchpad-timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.launchpad-timeline-head h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.launchpad-timeline-empty {
+  margin: 0;
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+
+.launchpad-timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.launchpad-timeline-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.launchpad-timeline-row:last-child {
+  border-bottom: 0;
+}
+
+.launchpad-timeline-row-main {
+  all: unset;
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  transition: background 120ms ease;
+}
+
+.launchpad-timeline-row-main:hover,
+.launchpad-timeline-row-main:focus-visible {
+  background: var(--bg-subtle);
+}
+
+.launchpad-timeline-when {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.launchpad-timeline-name {
+  font-size: 14px;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launchpad-timeline-status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.launchpad-timeline-resume {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.launchpad-timeline-row:hover .launchpad-timeline-resume,
+.launchpad-timeline-row:focus-within .launchpad-timeline-resume {
+  opacity: 1;
+}
+
+@media (max-width: 640px) {
+  .launchpad-timeline-resume {
+    opacity: 1;
+  }
+  .launchpad-timeline-row-main {
+    grid-template-columns: 56px 1fr;
+  }
+  .launchpad-timeline-status {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+/* Demo "exit" toggle on legacy view — small floating pill in the top
+   right next to existing avatar menu. We surface it inline rather than
+   in a dropdown so reviewers can flip back to launchpad with one click. */
+.entry-shell .launchpad-legacy-return {
+  margin-right: 8px;
+}
