@@ -247,7 +247,7 @@ describe('ConnectorsBrowser', () => {
     expect(fetchConnectorDetail).not.toHaveBeenCalled();
   });
 
-  it('does not mark failed tool preview fetches as successfully attempted', async () => {
+  it('does not keep loading after failed tool preview fetches', async () => {
     const previewConnector: ConnectorDetail = {
       ...configuredComposioConnector,
       id: 'notion',
@@ -269,7 +269,33 @@ describe('ConnectorsBrowser', () => {
     await waitFor(() => expect(fetchConnectorDetail).toHaveBeenCalledTimes(1));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fetchConnectorDetail).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Loading tools…')).toBeTruthy();
+    expect(screen.queryByText('Loading tools…')).toBeNull();
+    expect(screen.getByText('Tool details are unavailable, but this connector reports 48 tools.')).toBeTruthy();
+  });
+
+  it('keeps static preview tools visible when preview hydration fails', async () => {
+    const previewConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      id: 'notion',
+      name: 'Notion',
+      status: 'available',
+      toolCount: 48,
+      tools: [makeTool('search_pages'), makeTool('create_page')],
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([previewConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(fetchConnectorDetail).mockResolvedValue(null);
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('Notion');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Notion details' }));
+
+    await waitFor(() => expect(fetchConnectorDetail).toHaveBeenCalledTimes(1));
+    await screen.findByText('search pages');
+    expect(screen.getByText('create page')).toBeTruthy();
+    expect(screen.queryByText('Loading tools…')).toBeNull();
   });
 
   it('retries failed drawer preview hydration when the catalog refresh key changes', async () => {

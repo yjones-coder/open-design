@@ -935,6 +935,7 @@ export function ConnectorsBrowser({
           toolsPreviewLoading={Boolean(toolPreviewLoadingIds[detailConnector.id])}
           toolsLoaded={
             Boolean(toolPreviewFetchedIds[detailConnector.id])
+            || toolPreviewFailedIds[detailConnector.id] === toolPreviewRetryToken
             || hasLoadedAllAdvertisedConnectorTools(detailConnector)
           }
           logoTheme={logoTheme}
