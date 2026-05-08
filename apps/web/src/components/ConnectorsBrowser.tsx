@@ -676,7 +676,7 @@ export function ConnectorsBrowser({
       if (action === 'connect') {
         const result = await connectConnector(connectorId);
         updateConnector(result.connector);
-        if (result.connector) {
+        if (result.connector && !result.error) {
           setConnectorAuthorizationPending((curr) => updateConnectorAuthorizationPendingFromConnectResponse(curr, {
             connector: result.connector!,
             ...(result.auth === undefined ? {} : { auth: result.auth }),

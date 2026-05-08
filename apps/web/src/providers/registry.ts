@@ -351,14 +351,16 @@ export async function connectConnector(connectorId: string): Promise<ConnectorAc
       if (useExternalBrowser) {
         const opened = await openExternal(json.auth.redirectUrl);
         if (!opened) {
-          return { connector: json.connector ?? null, auth: json.auth, error: popupBlockedMessage() };
+          void cancelConnectorAuthorization(connectorId);
+          return { connector: json.connector ?? null, error: popupBlockedMessage() };
         }
       } else if (authWindow) {
         openConnectorAuthRedirect(authWindow, json.auth.redirectUrl);
       } else {
         const redirected = window.open(json.auth.redirectUrl, '_blank');
         if (!redirected) {
-          return { connector: json.connector ?? null, auth: json.auth, error: popupBlockedMessage() };
+          void cancelConnectorAuthorization(connectorId);
+          return { connector: json.connector ?? null, error: popupBlockedMessage() };
         }
       }
     } else {

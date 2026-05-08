@@ -222,4 +222,36 @@ describe('ConnectorsBrowser', () => {
     await waitFor(() => expect(cancelConnectorAuthorization).toHaveBeenCalledWith('github'));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy());
   });
+
+  it('does not mark failed OAuth launches as pending authorization', async () => {
+    const availableConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      status: 'available',
+      auth: { provider: 'composio', configured: true },
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([availableConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([availableConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(connectConnector).mockResolvedValue({
+      connector: availableConnector,
+      auth: {
+        kind: 'redirect_required',
+        redirectUrl: 'https://example.com/oauth',
+        expiresAt: '2026-05-08T10:00:00.000Z',
+      },
+      error: 'Popup blocked. Allow popups for Open Design and try again.',
+    });
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('GitHub');
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+    await waitFor(() => expect(connectConnector).toHaveBeenCalledWith('github'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(
+      JSON.parse(window.sessionStorage.getItem('od-connectors-authorization-pending') ?? '{}'),
+    ).not.toHaveProperty('github');
+  });
 });
