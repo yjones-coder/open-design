@@ -146,7 +146,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Apply release package version
-        run: npm pkg set "version=${{ needs.metadata.outputs.release_version }}" --prefix apps/packaged
+        run: npm pkg set "version=${{ needs.metadata.outputs.stable_version }}" --prefix apps/packaged
 
       - name: Prepare Apple signing certificate
         env:
@@ -285,7 +285,7 @@ jobs:
           choco install nsis -y --no-progress
 
       - name: Apply release package version
-        run: npm pkg set "version=${{ needs.metadata.outputs.release_version }}" --prefix apps/packaged
+        run: npm pkg set "version=${{ needs.metadata.outputs.stable_version }}" --prefix apps/packaged
 
       - name: Build release windows artifacts
         shell: pwsh
@@ -380,7 +380,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Apply release package version
-        run: npm pkg set "version=${{ needs.metadata.outputs.release_version }}" --prefix apps/packaged
+        run: npm pkg set "version=${{ needs.metadata.outputs.stable_version }}" --prefix apps/packaged
 
       # `--containerized` builds the AppImage inside the electronuserland/builder
       # Docker image (glibc 2.27 baseline) so the resulting binary runs on older
