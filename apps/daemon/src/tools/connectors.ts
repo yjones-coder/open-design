@@ -59,6 +59,8 @@ function connectorNeedsHydratedDiscovery(definition: ConnectorCatalogDefinition 
   return definition.toolCount !== undefined && definition.tools.length < definition.toolCount;
 }
 
+const AGENT_CONNECTOR_TOOL_HYDRATION_LIMIT = 1000;
+
 export async function listConnectorTools(context: ConnectorToolContext & { useCase?: ConnectorToolUseCase }): Promise<Awaited<ReturnType<ConnectorService['listConnectors']>>> {
   const service = context.service ?? connectorService;
   // Agent-facing tool discovery sits on the hot path for unattended Orbit
@@ -72,16 +74,26 @@ export async function listConnectorTools(context: ConnectorToolContext & { useCa
   const connectedStatusIds = Object.entries(service.listConnectorStatuses())
     .filter(([, status]) => status.status === 'connected')
     .map(([connectorId]) => connectorId);
-  const hasConnectedConnectorNeedingDiscovery = connectedStatusIds.some((connectorId) => {
+  const connectedConnectorIdsNeedingDiscovery = connectedStatusIds.filter((connectorId) => {
     const fastDefinition = fastDefinitionsById.get(connectorId);
     return connectorNeedsHydratedDiscovery(fastDefinition);
   });
   let definitions = fastDefinitions;
-  if (hasConnectedConnectorNeedingDiscovery) {
-    definitions = await service.listHydratedDefinitions();
-    const hydratedIds = new Set(definitions.map((definition) => definition.id));
-    if (connectedStatusIds.some((connectorId) => !hydratedIds.has(connectorId))) {
-      definitions = await service.listDefinitions();
+  if (connectedConnectorIdsNeedingDiscovery.length > 0) {
+    const targetedDefinitions = await Promise.all(connectedConnectorIdsNeedingDiscovery.map(async (connectorId) => {
+      const fastDefinition = fastDefinitionsById.get(connectorId);
+      return fastDefinition
+        ? await service.getPreviewDefinition(connectorId, { toolsLimit: AGENT_CONNECTOR_TOOL_HYDRATION_LIMIT })
+        : await service.getHydratedDefinition(connectorId);
+    }));
+    const targetedDefinitionsById = new Map(
+      targetedDefinitions
+        .filter((definition): definition is ConnectorCatalogDefinition => definition !== undefined)
+        .map((definition) => [definition.id, definition]),
+    );
+    definitions = fastDefinitions.map((definition) => targetedDefinitionsById.get(definition.id) ?? definition);
+    for (const definition of targetedDefinitionsById.values()) {
+      if (!fastDefinitionsById.has(definition.id)) definitions.push(definition);
     }
   }
   const entries = definitions.map((definition) => {

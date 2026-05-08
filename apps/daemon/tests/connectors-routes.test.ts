@@ -1072,7 +1072,7 @@ describe('connector routes', () => {
     expect(response.body.connectors[0].tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'github.github_search_repositories', safety: expect.objectContaining({ sideEffect: 'read', approval: 'auto' }) }),
     ]));
-    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 4 });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 1 });
   });
 
   it('hydrates connected Composio tools when the fast definition only has partial static previews', async () => {
@@ -1110,7 +1110,7 @@ describe('connector routes', () => {
       expect.objectContaining({ name: 'notion.notion_fetch_database' }),
       expect.objectContaining({ name: 'notion.notion_get_page' }),
     ]));
-    expect(composioDiscoveryRequestCounts.tools).toBeGreaterThan(0);
+    expect(composioDiscoveryRequestCounts.tools).toBe(1);
   });
 
   it('filters connected connector tools by curated use case and returns curation metadata', async () => {
