@@ -973,7 +973,10 @@ export class ComposioConnectorProvider {
     const searchParams = new URLSearchParams({ toolkit_slug: toolkitSlug.toLowerCase(), limit: String(options.limit ?? 1000) });
     if (options.cursor) searchParams.set('cursor', options.cursor);
     const response = await this.request(`/api/v3.1/tools?${searchParams.toString()}`, { method: 'GET', ...(options.signal === undefined ? {} : { signal: options.signal }) });
-    if (!response.ok) return { items: [] };
+    if (!response.ok) {
+      const message = await getComposioErrorMessage(response);
+      throw new ConnectorServiceError('CONNECTOR_EXECUTION_FAILED', message ?? `Composio tools request failed with HTTP ${response.status}`, response.status === 401 ? 401 : 502, { httpStatus: response.status });
+    }
     const payload = await response.json() as { items?: unknown; data?: unknown; next_cursor?: unknown; nextCursor?: unknown; total_items?: unknown; totalItems?: unknown };
     const items = Array.isArray(payload.items) ? payload.items : Array.isArray(payload.data) ? payload.data : [];
     const nextCursor = getString(payload.next_cursor) ?? getString(payload.nextCursor);

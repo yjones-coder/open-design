@@ -41,6 +41,7 @@ function mockComposioFetch(options = {}) {
     delayFirstToolkits,
     logoFetch,
     linkResponse = { connected_account_id: 'ca_github', status: 'ACTIVE', account_label: 'octocat@example.com' },
+    toolsFailureToolkits = [],
     toolkits,
   } = options;
   composioDiscoveryRequestCounts = { authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 };
@@ -83,9 +84,24 @@ function mockComposioFetch(options = {}) {
         { slug: 'apaleo', name: 'Apaleo', description: 'Apaleo toolkit', categories: [{ name: 'Hospitality' }], meta: { tools_count: 29 } },
       ] });
     }
+    if (parsed.pathname === '/api/v3.1/tools' && toolsFailureToolkits.includes(parsed.searchParams.get('toolkit_slug'))) {
+      composioDiscoveryRequestCounts.tools += 1;
+      return composioJson({ message: 'Composio tools unavailable' }, 503);
+    }
     if (parsed.pathname === '/api/v3.1/tools' && parsed.searchParams.get('toolkit_slug') === 'github') {
       composioDiscoveryRequestCounts.tools += 1;
       return composioJson({ items: [{ slug: 'GITHUB_SEARCH_REPOSITORIES', name: 'Search repositories', description: 'Search public and private repositories', toolkit: { slug: 'github' }, input_parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }, tags: ['read'] }] });
+    }
+    if (parsed.pathname === '/api/v3.1/tools' && parsed.searchParams.get('toolkit_slug') === 'notion') {
+      composioDiscoveryRequestCounts.tools += 1;
+      return composioJson({
+        items: [
+          { slug: 'NOTION_SEARCH', name: 'Search Notion', description: 'Search Notion pages and databases.', toolkit: { slug: 'notion' }, input_parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }, tags: ['read'] },
+          { slug: 'NOTION_FETCH_DATABASE', name: 'Fetch database', description: 'Read a Notion database.', toolkit: { slug: 'notion' }, input_parameters: { type: 'object', properties: { database_id: { type: 'string' } }, required: ['database_id'], additionalProperties: false }, tags: ['read'] },
+          { slug: 'NOTION_GET_PAGE', name: 'Get page', description: 'Read a Notion page.', toolkit: { slug: 'notion' }, input_parameters: { type: 'object', properties: { page_id: { type: 'string' } }, required: ['page_id'], additionalProperties: false }, tags: ['read'] },
+        ],
+        total_items: 48,
+      });
     }
     if (parsed.pathname === '/api/v3.1/tools' && parsed.searchParams.get('toolkit_slug') === 'slack') {
       composioDiscoveryRequestCounts.tools += 1;
@@ -120,6 +136,9 @@ function mockComposioFetch(options = {}) {
     }
     if (parsed.pathname === '/api/v3/connected_accounts/ca_slack') {
       return composioJson({ connected_account_id: 'ca_slack', status: 'ACTIVE', account_label: 'slack@example.com', toolkit: { slug: 'slack' }, auth_config: { id: lastComposioLinkRequest?.auth_config_id ?? 'ac_slack' } });
+    }
+    if (parsed.pathname === '/api/v3/connected_accounts/ca_notion') {
+      return composioJson({ connected_account_id: 'ca_notion', status: 'ACTIVE', account_label: 'notion@example.com', toolkit: { slug: 'notion' }, auth_config: { id: lastComposioLinkRequest?.auth_config_id ?? 'ac_notion' } });
     }
     if (parsed.pathname === '/api/v3.1/tools/execute/GITHUB_SEARCH_REPOSITORIES') {
       return composioJson({ successful: true, data: { results: [] }, log_id: 'log_1' });
@@ -286,7 +305,7 @@ describe('connector routes', () => {
     expect(response.status).toBe(200);
     expect(response.body.connectors.find((connector) => connector.id === 'slack')?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'slack.slack_list_channels' })]));
     expect(response.body.connectors.find((connector) => connector.id === 'github')).toMatchObject({ toolCount: 12 });
-    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 3 });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 4 });
   });
 
   it('hydrates one connector tool preview page without hydrating unrelated connectors', async () => {
@@ -313,6 +332,20 @@ describe('connector routes', () => {
     });
     expect(nextPage.body.connector.toolsNextCursor).toBeUndefined();
     expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 2 });
+  });
+
+  it('propagates Composio tool page failures during preview hydration', async () => {
+    mockComposioFetch({ toolsFailureToolkits: ['apaleo'] });
+    composioConnectorProvider.clearDiscoveryCache();
+
+    const preview = await jsonFetch(`${baseUrl}/api/connectors/apaleo?hydrateTools=true&toolsLimit=1`);
+
+    expect(preview.status).toBe(502);
+    expect(preview.body.error).toMatchObject({
+      code: 'CONNECTOR_EXECUTION_FAILED',
+      message: 'Composio tools unavailable',
+    });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 1 });
   });
 
   it('returns connector statuses by connectorId', async () => {
@@ -1039,7 +1072,45 @@ describe('connector routes', () => {
     expect(response.body.connectors[0].tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'github.github_search_repositories', safety: expect.objectContaining({ sideEffect: 'read', approval: 'auto' }) }),
     ]));
-    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 4 });
+  });
+
+  it('hydrates connected Composio tools when the fast definition only has partial static previews', async () => {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve(undefined)));
+    });
+    mockComposioFetch({
+      authConfigs: [{ id: 'ac_notion', status: 'ENABLED', toolkit: { slug: 'notion' } }],
+      linkResponse: { connected_account_id: 'ca_notion', status: 'ACTIVE', account_label: 'notion@example.com' },
+      toolkits: [
+        { slug: 'notion', name: 'Notion', description: 'Notion toolkit', categories: [{ name: 'Productivity' }], meta: { tools_count: 48 } },
+      ],
+    });
+    composioConnectorProvider.clearDiscoveryCache();
+    const started = await startServer({ port: 0, returnServer: true });
+    server = started.server;
+    baseUrl = started.url;
+    await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'cmp_test' }),
+    });
+    await jsonFetch(`${baseUrl}/api/connectors/notion/connect`, { method: 'POST' });
+    const token = mintConnectorToolToken('connector-partial-preview-project', 'connector-partial-preview-run');
+    composioDiscoveryRequestCounts = { authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 };
+
+    const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.connectors.map((connector) => connector.id)).toEqual(['notion']);
+    expect(response.body.connectors[0].tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'notion.notion_search' }),
+      expect.objectContaining({ name: 'notion.notion_fetch_database' }),
+      expect.objectContaining({ name: 'notion.notion_get_page' }),
+    ]));
+    expect(composioDiscoveryRequestCounts.tools).toBeGreaterThan(0);
   });
 
   it('filters connected connector tools by curated use case and returns curation metadata', async () => {

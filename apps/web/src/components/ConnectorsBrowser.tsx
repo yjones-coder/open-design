@@ -30,6 +30,7 @@ const CONNECTOR_CALLBACK_MESSAGE_TYPE = 'open-design:connector-connected';
 const CONNECTOR_AUTH_PENDING_STORAGE_KEY = 'od-connectors-authorization-pending';
 const CONNECTOR_AUTH_PENDING_POLL_MS = 2_000;
 const CONNECTOR_TOOL_PREVIEW_LIMIT = 50;
+const AUTHORIZATION_CANCEL_FAILED_MESSAGE = "Couldn't cancel authorization. Try again.";
 
 interface ConnectorAuthorizationPending {
   expiresAt?: string;
@@ -538,6 +539,7 @@ export function ConnectorsBrowser({
     action: 'connect' | 'disconnect';
   } | null>(null);
   const [connectorAuthorizationPending, setConnectorAuthorizationPending] = useState<ConnectorAuthorizationPendingState>(() => loadConnectorAuthorizationPending());
+  const [connectorAuthorizationCancelFailed, setConnectorAuthorizationCancelFailed] = useState<Record<string, boolean>>({});
   const [detailConnectorId, setDetailConnectorId] = useState<string | null>(null);
   const [toolPreviewLoadingIds, setToolPreviewLoadingIds] = useState<Record<string, boolean>>({});
   const [toolPreviewFetchedIds, setToolPreviewFetchedIds] = useState<Record<string, boolean>>({});
@@ -676,6 +678,12 @@ export function ConnectorsBrowser({
     setPendingConnectorAction({ connectorId, action });
     try {
       if (action === 'connect') {
+        setConnectorAuthorizationCancelFailed((curr) => {
+          if (curr[connectorId] === undefined) return curr;
+          const next = { ...curr };
+          delete next[connectorId];
+          return next;
+        });
         const result = await connectConnector(connectorId);
         updateConnector(result.connector);
         if (result.connector && !result.error) {
@@ -753,8 +761,18 @@ export function ConnectorsBrowser({
 
   async function cancelConnectorAuthorization(connectorId: string) {
     const connector = await cancelConnectorAuthorizationRequest(connectorId);
-    if (connector) updateConnector(connector);
-    setConnectorAuthorizationPending((curr) => clearConnectorAuthorizationPending(curr, connectorId));
+    if (connector) {
+      updateConnector(connector);
+      setConnectorAuthorizationCancelFailed((curr) => {
+        if (curr[connectorId] === undefined) return curr;
+        const next = { ...curr };
+        delete next[connectorId];
+        return next;
+      });
+      setConnectorAuthorizationPending((curr) => clearConnectorAuthorizationPending(curr, connectorId));
+      return;
+    }
+    setConnectorAuthorizationCancelFailed((curr) => ({ ...curr, [connectorId]: true }));
   }
 
   return (
@@ -872,6 +890,7 @@ export function ConnectorsBrowser({
                       : null
                   }
                   authorizationPending={connectorAuthorizationPending[connector.id]}
+                  authorizationCancelFailed={connectorAuthorizationCancelFailed[connector.id] === true}
                   toolsLoading={toolsLoading}
                   toolsLoaded={toolsLoaded}
                   logoTheme={logoTheme}
@@ -911,6 +930,7 @@ export function ConnectorsBrowser({
               : null
           }
           authorizationPending={connectorAuthorizationPending[detailConnector.id]}
+          authorizationCancelFailed={connectorAuthorizationCancelFailed[detailConnector.id] === true}
           toolsLoading={toolsLoading}
           toolsPreviewLoading={Boolean(toolPreviewLoadingIds[detailConnector.id])}
           toolsLoaded={
@@ -934,6 +954,7 @@ function ConnectorCard({
   disabled = false,
   pendingAction,
   authorizationPending,
+  authorizationCancelFailed,
   toolsLoading: _toolsLoading,
   toolsLoaded,
   logoTheme,
@@ -946,6 +967,7 @@ function ConnectorCard({
   disabled?: boolean;
   pendingAction: 'connect' | 'disconnect' | null;
   authorizationPending?: ConnectorAuthorizationPending;
+  authorizationCancelFailed: boolean;
   toolsLoading: boolean;
   toolsLoaded: boolean;
   logoTheme: 'light' | 'dark';
@@ -1108,6 +1130,11 @@ function ConnectorCard({
           ) : null}
         </div>
       </div>
+      {authorizationCancelFailed ? (
+        <p className="connector-authorization-hint connector-authorization-error" role="alert">
+          {AUTHORIZATION_CANCEL_FAILED_MESSAGE}
+        </p>
+      ) : null}
     </article>
   );
 }
@@ -1142,6 +1169,7 @@ function ConnectorDetailDrawer({
   disabled,
   pendingAction,
   authorizationPending,
+  authorizationCancelFailed,
   toolsLoading,
   toolsPreviewLoading,
   toolsLoaded,
@@ -1156,6 +1184,7 @@ function ConnectorDetailDrawer({
   disabled: boolean;
   pendingAction: 'connect' | 'disconnect' | null;
   authorizationPending?: ConnectorAuthorizationPending;
+  authorizationCancelFailed: boolean;
   toolsLoading: boolean;
   toolsPreviewLoading: boolean;
   toolsLoaded: boolean;
@@ -1263,6 +1292,11 @@ function ConnectorDetailDrawer({
                 </p>
               ) : null}
             </section>
+          ) : null}
+          {authorizationCancelFailed ? (
+            <p className="connector-authorization-hint connector-authorization-error" role="alert">
+              {AUTHORIZATION_CANCEL_FAILED_MESSAGE}
+            </p>
           ) : null}
 
           <section className="connector-drawer-section">

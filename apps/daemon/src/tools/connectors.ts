@@ -53,6 +53,12 @@ function matchesConnectorToolUseCase(tool: ConnectorToolDetail, useCase: Connect
   return tool.curation?.useCases?.includes(useCase) ?? false;
 }
 
+function connectorNeedsHydratedDiscovery(definition: ConnectorCatalogDefinition | undefined): boolean {
+  if (!definition) return true;
+  if (definition.tools.length === 0) return true;
+  return definition.toolCount !== undefined && definition.tools.length < definition.toolCount;
+}
+
 export async function listConnectorTools(context: ConnectorToolContext & { useCase?: ConnectorToolUseCase }): Promise<Awaited<ReturnType<ConnectorService['listConnectors']>>> {
   const service = context.service ?? connectorService;
   // Agent-facing tool discovery sits on the hot path for unattended Orbit
@@ -68,7 +74,7 @@ export async function listConnectorTools(context: ConnectorToolContext & { useCa
     .map(([connectorId]) => connectorId);
   const hasConnectedConnectorNeedingDiscovery = connectedStatusIds.some((connectorId) => {
     const fastDefinition = fastDefinitionsById.get(connectorId);
-    return !fastDefinition || fastDefinition.tools.length === 0;
+    return connectorNeedsHydratedDiscovery(fastDefinition);
   });
   let definitions = fastDefinitions;
   if (hasConnectedConnectorNeedingDiscovery) {
