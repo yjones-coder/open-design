@@ -1730,8 +1730,15 @@ function resolveChatRunInactivityTimeoutMs() {
   return Math.max(0, Math.floor(raw));
 }
 
+function resolveChatRunShutdownGraceMs() {
+  const raw = Number(process.env.OD_CHAT_RUN_SHUTDOWN_GRACE_MS);
+  if (!Number.isFinite(raw)) return 3_000;
+  return Math.max(0, Math.floor(raw));
+}
+
 export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST || '127.0.0.1', returnServer = false } = {}) {
   let resolvedPort = port;
+  let daemonShuttingDown = false;
   const extraAllowedOrigins = configuredAllowedOrigins();
   const app = express();
   app.use(express.json({ limit: '4mb' }));
@@ -5868,6 +5875,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   });
 
   app.post('/api/runs', (req, res) => {
+    if (daemonShuttingDown) {
+      return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
+    }
     const run = design.runs.create(req.body || {});
     /** @type {import('@open-design/contracts').ChatRunCreateResponse} */
     const body = { runId: run.id };
@@ -5905,6 +5915,9 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   });
 
   app.post('/api/chat', (req, res) => {
+    if (daemonShuttingDown) {
+      return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
+    }
     const run = design.runs.create();
     design.runs.stream(run, req, res);
     design.runs.start(run, () => startChatRun(req.body || {}, run));
@@ -6591,13 +6604,20 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // critical when port=0 (ephemeral port) and when the embedding sidecar
   // needs to advertise the port to a parent process before any request
   // can flow. Three callers depend on this contract:
-  //   - `apps/daemon/src/cli.ts`            → expects a `url` string
+  //   - `apps/daemon/src/cli.ts`            → expects `{ url, server, shutdown }`
   //   - `apps/daemon/sidecar/server.ts`     → expects `{ url, server }`
   //   - `apps/daemon/tests/version-route.test.ts` → expects `{ url, server }`
   return await new Promise((resolve, reject) => {
+    let daemonShutdownStarted = false;
     const cleanupDaemonBackgroundWork = () => {
       composioConnectorProvider.stopCatalogRefreshLoop();
       orbitService.stop();
+    };
+    const shutdownDaemonRuns = async () => {
+      if (daemonShutdownStarted) return;
+      daemonShutdownStarted = true;
+      daemonShuttingDown = true;
+      await design.runs.shutdownActive({ graceMs: resolveChatRunShutdownGraceMs() });
     };
     let server;
     try {
@@ -6627,14 +6647,16 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           console.log(`[od] daemon listening on ${url}`);
         }
         daemonUrl = url;
-        resolve(returnServer ? { url, server } : url);
+        resolve(returnServer ? { url, server, shutdown: shutdownDaemonRuns } : url);
       });
     } catch (error) {
       cleanupDaemonBackgroundWork();
       reject(error);
       return;
     }
-    server.once('close', cleanupDaemonBackgroundWork);
+    server.once('close', () => {
+      void shutdownDaemonRuns().finally(cleanupDaemonBackgroundWork);
+    });
     // `app.listen` throws synchronously when the port is already in use on
     // some Node versions, but emits an `error` event on others (and for
     // EACCES / EADDRNOTAVAIL even on the same Node). Wire the event so the
