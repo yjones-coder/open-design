@@ -244,6 +244,53 @@ process.exit(0);
       },
     );
   });
+
+  it('fails stalled json-stream runs after the inactivity timeout elapses', async () => {
+    const previous = process.env.OD_CHAT_RUN_INACTIVITY_TIMEOUT_MS;
+    process.env.OD_CHAT_RUN_INACTIVITY_TIMEOUT_MS = '500';
+    try {
+      await withFakeAgent(
+        'opencode',
+        `
+console.log(JSON.stringify({ type: 'step_start' }));
+process.on('SIGTERM', () => process.exit(143));
+setInterval(() => {}, 1000);
+`,
+        async () => {
+          const createResponse = await fetch(`${baseUrl}/api/runs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agentId: 'opencode',
+              message: 'hello',
+            }),
+          });
+          expect(createResponse.status).toBe(202);
+          const { runId } = await createResponse.json() as { runId: string };
+
+          const eventsController = new AbortController();
+          const eventsResponse = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
+            signal: eventsController.signal,
+          });
+          const eventsBody = await readSseUntil(eventsResponse, 'event: error');
+          eventsController.abort();
+          const statusBody = await waitForRunStatus(baseUrl, runId);
+
+          expect(eventsBody).toContain('event: agent');
+          expect(eventsBody).toContain('"type":"status"');
+          expect(eventsBody).toContain('event: error');
+          expect(eventsBody).toContain('Agent stalled without emitting any new output');
+          expect(statusBody.status).toBe('failed');
+        },
+      );
+    } finally {
+      if (previous == null) {
+        delete process.env.OD_CHAT_RUN_INACTIVITY_TIMEOUT_MS;
+      } else {
+        process.env.OD_CHAT_RUN_INACTIVITY_TIMEOUT_MS = previous;
+      }
+    }
+  });
 });
 
 async function readSseUntil(response: Response, marker: string): Promise<string> {

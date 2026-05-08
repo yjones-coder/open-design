@@ -1527,6 +1527,12 @@ export function createSseResponse(
   };
 }
 
+function resolveChatRunInactivityTimeoutMs() {
+  const raw = Number(process.env.OD_CHAT_RUN_INACTIVITY_TIMEOUT_MS);
+  if (!Number.isFinite(raw)) return 2 * 60 * 1000;
+  return Math.max(0, Math.floor(raw));
+}
+
 export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST || '127.0.0.1', returnServer = false } = {}) {
   let resolvedPort = port;
   const extraAllowedOrigins = configuredAllowedOrigins();
@@ -4537,12 +4543,40 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     }
 
     const send = (event, data) => design.runs.emit(run, event, data);
+    const inactivityTimeoutMs = resolveChatRunInactivityTimeoutMs();
+    let inactivityTimer = null;
+    const clearInactivityWatchdog = () => {
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = null;
+      }
+    };
+    const failForInactivity = () => {
+      if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
+      const message =
+        `Agent stalled without emitting any new output for ${Math.round(inactivityTimeoutMs / 1000)}s. ` +
+        'The model or CLI likely hung while generating. Retry the turn or pick a different model.';
+      send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', message, { retryable: true }));
+      if (acpSession?.abort) {
+        acpSession.abort();
+      } else if (child && !child.killed) {
+        child.kill('SIGTERM');
+      } else {
+        design.runs.finish(run, 'failed', 1, null);
+      }
+    };
+    const noteAgentActivity = () => {
+      if (inactivityTimeoutMs <= 0) return;
+      clearInactivityWatchdog();
+      inactivityTimer = setTimeout(failForInactivity, inactivityTimeoutMs);
+      inactivityTimer.unref?.();
+    };
     const unregisterChatAgentEventSink = () => {
       activeChatAgentEventSinks.delete(toolTokenGrant?.runId ?? runId);
     };
     if (toolTokenGrant?.runId) {
       activeChatAgentEventSinks.set(toolTokenGrant.runId, (payload) =>
-        send('agent', payload),
+        (noteAgentActivity(), send('agent', payload)),
       );
     }
     // If detection can't find the binary, surface a friendly SSE error
@@ -4590,6 +4624,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       reasoning: safeReasoning,
       toolTokenExpiresAt: toolTokenGrant?.expiresAt ?? null,
     });
+    noteAgentActivity();
 
     let child;
     let acpSession = null;
@@ -4715,7 +4750,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         // an early child error fired before the orchestrator returns has no
         // listener. Both registrations are idempotent and the run lifecycle
         // is owned solely by the orchestrator's awaited result below.
-        child.stderr.on('data', (chunk) => send('stderr', { chunk }));
+        child.stderr.on('data', (chunk) => {
+          noteAgentActivity();
+          send('stderr', { chunk });
+        });
         child.on('error', (err) => {
           send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
         });
@@ -4796,12 +4834,14 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       if (ev?.type === 'error') {
         if (agentStreamError) return;
         agentStreamError = String(ev.message || 'Agent stream error');
+        clearInactivityWatchdog();
         send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', agentStreamError, {
           details: ev.raw ? { raw: ev.raw } : undefined,
           retryable: false,
         }));
         return;
       }
+      noteAgentActivity();
       if (ev?.type && SUBSTANTIVE_AGENT_EVENT_TYPES.has(ev.type)) {
         agentProducedOutput = true;
       }
@@ -4849,12 +4889,14 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
           } else if (channel === 'error') {
             if (agentStreamError) return;
             agentStreamError = String(payload?.message || 'Pi session error');
+            clearInactivityWatchdog();
             send('error', createSseErrorPayload(
               'AGENT_EXECUTION_FAILED',
               agentStreamError,
               { retryable: false },
             ));
           } else {
+            noteAgentActivity();
             send(channel, payload);
           }
         },
@@ -4868,7 +4910,10 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         cwd: effectiveCwd,
         model: safeModel,
         mcpServers,
-        send,
+        send: (event, data) => {
+          noteAgentActivity();
+          send(event, data);
+        },
       });
     } else if (def.streamFormat === 'json-event-stream') {
       // Pipe through sendAgentEvent so the OpenCode `type:'error'` frame
@@ -4884,20 +4929,28 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       child.stdout.on('data', (chunk) => handler.feed(chunk));
       child.on('close', () => handler.flush());
     } else {
-      child.stdout.on('data', (chunk) => send('stdout', { chunk }));
+      child.stdout.on('data', (chunk) => {
+        noteAgentActivity();
+        send('stdout', { chunk });
+      });
     }
     // Wire the acpSession onto the run so cancel() can call abort()
     // instead of raw SIGTERM (applies to pi-rpc and acp-json-rpc).
     run.acpSession = acpSession;
-    child.stderr.on('data', (chunk) => send('stderr', { chunk }));
+    child.stderr.on('data', (chunk) => {
+      noteAgentActivity();
+      send('stderr', { chunk });
+    });
 
     child.on('error', (err) => {
+      clearInactivityWatchdog();
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
       send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
       design.runs.finish(run, 'failed', 1, null);
     });
     child.on('close', (code, signal) => {
+      clearInactivityWatchdog();
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
       if (acpSession?.hasFatalError()) {
