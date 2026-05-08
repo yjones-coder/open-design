@@ -38,6 +38,7 @@ import {
   apiProtocolModelLabel,
 } from '../utils/apiProtocol';
 import { playSound, showCompletionNotification } from '../utils/notifications';
+import { randomUUID } from '../utils/uuid';
 import { DEFAULT_NOTIFICATIONS } from '../state/config';
 import type { TodoItem } from '../runtime/todos';
 import { appendErrorStatusEvent } from '../runtime/chat-events';
@@ -103,6 +104,7 @@ interface Props {
   ) => void;
   onRefreshAgents: () => void;
   onOpenSettings: () => void;
+  onOpenMcpSettings?: () => void;
   // Pet wiring forwarded to the chat composer so users can adopt /
   // wake / tuck a pet without leaving the project view.
   onAdoptPetInline?: (petId: string) => void;
@@ -223,6 +225,7 @@ export function ProjectView({
   onAgentModelChange,
   onRefreshAgents,
   onOpenSettings,
+  onOpenMcpSettings,
   onAdoptPetInline,
   onTogglePet,
   onOpenPetSettings,
@@ -990,7 +993,7 @@ export function ProjectView({
       setError(null);
       const startedAt = Date.now();
       const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         role: 'user',
         content: prompt,
         createdAt: startedAt,
@@ -1017,7 +1020,7 @@ export function ProjectView({
               selectedAgentChoice?.model,
             )
           : apiProtocolModelLabel(config.apiProtocol, config.model);
-      const assistantId = crypto.randomUUID();
+      const assistantId = randomUUID();
       const assistantMsg: ChatMessage = {
         id: assistantId,
         role: 'assistant',
@@ -1267,7 +1270,7 @@ export function ProjectView({
           projectId: project.id,
           conversationId: activeConversationId,
           assistantMessageId: assistantId,
-          clientRequestId: crypto.randomUUID(),
+          clientRequestId: randomUUID(),
           skillId: project.skillId ?? null,
           designSystemId: project.designSystemId ?? null,
           attachments: attachments.map((a) => a.path),
@@ -1850,6 +1853,7 @@ export function ProjectView({
               onDeleteConversation={handleDeleteConversation}
               onRenameConversation={handleRenameConversation}
               onOpenSettings={onOpenSettings}
+              onOpenMcpSettings={onOpenMcpSettings}
               petConfig={config.pet}
               onAdoptPet={onAdoptPetInline}
               onTogglePet={onTogglePet}
