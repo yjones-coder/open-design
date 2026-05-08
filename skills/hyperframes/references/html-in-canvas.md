@@ -18,8 +18,10 @@ When this skill runs inside Open Design, the daemon shells out to `npx hyperfram
 
 1. Place HTML content inside a `<canvas layoutsubtree>` element
 2. The browser renders the HTML children as normal DOM
-3. Call `ctx.drawElementImage(element, x, y, w, h)` to capture the rendered pixels into the canvas
+3. Wait for the canvas to paint, then call `ctx.drawElementImage(element, x, y, w, h)` to capture the rendered pixels
 4. Use the canvas as a Three.js texture, apply shaders, map to 3D geometry
+
+> **Always capture from a paint event.** The element snapshot the API draws from is only refreshed when the canvas paints. Calling `drawElementImage` during initial script evaluation can throw because the first snapshot does not exist yet; calling it outside `paint` after that point silently reads the *previous* snapshot. Drive both first-time capture and per-frame updates from `canvas.onpaint`, and use `canvas.requestPaint()` to ask for a fresh snapshot.
 
 ```html
 <!-- 1. HTML content lives inside the canvas -->
@@ -35,14 +37,24 @@ When this skill runs inside Open Design, the daemon shells out to `npx hyperfram
 ```
 
 ```javascript
-// 3. Capture HTML to canvas
+// 3. Capture HTML to canvas — wait for paint so the element snapshot exists
 var capCanvas = document.getElementById("capture");
 var ctx = capCanvas.getContext("2d");
-ctx.drawElementImage(capCanvas.querySelector(".my-dashboard"), 0, 0, 1920, 1080);
+var texture, material;
 
-// 4. Use as Three.js texture
-var texture = new THREE.CanvasTexture(capCanvas);
-var material = new THREE.MeshBasicMaterial({ map: texture });
+capCanvas.onpaint = function () {
+  ctx.drawElementImage(capCanvas.querySelector(".my-dashboard"), 0, 0, 1920, 1080);
+  if (!texture) {
+    // 4. Use as Three.js texture
+    texture = new THREE.CanvasTexture(capCanvas);
+    material = new THREE.MeshBasicMaterial({ map: texture });
+  } else {
+    texture.needsUpdate = true;
+  }
+};
+
+// Kick off the first paint; subsequent re-captures call requestPaint() again
+capCanvas.requestPaint();
 ```
 
 ## What makes this different
@@ -76,18 +88,23 @@ if (isSupported()) {
 
 ## Re-capturing every frame
 
-For animated content (scrolling, transitions, counters), call `drawElementImage` inside your render loop to update the texture every frame:
+For animated content (scrolling, transitions, counters), drive the capture from the canvas's `paint` event and ask for a fresh snapshot each frame with `requestPaint()`. Calling `drawElementImage` directly from the render loop reads the *previous* paint's snapshot, which on seek-driven HyperFrames renders shows up as a stale or frozen first texture.
 
 ```javascript
+// Capture runs whenever the canvas paints, so the snapshot is always fresh
+capCanvas.onpaint = function () {
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawElementImage(htmlElement, 0, 0, W, H);
+  texture.needsUpdate = true;
+};
+
 function render() {
   // Update HTML state
   scrollContainer.style.transform = "translateY(-" + scrollOffset + "px)";
   counterEl.textContent = Math.round(currentValue);
 
-  // Re-capture
-  ctx.clearRect(0, 0, W, H);
-  ctx.drawElementImage(htmlElement, 0, 0, W, H);
-  texture.needsUpdate = true;
+  // Schedule a fresh snapshot; the onpaint handler above runs the capture
+  capCanvas.requestPaint();
 
   // Render 3D scene with updated texture
   renderer.render(scene, camera);
