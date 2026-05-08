@@ -313,6 +313,12 @@ export function getConnectorDisplayToolCount(connector: ConnectorDetail): number
   return connector.toolCount ?? connector.tools.length;
 }
 
+export function hasLoadedAllAdvertisedConnectorTools(connector: ConnectorDetail): boolean {
+  if (connector.toolsNextCursor) return false;
+  if (connector.toolCount === undefined) return connector.tools.length > 0;
+  return connector.tools.length >= connector.toolCount;
+}
+
 function mergeConnectorTools(current: ConnectorDetail['tools'], incoming: ConnectorDetail['tools']): ConnectorDetail['tools'] {
   const seen = new Set<string>();
   const merged: ConnectorDetail['tools'] = [];
@@ -713,7 +719,7 @@ export function ConnectorsBrowser({
 
   useEffect(() => {
     if (!detailConnector) return;
-    if (detailConnector.tools.length > 0) return;
+    if (hasLoadedAllAdvertisedConnectorTools(detailConnector)) return;
     if (toolPreviewAttemptedIds[detailConnector.id]) return;
     if (toolPreviewLoadingIds[detailConnector.id]) return;
     void hydrateToolPreview(detailConnector.id);
@@ -879,7 +885,10 @@ export function ConnectorsBrowser({
           authorizationPending={connectorAuthorizationPending[detailConnector.id]}
           toolsLoading={toolsLoading}
           toolsPreviewLoading={Boolean(toolPreviewLoadingIds[detailConnector.id])}
-          toolsLoaded={Boolean(toolPreviewAttemptedIds[detailConnector.id]) || detailConnector.tools.length > 0}
+          toolsLoaded={
+            Boolean(toolPreviewAttemptedIds[detailConnector.id])
+            || hasLoadedAllAdvertisedConnectorTools(detailConnector)
+          }
           logoTheme={logoTheme}
           onClose={() => setDetailConnectorId(null)}
           onConnect={(connectorId) => runConnectorAction(connectorId, 'connect')}

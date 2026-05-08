@@ -31,6 +31,15 @@ const configuredComposioConnector: ConnectorDetail = {
   tools: [],
 };
 
+function makeTool(name: string): ConnectorDetail['tools'][number] {
+  return {
+    name,
+    title: name.replace(/_/g, ' '),
+    safety: { sideEffect: 'read', approval: 'auto', reason: 'Reads data.' },
+    refreshEligible: true,
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -139,5 +148,39 @@ describe('ConnectorsBrowser', () => {
       expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
     });
+  });
+
+  it('hydrates partial static tool previews when the advertised tool count is larger', async () => {
+    const partialPreviewConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      id: 'notion',
+      name: 'Notion',
+      status: 'available',
+      toolCount: 48,
+      tools: [makeTool('search_pages'), makeTool('create_page')],
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([partialPreviewConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([partialPreviewConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(fetchConnectorDetail).mockResolvedValue({
+      ...partialPreviewConnector,
+      tools: [makeTool('search_pages'), makeTool('create_page'), makeTool('update_page')],
+      toolsNextCursor: 'next-page',
+      toolsHasMore: true,
+    });
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('Notion');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Notion details' }));
+
+    await waitFor(() => {
+      expect(fetchConnectorDetail).toHaveBeenCalledWith('notion', {
+        hydrateTools: true,
+        toolsLimit: 50,
+      });
+    });
+    await screen.findByText('update page');
+    expect(screen.getByRole('button', { name: 'Load more tools' })).toBeTruthy();
   });
 });
