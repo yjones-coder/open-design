@@ -50,8 +50,8 @@ function isAgentPreviewListableTool(definition: ConnectorCatalogDefinition, tool
 
 export async function listConnectorTools(context: ConnectorToolContext): Promise<Awaited<ReturnType<ConnectorService['listConnectors']>>> {
   const service = context.service ?? connectorService;
-  const definitions = await service.listDefinitions();
-  const entries = await Promise.all(definitions.map(async (definition) => ({ definition, connector: await service.getConnector(definition.id) })));
+  const definitions = await service.listHydratedDefinitions();
+  const entries = await Promise.all(definitions.map(async (definition) => ({ definition, connector: await service.getHydratedConnector(definition.id) })));
   return entries
     .filter(({ connector }) => connector.status === 'connected')
     .map(({ definition, connector }) => ({

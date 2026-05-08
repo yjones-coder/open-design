@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  connectConnector,
   fetchAppVersionInfo,
+  fetchConnectorDetail,
   fetchConnectorDiscovery,
   fetchProjectFileText,
   uploadProjectFiles,
@@ -123,6 +125,132 @@ describe('fetchConnectorDiscovery', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith('/api/connectors/discovery?refresh=true');
+  });
+});
+
+describe('fetchConnectorDetail', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('requests paginated hydrated tool previews for one connector', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      connector: {
+        id: 'canvas',
+        name: 'Canvas',
+        tools: [{ name: 'canvas.list_courses' }],
+        toolCount: 574,
+        toolsNextCursor: 'cursor_2',
+        toolsHasMore: true,
+      },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchConnectorDetail('canvas', {
+      hydrateTools: true,
+      toolsLimit: 50,
+      toolsCursor: 'cursor_1',
+    })).resolves.toMatchObject({
+      id: 'canvas',
+      toolCount: 574,
+      toolsNextCursor: 'cursor_2',
+      tools: [{ name: 'canvas.list_courses' }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/connectors/canvas?hydrateTools=true&toolsLimit=50&toolsCursor=cursor_1');
+  });
+});
+
+describe('connectConnector', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('renders a fallback link before navigating the auth popup', async () => {
+    const replace = vi.fn();
+    const authWindow = {
+      document: {
+        title: '',
+        body: { innerHTML: '' },
+      },
+      location: { replace },
+      close: vi.fn(),
+    };
+    const open = vi.fn(() => authWindow);
+    vi.stubGlobal('window', {
+      open,
+      location: { assign: vi.fn() },
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === '/api/connectors/auth-configs/prepare') {
+        return new Response(JSON.stringify({
+          results: {
+            airtable: { status: 'ready', authConfigId: 'ac_airtable' },
+          },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        connector: { id: 'airtable', name: 'Airtable' },
+        auth: {
+          kind: 'redirect_required',
+          redirectUrl: 'https://connect.composio.dev/link/lk_test?a=1&b=2',
+        },
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(connectConnector('airtable')).resolves.toMatchObject({
+      connector: { id: 'airtable' },
+      auth: {
+        kind: 'redirect_required',
+        redirectUrl: 'https://connect.composio.dev/link/lk_test?a=1&b=2',
+      },
+    });
+
+    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+    expect(authWindow.document.body.innerHTML).toContain('Open Composio');
+    expect(authWindow.document.body.innerHTML).toContain('https://connect.composio.dev/link/lk_test?a=1&amp;b=2');
+    expect(replace).toHaveBeenCalledWith('https://connect.composio.dev/link/lk_test?a=1&b=2');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/connectors/auth-configs/prepare',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/connectors/airtable/connect', { method: 'POST' });
+  });
+
+  it('keeps the popup open with the auth config error when initialization fails', async () => {
+    const authWindow = {
+      document: {
+        title: '',
+        body: { innerHTML: '' },
+      },
+      location: { replace: vi.fn() },
+      close: vi.fn(),
+    };
+    vi.stubGlobal('window', {
+      open: vi.fn(() => authWindow),
+      location: { assign: vi.fn() },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({
+        results: {
+          canvas: {
+            status: 'custom_required',
+            message: 'Default auth config not found for toolkit "canvas".',
+          },
+        },
+      }), { status: 200 })),
+    );
+
+    await expect(connectConnector('canvas')).resolves.toBeNull();
+
+    expect(authWindow.close).not.toHaveBeenCalled();
+    expect(authWindow.document.title).toBe('Connection failed');
+    expect(authWindow.document.body.innerHTML).toContain('Default auth config not found for toolkit "canvas".');
   });
 });
 

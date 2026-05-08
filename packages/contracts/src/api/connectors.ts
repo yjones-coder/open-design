@@ -31,6 +31,9 @@ export interface ConnectorDetail {
   status: ConnectorStatus;
   accountLabel?: string;
   tools: ConnectorToolDetail[];
+  toolCount?: number;
+  toolsNextCursor?: string;
+  toolsHasMore?: boolean;
   featuredToolNames?: string[];
   minimumApproval?: ConnectorToolApproval;
   lastError?: string;
@@ -76,6 +79,19 @@ export interface ConnectorConnectResponse extends ConnectorDetailResponse {
     providerConnectionId?: string;
     expiresAt?: string;
   };
+}
+
+export interface ConnectorAuthConfigPrepareRequest {
+  connectorIds: string[];
+}
+
+export type ConnectorAuthConfigPrepareResult =
+  | { status: 'ready'; authConfigId: string }
+  | { status: 'custom_required'; message: string }
+  | { status: 'error'; message: string };
+
+export interface ConnectorAuthConfigPrepareResponse {
+  results: Record<string, ConnectorAuthConfigPrepareResult>;
 }
 
 export interface ConnectorExecuteRequest {

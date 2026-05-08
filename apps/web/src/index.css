@@ -3313,6 +3313,12 @@ code {
 .connector-status-pill.status-disabled {
   opacity: 0.7;
 }
+.connector-status.status-pending,
+.connector-status-pill.status-pending {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+}
 .connector-status-pill {
   display: inline-flex;
   align-items: center;
@@ -3364,8 +3370,18 @@ button.connector-action.is-disconnect:hover:not(:disabled) {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 35%, var(--border));
 }
+button.connector-action.is-cancel-authorization {
+  min-width: 74px;
+  color: var(--text-muted);
+}
 button.connector-action.is-loading {
   cursor: wait;
+}
+.connector-authorization-hint {
+  margin: -2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 /* Connector gate — masks the grid when the Composio API key is missing. */
@@ -3730,6 +3746,15 @@ button.connector-action.is-loading {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.connector-drawer-load-more {
+  align-self: flex-start;
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 14px;
 }
 .connector-drawer-foot {
   padding: 14px 22px 18px;
