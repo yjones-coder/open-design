@@ -1128,7 +1128,7 @@ export class ComposioConnectorProvider {
     const liveDescription = getComposioToolkitDescription(toolkit);
     const description = liveDescription ?? staticDefinition.description;
     const liveToolCount = getComposioToolkitToolCount(toolkit);
-    const toolCount = toolPage?.totalItems ?? liveToolCount ?? (tools.length > 0 ? tools.length : staticDefinition.toolCount);
+    const toolCount = toolPage?.totalItems ?? liveToolCount ?? staticDefinition.toolCount ?? (tools.length > 0 ? tools.length : undefined);
     return {
       ...staticDefinition,
       id: connectorId,

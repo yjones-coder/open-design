@@ -41,6 +41,7 @@ function mockComposioFetch(options = {}) {
     delayFirstToolkits,
     logoFetch,
     linkResponse = { connected_account_id: 'ca_github', status: 'ACTIVE', account_label: 'octocat@example.com' },
+    toolkits,
   } = options;
   composioDiscoveryRequestCounts = { authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 };
   vi.stubGlobal('fetch', async (input, init) => {
@@ -77,7 +78,7 @@ function mockComposioFetch(options = {}) {
         delayFirstToolkits.started.resolve();
         await delayFirstToolkits.release.promise;
       }
-      return composioJson({ items: [
+      return composioJson({ items: toolkits ?? [
         { slug: 'github', name: 'GitHub', description: 'GitHub toolkit', categories: [{ name: 'Developer' }], meta: { tools_count: 12 } },
         { slug: 'apaleo', name: 'Apaleo', description: 'Apaleo toolkit', categories: [{ name: 'Hospitality' }], meta: { tools_count: 29 } },
       ] });
@@ -258,6 +259,24 @@ describe('connector routes', () => {
     expect(first.body.connectors.find((connector) => connector.id === 'apaleo')).toMatchObject({ toolCount: 29 });
     expect(first.body.connectors.find((connector) => connector.id === 'slack')?.tools).toEqual([]);
     expect(first.body.meta).toMatchObject({ provider: 'composio' });
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 0 });
+  });
+
+  it('preserves static advertised tool counts when live toolkit metadata omits counts', async () => {
+    mockComposioFetch({
+      toolkits: [
+        { slug: 'notion', name: 'Notion', description: 'Notion toolkit', categories: [{ name: 'Productivity' }], meta: {} },
+      ],
+    });
+    composioConnectorProvider.clearDiscoveryCache();
+
+    const response = await jsonFetch(`${baseUrl}/api/connectors/discovery?refresh=true`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.connectors.find((connector) => connector.id === 'notion')).toMatchObject({
+      id: 'notion',
+      toolCount: 48,
+    });
     expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 0, toolkits: 1, tools: 0 });
   });
 
