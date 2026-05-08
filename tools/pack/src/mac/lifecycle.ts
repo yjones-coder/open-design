@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -308,21 +308,27 @@ export async function startPackedMacApp(config: ToolPackConfig): Promise<MacStar
   await mkdir(dirname(logPath), { recursive: true });
   await writeFile(logPath, "", "utf8");
 
-  const spawned = await spawnBackgroundProcess({
-    args: createProcessStampArgs(stamp, OPEN_DESIGN_SIDECAR_CONTRACT),
-    command: target.executablePath,
-    cwd: target.appPath,
-    env: createSidecarLaunchEnv({
-      base: join(config.roots.runtime.namespaceRoot, "runtime"),
-      contract: OPEN_DESIGN_SIDECAR_CONTRACT,
-      extraEnv: {
-        ...process.env,
-        [DESKTOP_LOG_ECHO_ENV]: "0",
-      },
-      stamp,
-    }),
-    logFd: null,
-  });
+  const logHandle = await open(logPath, "a");
+  let spawned: { pid: number };
+  try {
+    spawned = await spawnBackgroundProcess({
+      args: createProcessStampArgs(stamp, OPEN_DESIGN_SIDECAR_CONTRACT),
+      command: target.executablePath,
+      cwd: target.appPath,
+      env: createSidecarLaunchEnv({
+        base: join(config.roots.runtime.namespaceRoot, "runtime"),
+        contract: OPEN_DESIGN_SIDECAR_CONTRACT,
+        extraEnv: {
+          ...process.env,
+          [DESKTOP_LOG_ECHO_ENV]: "0",
+        },
+        stamp,
+      }),
+      logFd: logHandle.fd,
+    });
+  } finally {
+    await logHandle.close().catch(() => undefined);
+  }
   const status = await waitForDesktopStatus(config);
   return {
     appPath: target.appPath,
