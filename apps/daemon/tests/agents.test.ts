@@ -36,12 +36,15 @@ const devin = AGENT_DEFS.find((agent) => agent.id === 'devin');
 const pi = AGENT_DEFS.find((agent) => agent.id === 'pi');
 const deepseek = AGENT_DEFS.find((agent) => agent.id === 'deepseek');
 const gemini = AGENT_DEFS.find((agent) => agent.id === 'gemini');
+const qoder = AGENT_DEFS.find((agent) => agent.id === 'qoder');
 const originalDisablePlugins = process.env.OD_CODEX_DISABLE_PLUGINS;
 const originalPath = process.env.PATH;
 const originalHome = process.env.HOME;
 const originalAgentHome = process.env.OD_AGENT_HOME;
 const originalDaemonUrl = process.env.OD_DAEMON_URL;
 const originalToolToken = process.env.OD_TOOL_TOKEN;
+const originalNpmConfigPrefix = process.env.NPM_CONFIG_PREFIX;
+const originalVpHome = process.env.VP_HOME;
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -70,6 +73,16 @@ afterEach(() => {
     delete process.env.OD_TOOL_TOKEN;
   } else {
     process.env.OD_TOOL_TOKEN = originalToolToken;
+  }
+  if (originalNpmConfigPrefix == null) {
+    delete process.env.NPM_CONFIG_PREFIX;
+  } else {
+    process.env.NPM_CONFIG_PREFIX = originalNpmConfigPrefix;
+  }
+  if (originalVpHome == null) {
+    delete process.env.VP_HOME;
+  } else {
+    process.env.VP_HOME = originalVpHome;
   }
   globalThis.fetch = originalFetch;
 });
@@ -131,6 +144,64 @@ test('codex args keep plugins enabled when OD_CODEX_DISABLE_PLUGINS is not 1', (
   assert.equal(args.includes('plugins'), false);
 });
 
+test('codex model picker includes current OpenAI choices in priority order', async () => {
+  const expectedModels = [
+    'default',
+    'gpt-5.5',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.3-codex',
+    'gpt-5-codex',
+    'gpt-5',
+    'o3',
+    'o4-mini',
+  ];
+
+  assert.deepEqual(codex.fallbackModels.map((m) => m.id), expectedModels);
+  assert.deepEqual(codex.reasoningOptions.map((o) => o.id), [
+    'default',
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+  ]);
+
+  const args = codex.buildArgs(
+    '',
+    [],
+    [],
+    { model: 'gpt-5.5', reasoning: 'xhigh' },
+    { cwd: '/tmp/od-project' },
+  );
+  assert.ok(args.includes('--model'));
+  assert.ok(args.includes('gpt-5.5'));
+  assert.ok(args.includes('model_reasoning_effort="xhigh"'));
+
+  const dir = mkdtempSync(join(tmpdir(), 'od-agents-codex-models-'));
+  try {
+    const codexBin = join(dir, 'codex');
+    writeFileSync(
+      codexBin,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex 1.0.0"; exit 0; fi\nexit 0\n',
+    );
+    chmodSync(codexBin, 0o755);
+    process.env.OD_AGENT_HOME = dir;
+    process.env.PATH = dir;
+
+    const agents = await detectAgents();
+    const detected = agents.find((agent) => agent.id === 'codex');
+
+    assert.ok(detected);
+    assert.equal(detected.available, true);
+    assert.equal(detected.version, 'codex 1.0.0');
+    assert.deepEqual(detected.models.map((m) => m.id), expectedModels);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Recent Codex CLI versions reject a bare `-` argv sentinel; passing it
 // alongside the stdin pipe causes `error: unexpected argument '-' found`
 // and exit code 2 before any prompt is read. We deliver the prompt via
@@ -168,6 +239,23 @@ test('codex args do not include the literal `-` stdin sentinel (regression of #2
     { cwd: '/tmp/od-project' },
   );
   assert.equal(withDisablePlugins.includes('-'), false);
+});
+
+test('codex args pass valid extraAllowedDirs with repeatable --add-dir flags', () => {
+  delete process.env.OD_CODEX_DISABLE_PLUGINS;
+
+  const args = codex.buildArgs(
+    '',
+    [],
+    ['/repo/skills', '', null, '/tmp/codex/generated_images', undefined],
+    {},
+    { cwd: '/tmp/od-project' },
+  );
+
+  assert.deepEqual(
+    args.filter((arg, index) => arg === '--add-dir' || args[index - 1] === '--add-dir'),
+    ['--add-dir', '/repo/skills', '--add-dir', '/tmp/codex/generated_images'],
+  );
 });
 
 test('live artifact MCP discovery is limited to mature ACP agents', () => {
@@ -241,10 +329,34 @@ test('MCP-capable agents can discover equivalent live artifact and connector too
 
   const createTool = tools.find((tool) => tool.name === 'live_artifacts_create')!;
   const updateTool = tools.find((tool) => tool.name === 'live_artifacts_update')!;
+  const connectorsListTool = tools.find((tool) => tool.name === 'connectors_list')!;
   const createProperties = createTool.inputSchema.properties as Record<string, unknown>;
   const updateProperties = updateTool.inputSchema.properties as Record<string, unknown>;
+  const connectorsListProperties = connectorsListTool.inputSchema.properties as Record<string, unknown>;
   assert.deepEqual(Object.keys(createProperties).sort(), ['input', 'provenanceJson', 'templateHtml']);
   assert.deepEqual(Object.keys(updateProperties).sort(), ['artifactId', 'input', 'provenanceJson', 'templateHtml']);
+  assert.deepEqual(Object.keys(connectorsListProperties).sort(), ['useCase']);
+});
+
+test('live artifact MCP connector list forwards daily digest use case to daemon tools', async () => {
+  process.env.OD_DAEMON_URL = 'http://127.0.0.1:17456/base';
+  process.env.OD_TOOL_TOKEN = 'test-tool-token';
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response(JSON.stringify({ connectors: [] }), { status: 200 });
+  };
+
+  const response = await handleLiveArtifactsMcpRequest({
+    jsonrpc: '2.0',
+    id: 5,
+    method: 'tools/call',
+    params: { name: 'connectors_list', arguments: { useCase: 'personal_daily_digest' } },
+  });
+
+  assert.equal(response.error, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'http://127.0.0.1:17456/base/api/tools/connectors/list?useCase=personal_daily_digest');
 });
 
 test('live artifact MCP create forwards input and artifact payload fields to daemon tools', async () => {
@@ -318,26 +430,35 @@ test('cursor-agent args deliver prompts via stdin without passing a literal dash
   ]);
 });
 
-// Copilot does NOT treat `-` as a stdin sentinel — it reads it as a
-// literal one-character prompt. The prompt must be passed directly as the
-// value of `-p`. Pin the argv shape so the regression can't drift back.
-// Also pin the order — Copilot expects `-p <prompt>` before any other
-// flag, including model / add-dir extensions.
-test('copilot args pass the prompt directly as the -p value (not via stdin sentinel)', () => {
+// Copilot reads the prompt from stdin when `-p` is omitted entirely
+// (upstream copilot-cli issue #1046, confirmed working as
+// `echo "..." | copilot --model <id>`). The earlier `-p -` attempt
+// was a dead end because Copilot takes `-` as a literal one-character
+// prompt; omitting `-p` is a separate code path that does delegate to
+// stdin under a non-TTY pipe. Pin `promptViaStdin: true` and the
+// stdin-only argv shape so a future refactor can't silently bring
+// `-p <prompt>` back and reintroduce the Windows ENAMETOOLONG
+// regression (issue #705).
+test('copilot delivers the prompt via stdin (no -p, no prompt body in argv)', () => {
   const prompt = 'design a landing page';
   const baseArgs = copilot.buildArgs(prompt, [], [], {});
-  assert.equal(baseArgs[0], '-p');
-  assert.equal(baseArgs[1], prompt);
+  assert.equal(copilot.promptViaStdin, true);
+  assert.ok(
+    !baseArgs.includes('-p'),
+    'copilot argv must not include -p; the prompt rides stdin',
+  );
+  assert.ok(
+    !baseArgs.includes(prompt),
+    'copilot argv must not include the prompt body; it rides stdin',
+  );
   assert.deepEqual(baseArgs, [
-    '-p',
-    prompt,
     '--allow-all-tools',
     '--output-format',
     'json',
   ]);
 });
 
-test('copilot args keep `-p <prompt>` at the front when model and extra dirs are added', () => {
+test('copilot args append model and extra dirs after the base flags without reintroducing -p', () => {
   const prompt = 'design a landing page';
   const args = copilot.buildArgs(
     prompt,
@@ -345,11 +466,9 @@ test('copilot args keep `-p <prompt>` at the front when model and extra dirs are
     ['/tmp/od-skills', '/tmp/od-design-systems'],
     { model: 'claude-sonnet-4.6' },
   );
-  assert.equal(args[0], '-p');
-  assert.equal(args[1], prompt);
+  assert.ok(!args.includes('-p'));
+  assert.ok(!args.includes(prompt));
   assert.deepEqual(args, [
-    '-p',
-    prompt,
     '--allow-all-tools',
     '--output-format',
     'json',
@@ -362,7 +481,7 @@ test('copilot args keep `-p <prompt>` at the front when model and extra dirs are
   ]);
 });
 
-test('copilot drops empty / non-string entries from extraAllowedDirs without breaking the `-p <prompt>` lead', () => {
+test('copilot drops empty / non-string entries from extraAllowedDirs without reintroducing -p', () => {
   const prompt = 'design a landing page';
   const args = copilot.buildArgs(
     prompt,
@@ -370,12 +489,36 @@ test('copilot drops empty / non-string entries from extraAllowedDirs without bre
     ['', null, '/tmp/od-skills', undefined],
     {},
   );
-  assert.equal(args[0], '-p');
-  assert.equal(args[1], prompt);
+  assert.ok(!args.includes('-p'));
   // Only the one valid path survives.
   const addDirIndex = args.indexOf('--add-dir');
   assert.equal(args[addDirIndex + 1], '/tmp/od-skills');
   assert.equal(args.filter((a) => a === '--add-dir').length, 1);
+});
+
+// Mirror of the Claude Code 200_000-char synthetic-prompt guard: even
+// when the composed prompt is large enough to blow the Windows
+// CreateProcess command-line cap (~32 KB direct, ~8 KB through a `.cmd`
+// shim), no argv entry must ever carry the prompt body. This is the
+// structural assertion that the issue #705 fix can't quietly regress.
+test('copilot flags promptViaStdin and never embeds the prompt in argv', () => {
+  assert.equal(copilot.promptViaStdin, true);
+
+  const longPrompt = 'x'.repeat(200_000);
+  const args = copilot.buildArgs(longPrompt, [], [], {});
+
+  assert.ok(Array.isArray(args), 'copilot.buildArgs must return argv');
+  assert.equal(
+    args.includes(longPrompt),
+    false,
+    'prompt must not appear in argv',
+  );
+  for (const arg of args) {
+    assert.ok(
+      typeof arg === 'string' && arg.length < 1000,
+      `no argv entry should carry the prompt body (saw length ${arg.length})`,
+    );
+  }
 });
 
 test('kiro args use acp subcommand for json-rpc streaming', () => {
@@ -405,6 +548,7 @@ test('pi args use rpc mode without --no-session and append model/thinking option
   assert.ok(!baseArgs.includes('--no-session'), 'pi must not pass --no-session');
   assert.equal(pi.promptViaStdin, true);
   assert.equal(pi.streamFormat, 'pi-rpc');
+  assert.equal(pi.supportsImagePaths, true);
 
   const withModel = pi.buildArgs('', [], [], { model: 'anthropic/claude-sonnet-4-5' }, {});
   assert.deepEqual(withModel, [
@@ -420,6 +564,66 @@ test('pi args use rpc mode without --no-session and append model/thinking option
     'rpc',
     '--thinking',
     'high',
+  ]);
+});
+
+test('pi args forward extraAllowedDirs as --append-system-prompt flags', () => {
+  const args = pi.buildArgs(
+    '',
+    [],
+    ['/tmp/skills', '/tmp/design-systems'],
+    {},
+    {},
+  );
+
+  assert.deepEqual(args, [
+    '--mode',
+    'rpc',
+    '--append-system-prompt',
+    '/tmp/skills',
+    '--append-system-prompt',
+    '/tmp/design-systems',
+  ]);
+});
+
+test('pi args filter relative paths from extraAllowedDirs', () => {
+  const args = pi.buildArgs(
+    '',
+    [],
+    ['/tmp/skills', 'relative/path', '/tmp/design-systems'],
+    {},
+    {},
+  );
+
+  // Relative paths should be filtered out.
+  assert.deepEqual(args, [
+    '--mode',
+    'rpc',
+    '--append-system-prompt',
+    '/tmp/skills',
+    '--append-system-prompt',
+    '/tmp/design-systems',
+  ]);
+});
+
+test('pi args combine model, thinking, and extraAllowedDirs', () => {
+  const args = pi.buildArgs(
+    '',
+    [],
+    ['/tmp/skills'],
+    { model: 'openai/gpt-5', reasoning: 'medium' },
+    {},
+  );
+
+  assert.deepEqual(args, [
+    '--mode',
+    'rpc',
+    '--model',
+    'openai/gpt-5',
+    '--thinking',
+    'medium',
+    '--append-system-prompt',
+    '/tmp/skills',
   ]);
 });
 
@@ -441,6 +645,148 @@ test('gemini args preserve custom model selection', () => {
     '--model',
     'gemini-2.5-pro',
   ]);
+});
+
+test('qoder entry uses qodercli with stream-json stdin delivery and tier model hints', () => {
+  assert.equal(qoder.name, 'Qoder CLI');
+  assert.equal(qoder.bin, 'qodercli');
+  assert.deepEqual(qoder.versionArgs, ['--version']);
+  assert.equal(qoder.promptViaStdin, true);
+  assert.equal(qoder.streamFormat, 'qoder-stream-json');
+  assert.deepEqual(qoder.fallbackModels.map((m) => m.id), [
+    'default',
+    'lite',
+    'efficient',
+    'auto',
+    'performance',
+    'ultimate',
+  ]);
+});
+
+test('qoder args use non-interactive print mode with cwd, model, and add-dir', () => {
+  const args = qoder.buildArgs(
+    'prompt must not appear in argv',
+    ['/tmp/uploads/logo.png', '/tmp/uploads/hero concept.png'],
+    [
+      '/repo/skills',
+      '',
+      null,
+      './relative-skills',
+      'relative-design-systems',
+      '/repo/design-systems',
+    ],
+    { model: 'performance' },
+    { cwd: '/tmp/od-project' },
+  );
+
+  assert.deepEqual(args, [
+    '-p',
+    '--output-format',
+    'stream-json',
+    '--yolo',
+    '-w',
+    '/tmp/od-project',
+    '--model',
+    'performance',
+    '--add-dir',
+    '/repo/skills',
+    '--add-dir',
+    '/repo/design-systems',
+    '--attachment',
+    '/tmp/uploads/logo.png',
+    '--attachment',
+    '/tmp/uploads/hero concept.png',
+  ]);
+  assert.equal(args.includes('prompt must not appear in argv'), false);
+  assert.equal(args.includes('./relative-skills'), false);
+  assert.equal(args.includes('relative-design-systems'), false);
+});
+
+test('qoder args omit default model and cwd when absent', () => {
+  const args = qoder.buildArgs('', [], [], { model: 'default' }, {});
+
+  assert.deepEqual(args, [
+    '-p',
+    '--output-format',
+    'stream-json',
+    '--yolo',
+  ]);
+  assert.equal(args.includes('--model'), false);
+  assert.equal(args.includes('-w'), false);
+});
+
+test('qoder args omit empty, non-string, and relative add-dir entries', () => {
+  const args = qoder.buildArgs('', [], [
+    '',
+    null,
+    undefined,
+    42,
+    './skills',
+    'design-systems',
+  ]);
+
+  assert.equal(args.includes('--add-dir'), false);
+});
+
+test('qoder args omit empty, non-string, and relative image attachment entries', () => {
+  const args = qoder.buildArgs('', [
+    '',
+    null,
+    undefined,
+    42,
+    './uploads/logo.png',
+    'uploads/hero.png',
+    '/tmp/uploads/logo.png',
+  ]);
+
+  assert.deepEqual(
+    args.filter((arg) => arg === '--attachment').length,
+    1,
+  );
+  assert.ok(args.includes('/tmp/uploads/logo.png'));
+  assert.equal(args.includes('./uploads/logo.png'), false);
+  assert.equal(args.includes('uploads/hero.png'), false);
+});
+
+test('qoder adapter inherits QODER_PERSONAL_ACCESS_TOKEN from daemon env', () => {
+  const env = spawnEnvForAgent('qoder', {
+    QODER_PERSONAL_ACCESS_TOKEN: 'qoder-pat',
+    PATH: '/usr/bin',
+    OD_DAEMON_URL: 'http://127.0.0.1:7456',
+  });
+
+  assert.equal(env.QODER_PERSONAL_ACCESS_TOKEN, 'qoder-pat');
+  assert.equal(env.PATH, '/usr/bin');
+  assert.equal(env.OD_DAEMON_URL, 'http://127.0.0.1:7456');
+});
+
+test('qoder adapter does not define static secret env', () => {
+  assert.equal(qoder.env?.QODER_PERSONAL_ACCESS_TOKEN, undefined);
+});
+
+test('detectAgents keeps qoder unavailable with fallback metadata when qodercli is missing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-agents-empty-'));
+  try {
+    process.env.OD_AGENT_HOME = dir;
+    process.env.PATH = dir;
+
+    const agents = await detectAgents();
+    const detected = agents.find((agent) => agent.id === 'qoder');
+
+    assert.ok(detected);
+    assert.equal(detected.available, false);
+    assert.equal(detected.bin, 'qodercli');
+    assert.deepEqual(detected.models.map((m) => m.id), [
+      'default',
+      'lite',
+      'efficient',
+      'auto',
+      'performance',
+      'ultimate',
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('kiro fetchModels falls back to fallbackModels when detection fails', async () => {
@@ -762,6 +1108,168 @@ fsTest(
       assert.equal(resolved, join(dir, 'codex'));
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+// Issue #442: GUI-launched daemons (Finder/Dock on macOS, .desktop on Linux)
+// inherit a stripped PATH that doesn't include the user's npm global prefix.
+// Most third-party "fix npm EACCES without sudo" tutorials configure
+// `~/.npm-global` as the prefix, so any CLI installed via `npm i -g <cli>`
+// lives at `~/.npm-global/bin/<cli>`. The daemon must search there even when
+// the inherited PATH only carries `/usr/bin:/bin:...`.
+fsTest(
+  'resolveAgentExecutable searches ~/.npm-global/bin under a minimal GUI-launched PATH (issue #442)',
+  () => {
+    const home = mkdtempSync(join(tmpdir(), 'od-agents-npm-global-'));
+    try {
+      const dir = join(home, '.npm-global', 'bin');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'gemini'), '');
+      chmodSync(join(dir, 'gemini'), 0o755);
+      process.env.OD_AGENT_HOME = home;
+      // Mirror the launchd default a `.app` actually inherits — no
+      // `~/.npm-global/bin`, no `/opt/homebrew/bin`, nothing user-side.
+      process.env.PATH = '/usr/bin:/bin';
+
+      const resolved = resolveAgentExecutable({ bin: 'gemini' });
+      assert.equal(resolved, join(dir, 'gemini'));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
+
+// Same root cause as #442 but for the second-most-common alternative
+// non-canonical npm prefix shipped in older "fix sudo-free npm" guides.
+fsTest(
+  'resolveAgentExecutable also searches ~/.npm-packages/bin (alt npm prefix)',
+  () => {
+    const home = mkdtempSync(join(tmpdir(), 'od-agents-npm-packages-'));
+    try {
+      const dir = join(home, '.npm-packages', 'bin');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'gemini'), '');
+      chmodSync(join(dir, 'gemini'), 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.PATH = '/usr/bin:/bin';
+
+      const resolved = resolveAgentExecutable({ bin: 'gemini' });
+      assert.equal(resolved, join(dir, 'gemini'));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
+
+fsTest(
+  'resolveAgentExecutable searches ~/.vite-plus/bin under a minimal GUI-launched PATH (vp global install)',
+  () => {
+    const home = mkdtempSync(join(tmpdir(), 'od-agents-vp-home-'));
+    try {
+      const dir = join(home, '.vite-plus', 'bin');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'vp-cli-probe'), '');
+      chmodSync(join(dir, 'vp-cli-probe'), 0o755);
+      process.env.OD_AGENT_HOME = home;
+      process.env.PATH = '/usr/bin:/bin';
+
+      const resolved = resolveAgentExecutable({ bin: 'vp-cli-probe' });
+      assert.equal(resolved, join(dir, 'vp-cli-probe'));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
+
+fsTest(
+  'resolveAgentExecutable honors $VP_HOME/bin when the custom Vite+ home is outside PATH',
+  () => {
+    const vpHome = mkdtempSync(join(tmpdir(), 'od-agents-vp-custom-'));
+    try {
+      const dir = join(vpHome, 'bin');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'vp-cli-probe'), '');
+      chmodSync(join(dir, 'vp-cli-probe'), 0o755);
+      process.env.PATH = '/usr/bin:/bin';
+      process.env.VP_HOME = vpHome;
+
+      const resolved = resolveAgentExecutable({ bin: 'vp-cli-probe' });
+      assert.equal(resolved, join(dir, 'vp-cli-probe'));
+    } finally {
+      rmSync(vpHome, { recursive: true, force: true });
+    }
+  },
+);
+
+// Test isolation: when OD_AGENT_HOME points at a sandbox, an exported
+// $NPM_CONFIG_PREFIX / $npm_config_prefix on the developer's or CI
+// runner's environment must not leak a real <prefix>/bin into the
+// sandboxed search list. Otherwise an agent installed by the host
+// machine could satisfy a "not on PATH" assertion in the sandbox and
+// make detection tests environment-dependent. Raised in PR review on
+// #442 (review comment by @mrcfps on apps/daemon/src/agents.ts:742).
+fsTest(
+  'OD_AGENT_HOME isolates resolution from $NPM_CONFIG_PREFIX leakage',
+  () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'od-agents-sandbox-'));
+    const realPrefix = mkdtempSync(join(tmpdir(), 'od-agents-real-prefix-'));
+    const realPrefixBin = join(realPrefix, 'bin');
+    try {
+      // Sandbox is empty — gemini does not exist under OD_AGENT_HOME.
+      // Real prefix has a gemini, simulating the developer's /opt/...
+      // or ~/.npm-global install. NPM_CONFIG_PREFIX points at it.
+      mkdirSync(realPrefixBin, { recursive: true });
+      writeFileSync(join(realPrefixBin, 'gemini'), '');
+      chmodSync(join(realPrefixBin, 'gemini'), 0o755);
+
+      process.env.OD_AGENT_HOME = sandbox;
+      process.env.PATH = '/usr/bin:/bin';
+      process.env.NPM_CONFIG_PREFIX = realPrefix;
+
+      const resolved = resolveAgentExecutable({ bin: 'gemini' });
+      assert.equal(
+        resolved,
+        null,
+        `OD_AGENT_HOME sandbox must not see the real $NPM_CONFIG_PREFIX bin; ` +
+          `got ${resolved}`,
+      );
+    } finally {
+      // afterEach restores NPM_CONFIG_PREFIX to its pre-test value (or
+      // deletes it when it was unset), so do not unconditionally
+      // `delete` it here — that would clobber an export the developer
+      // / CI runner had already set, leaking into the next test in the
+      // same Vitest worker.
+      rmSync(sandbox, { recursive: true, force: true });
+      rmSync(realPrefix, { recursive: true, force: true });
+    }
+  },
+);
+
+fsTest(
+  'OD_AGENT_HOME isolates resolution from $VP_HOME leakage',
+  () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'od-agents-vp-sandbox-'));
+    const realVpHome = mkdtempSync(join(tmpdir(), 'od-agents-vp-real-home-'));
+    const realVpBin = join(realVpHome, 'bin');
+    try {
+      mkdirSync(realVpBin, { recursive: true });
+      writeFileSync(join(realVpBin, 'vp-cli-probe'), '');
+      chmodSync(join(realVpBin, 'vp-cli-probe'), 0o755);
+
+      process.env.OD_AGENT_HOME = sandbox;
+      process.env.PATH = '/usr/bin:/bin';
+      process.env.VP_HOME = realVpHome;
+
+      const resolved = resolveAgentExecutable({ bin: 'vp-cli-probe' });
+      assert.equal(
+        resolved,
+        null,
+        `OD_AGENT_HOME sandbox must not see the real $VP_HOME bin; got ${resolved}`,
+      );
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+      rmSync(realVpHome, { recursive: true, force: true });
     }
   },
 );
@@ -1243,22 +1751,75 @@ test('spawnEnvForAgent applies configured Codex env without mutating the base en
   const base = { PATH: '/usr/bin' };
   const env = spawnEnvForAgent('codex', base, {
     CODEX_HOME: '/Users/test/.codex-alt',
+    CODEX_BIN: '/Users/test/bin/codex',
   });
 
   assert.equal(env.CODEX_HOME, '/Users/test/.codex-alt');
+  assert.equal(env.CODEX_BIN, '/Users/test/bin/codex');
   assert.equal(env.PATH, '/usr/bin');
   assert.equal('CODEX_HOME' in base, false);
+  assert.equal('CODEX_BIN' in base, false);
+});
+
+test('resolveAgentExecutable prefers a configured CODEX_BIN override over PATH resolution', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-codex-bin-'));
+  try {
+    const configured = join(dir, 'codex-custom');
+    writeFileSync(configured, '#!/bin/sh\nexit 0\n');
+    chmodSync(configured, 0o755);
+    process.env.PATH = '';
+    process.env.OD_AGENT_HOME = dir;
+
+    const resolved = resolveAgentExecutable(
+      { id: 'codex', bin: 'codex' },
+      { CODEX_BIN: configured },
+    );
+
+    assert.equal(resolved, configured);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveAgentExecutable ignores relative CODEX_BIN overrides', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-codex-bin-rel-'));
+  const oldCwd = process.cwd();
+  try {
+    const configured = 'codex-custom';
+    writeFileSync(join(dir, configured), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(dir, configured), 0o755);
+    process.chdir(dir);
+    process.env.PATH = '';
+    process.env.OD_AGENT_HOME = dir;
+
+    const resolved = resolveAgentExecutable(
+      { id: 'codex', bin: 'codex' },
+      { CODEX_BIN: configured },
+    );
+
+    assert.equal(resolved, null);
+  } finally {
+    process.chdir(oldCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('detectAgents applies configured env while probing the CLI', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'od-agent-env-'));
   try {
-    const bin = join(dir, 'claude');
-    writeFileSync(
-      bin,
-      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "$CLAUDE_CONFIG_DIR"; exit 0; fi\nif [ "$1" = "-p" ]; then echo "--add-dir --include-partial-messages"; exit 0; fi\nexit 0\n',
-    );
-    chmodSync(bin, 0o755);
+    const bin = join(dir, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+    if (process.platform === 'win32') {
+      writeFileSync(
+        bin,
+        '@echo off\r\nif "%~1"=="--version" (\r\n  echo %CLAUDE_CONFIG_DIR%\r\n  exit /b 0\r\n)\r\nif "%~1"=="-p" (\r\n  echo --add-dir --include-partial-messages\r\n  exit /b 0\r\n)\r\nexit /b 0\r\n',
+      );
+    } else {
+      writeFileSync(
+        bin,
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "$CLAUDE_CONFIG_DIR"; exit 0; fi\nif [ "$1" = "-p" ]; then echo "--add-dir --include-partial-messages"; exit 0; fi\nexit 0\n',
+      );
+      chmodSync(bin, 0o755);
+    }
     process.env.PATH = dir;
     process.env.OD_AGENT_HOME = dir;
 

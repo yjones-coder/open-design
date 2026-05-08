@@ -544,7 +544,7 @@ export class ConnectorService {
   }
 
   listFastDefinitions(): ConnectorCatalogDefinition[] {
-    return getStaticComposioCatalogDefinitions();
+    return composioConnectorProvider.getFastDefinitions();
   }
 
   getFastDefinition(connectorId: string): ConnectorCatalogDefinition | undefined {
@@ -556,7 +556,8 @@ export class ConnectorService {
   }
 
   async getHydratedDefinition(connectorId: string, signal?: AbortSignal): Promise<ConnectorCatalogDefinition | undefined> {
-    return composioConnectorProvider.getHydratedDefinition(connectorId, signal);
+    return await composioConnectorProvider.getHydratedDefinition(connectorId, signal)
+      ?? await this.getDefinition(connectorId, signal);
   }
 
   async getPreviewDefinition(connectorId: string, options: { toolsLimit: number; toolsCursor?: string; signal?: AbortSignal }): Promise<ConnectorCatalogDefinition | undefined> {
@@ -584,8 +585,13 @@ export class ConnectorService {
 
   async listConnectorDiscovery(options: { refresh?: boolean; hydrateTools?: boolean; signal?: AbortSignal } = {}): Promise<ConnectorDiscoveryResult> {
     if (options.refresh) composioConnectorProvider.clearDiscoveryCache();
+    const definitions = options.refresh && !options.hydrateTools
+      ? await composioConnectorProvider.refreshCatalog(options.signal)
+      : options.hydrateTools
+        ? await this.listHydratedDefinitions(options.signal)
+        : await this.listDefinitions(options.signal);
     return {
-      connectors: (await composioConnectorProvider.listDefinitions(options.signal, { hydrateTools: Boolean(options.hydrateTools) })).map((definition) => this.toDetail(definition)),
+      connectors: definitions.map((definition) => this.toDetail(definition)),
       meta: {
         provider: 'composio',
         ...(options.refresh ? { refreshRequested: true } : {}),
@@ -706,7 +712,12 @@ export class ConnectorService {
   }
 
   async execute(request: ConnectorExecuteRequest, context: ConnectorExecutionContext): Promise<ConnectorExecuteResponse> {
-    const definition = await this.getHydratedDefinition(request.connectorId, context.signal);
+    const fastDefinition = this.listFastDefinitions().find((candidate) => (
+      candidate.id === request.connectorId &&
+      candidate.allowedToolNames.includes(request.toolName) &&
+      candidate.tools.some((tool) => tool.name === request.toolName)
+    ));
+    const definition = fastDefinition ?? await this.getHydratedDefinition(request.connectorId, context.signal);
     if (!definition) {
       throw new ConnectorServiceError('CONNECTOR_NOT_FOUND', 'connector not found', 404);
     }
@@ -758,7 +769,7 @@ export class ConnectorService {
 
     this.enforceRunLimits(context);
 
-    const providerOutput = await this.executeConnectorProviderTool(request, context);
+    const providerOutput = await this.executeConnectorProviderTool(request, context, definition, tool);
     const protectedOutput = protectConnectorOutput(providerOutput);
     const output = protectedOutput.output;
     const outputSummary = summarizeConnectorOutput(output);
@@ -782,9 +793,14 @@ export class ConnectorService {
     };
   }
 
-  protected async executeConnectorProviderTool(request: ConnectorExecuteRequest, context: ConnectorExecutionContext): Promise<BoundedJsonObject> {
-    const definition = await this.getHydratedDefinition(request.connectorId, context.signal);
-    const tool = definition?.tools.find((candidate) => candidate.name === request.toolName);
+  protected async executeConnectorProviderTool(
+    request: ConnectorExecuteRequest,
+    context: ConnectorExecutionContext,
+    resolvedDefinition?: ConnectorCatalogDefinition,
+    resolvedTool?: ConnectorCatalogToolDefinition,
+  ): Promise<BoundedJsonObject> {
+    const definition = resolvedDefinition ?? await this.getHydratedDefinition(request.connectorId, context.signal);
+    const tool = resolvedTool ?? definition?.tools.find((candidate) => candidate.name === request.toolName);
     if (definition?.authentication === 'composio' && tool) {
       return composioConnectorProvider.execute(definition, tool, request.input, this.getCredential(request.connectorId)?.credentials, context.signal);
     }

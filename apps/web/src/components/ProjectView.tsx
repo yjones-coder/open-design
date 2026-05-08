@@ -30,7 +30,7 @@ import {
   writeProjectTextFile,
 } from '../providers/registry';
 import { useProjectFileEvents, type ProjectEvent } from '../providers/project-events';
-import { composeSystemPrompt } from '@open-design/contracts';
+import { composeSystemPrompt, type ResearchOptions } from '@open-design/contracts';
 import { navigate } from '../router';
 import { agentDisplayName, agentModelDisplayName } from '../utils/agentLabels';
 import {
@@ -85,6 +85,7 @@ import { AvatarMenu } from './AvatarMenu';
 import { ChatPane } from './ChatPane';
 import { decideAutoOpenAfterWrite } from './auto-open-file';
 import { FileWorkspace } from './FileWorkspace';
+import { CenteredLoader } from './Loading';
 
 interface Props {
   project: Project;
@@ -117,7 +118,7 @@ interface Props {
 let liveArtifactEventSequence = 0;
 const CHAT_PANEL_WIDTH_STORAGE_KEY = 'open-design.project.chatPanelWidth';
 const DEFAULT_CHAT_PANEL_WIDTH = 460;
-const MIN_CHAT_PANEL_WIDTH = 320;
+const MIN_CHAT_PANEL_WIDTH = 345;
 const MAX_CHAT_PANEL_WIDTH = 720;
 const MIN_WORKSPACE_PANEL_WIDTH = 400;
 const SPLIT_RESIZE_HANDLE_WIDTH = 8;
@@ -236,6 +237,7 @@ export function ProjectView({
   const [activeConversationId, setActiveConversationId] = useState<string | null>(
     null,
   );
+  const [conversationLoadError, setConversationLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [previewComments, setPreviewComments] = useState<PreviewComment[]>([]);
   const [attachedComments, setAttachedComments] = useState<PreviewComment[]>([]);
@@ -304,19 +306,31 @@ export function ProjectView({
   // dropped), create one on the fly.
   useEffect(() => {
     let cancelled = false;
+    setConversationLoadError(null);
     (async () => {
-      const list = await listConversations(project.id);
-      if (cancelled) return;
-      if (list.length === 0) {
-        const fresh = await createConversation(project.id);
+      try {
+        const list = await listConversations(project.id);
         if (cancelled) return;
-        if (fresh) {
-          setConversations([fresh]);
-          setActiveConversationId(fresh.id);
+        if (list.length === 0) {
+          const fresh = await createConversation(project.id);
+          if (cancelled) return;
+          if (fresh) {
+            setConversations([fresh]);
+            setActiveConversationId(fresh.id);
+          } else {
+            throw new Error('Could not create a conversation for this project.');
+          }
+        } else {
+          setConversations(list);
+          setActiveConversationId(list[0]!.id);
         }
-      } else {
-        setConversations(list);
-        setActiveConversationId(list[0]!.id);
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : 'Could not load conversations for this project.';
+        setConversations([]);
+        setActiveConversationId(null);
+        setConversationLoadError(message);
+        setError(message);
       }
     })();
     return () => {
@@ -362,13 +376,23 @@ export function ProjectView({
     return () => {
       sendTextBufferRef.current?.cancel();
       sendTextBufferRef.current = null;
+      // Unmounts / conversation switches should only detach local stream
+      // consumers. Aborting the daemon cancel controllers here turns routine
+      // cleanup into an explicit POST /api/runs/:id/cancel, which can mark a
+      // live run canceled even when the user never clicked Stop.
+      abortRef.current?.abort();
+      abortRef.current = null;
+      cancelRef.current = null;
       for (const textBuffer of reattachTextBuffersRef.current) textBuffer.cancel();
       reattachTextBuffersRef.current.clear();
       for (const controller of reattachControllersRef.current.values()) {
+        if (abortRef.current === controller) abortRef.current = null;
         controller.abort();
       }
       for (const controller of reattachCancelControllersRef.current.values()) {
-        controller.abort();
+        // Route changes should only detach the browser-side SSE listener.
+        // Aborting this signal maps to POST /cancel, so leave the daemon run alive.
+        if (cancelRef.current === controller) cancelRef.current = null;
       }
       reattachControllersRef.current.clear();
       reattachCancelControllersRef.current.clear();
@@ -958,6 +982,7 @@ export function ProjectView({
       prompt: string,
       attachments: ChatAttachment[],
       commentAttachments: ChatCommentAttachment[] = commentsToAttachments(attachedComments),
+      meta?: { research?: ResearchOptions },
     ) => {
       if (!activeConversationId) return;
       if (streaming) return;
@@ -1247,6 +1272,7 @@ export function ProjectView({
           designSystemId: project.designSystemId ?? null,
           attachments: attachments.map((a) => a.path),
           commentAttachments,
+          research: meta?.research,
           model: choice?.model ?? null,
           reasoning: choice?.reasoning ?? null,
           onRunCreated: (runId) => {
@@ -1473,10 +1499,18 @@ export function ProjectView({
   }, [cancelSendTextBuffer, cancelReattachTextBuffers, persistMessage]);
 
   const handleNewConversation = useCallback(async () => {
-    const fresh = await createConversation(project.id);
-    if (!fresh) return;
-    setConversations((curr) => [fresh, ...curr]);
-    setActiveConversationId(fresh.id);
+    setConversationLoadError(null);
+    try {
+      const fresh = await createConversation(project.id);
+      if (!fresh) throw new Error('Could not create a conversation for this project.');
+      setConversations((curr) => [fresh, ...curr]);
+      setActiveConversationId(fresh.id);
+      setError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not create a conversation for this project.';
+      setConversationLoadError(message);
+      setError(message);
+    }
   }, [project.id]);
 
   const handleSelectConversation = useCallback((id: string) => {
@@ -1783,47 +1817,54 @@ export function ProjectView({
             }}
       >
         <div className="split-chat-slot" hidden={workspaceFocused}>
-          <ChatPane
-            // The conversation id is part of the key so switching conversations
-            // resets internal scroll/draft state inside ChatPane and ChatComposer.
-            key={activeConversationId ?? 'no-conv'}
-            messages={messages}
-            streaming={streaming}
-            error={error}
-            projectId={project.id}
-            projectFiles={projectFiles}
-            projectFileNames={projectFileNames}
-            onEnsureProject={handleEnsureProject}
-            previewComments={previewComments}
-            attachedComments={attachedComments}
-            onAttachComment={attachPreviewComment}
-            onDetachComment={detachPreviewComment}
-            onDeleteComment={(commentId) => void removePreviewComment(commentId)}
-            onSend={handleSend}
-            onStop={handleStop}
-            onRequestOpenFile={requestOpenFile}
-            initialDraft={initialDraft}
-            onSubmitForm={(text) => {
-              if (streaming) return;
-              void handleSend(text, [], []);
-            }}
-            onContinueRemainingTasks={handleContinueRemainingTasks}
-            onNewConversation={handleNewConversation}
-            conversations={conversations}
-            activeConversationId={activeConversationId}
-            onSelectConversation={handleSelectConversation}
-            onDeleteConversation={handleDeleteConversation}
-            onRenameConversation={handleRenameConversation}
-            onOpenSettings={onOpenSettings}
-            petConfig={config.pet}
-            onAdoptPet={onAdoptPetInline}
-            onTogglePet={onTogglePet}
-            onOpenPetSettings={onOpenPetSettings}
-            projectMetadata={project.metadata}
-            onProjectMetadataChange={(metadata) => {
-              onProjectChange({ ...project, metadata });
-            }}
-          />
+          {activeConversationId || conversationLoadError ? (
+            <ChatPane
+              // The conversation id is part of the key so switching conversations
+              // resets internal scroll/draft state inside ChatPane and ChatComposer.
+              key={activeConversationId ?? 'conversation-unavailable'}
+              messages={messages}
+              streaming={streaming}
+              error={conversationLoadError ?? error}
+              projectId={project.id}
+              projectFiles={projectFiles}
+              projectFileNames={projectFileNames}
+              onEnsureProject={handleEnsureProject}
+              previewComments={previewComments}
+              attachedComments={attachedComments}
+              onAttachComment={attachPreviewComment}
+              onDetachComment={detachPreviewComment}
+              onDeleteComment={(commentId) => void removePreviewComment(commentId)}
+              onSend={handleSend}
+              onStop={handleStop}
+              onRequestOpenFile={requestOpenFile}
+              initialDraft={initialDraft}
+              onSubmitForm={(text) => {
+                if (streaming) return;
+                void handleSend(text, [], []);
+              }}
+              onContinueRemainingTasks={handleContinueRemainingTasks}
+              onNewConversation={handleNewConversation}
+              conversations={conversations}
+              activeConversationId={activeConversationId}
+              onSelectConversation={handleSelectConversation}
+              onDeleteConversation={handleDeleteConversation}
+              onRenameConversation={handleRenameConversation}
+              onOpenSettings={onOpenSettings}
+              petConfig={config.pet}
+              onAdoptPet={onAdoptPetInline}
+              onTogglePet={onTogglePet}
+              onOpenPetSettings={onOpenPetSettings}
+              researchAvailable={config.mode === 'daemon'}
+              projectMetadata={project.metadata}
+              onProjectMetadataChange={(metadata) => {
+                onProjectChange({ ...project, metadata });
+              }}
+            />
+          ) : (
+            <div className="pane" data-testid="chat-pane-loading">
+              <CenteredLoader />
+            </div>
+          )}
         </div>
         {!workspaceFocused ? (
           <div

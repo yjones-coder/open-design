@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isTrustedConnectorCallbackOrigin,
+  sortConnectorsForDisplay,
+  sortConnectorsForSearch,
+} from '../../src/components/EntryView';
+import {
   clearConnectorAuthorizationPending,
   getConnectorDisplayToolCount,
-  isTrustedConnectorCallbackOrigin,
   mergeConnectorActionResult,
   mergeConnectorToolPreview,
   pruneConnectorAuthorizationPending,
-  sortConnectorsForDisplay,
-  sortConnectorsForSearch,
   updateConnectorAuthorizationPendingFromConnectResponse,
   updateConnectorAuthorizationPendingFromStatuses,
-} from '../../src/components/EntryView';
+} from '../../src/components/ConnectorsBrowser';
 
 describe('connector OAuth callback origin', () => {
   it('accepts the app origin', () => {

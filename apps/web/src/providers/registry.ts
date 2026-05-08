@@ -19,6 +19,8 @@ import type {
   PreviewComment,
   PreviewCommentStatus,
   PreviewCommentUpsertRequest,
+  CloudflarePagesDeploySelection,
+  CloudflarePagesZonesResponse,
   DeployConfigResponse,
   DeployProjectFileResponse,
   DesignSystemDetail,
@@ -35,6 +37,39 @@ import type {
   UpdateDeployConfigRequest,
 } from '../types';
 import type { ArtifactManifest } from '../artifacts/types';
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      openExternal?: (url: string) => Promise<boolean>;
+      pickFolder?: () => Promise<string | null>;
+    };
+  }
+}
+
+export const DEFAULT_DEPLOY_PROVIDER_ID = 'vercel-self';
+export const CLOUDFLARE_PAGES_PROVIDER_ID = 'cloudflare-pages';
+export const DEPLOY_PROVIDER_IDS = [
+  DEFAULT_DEPLOY_PROVIDER_ID,
+  CLOUDFLARE_PAGES_PROVIDER_ID,
+] as const;
+
+export type WebDeployProviderId = (typeof DEPLOY_PROVIDER_IDS)[number];
+
+export type WebDeployConfigResponse = DeployConfigResponse;
+export type WebUpdateDeployConfigRequest = UpdateDeployConfigRequest;
+export type WebDeploymentInfo = ProjectDeploymentsResponse['deployments'][number];
+export type WebDeployProjectFileResponse = DeployProjectFileResponse;
+export type WebCloudflarePagesDeploySelection = CloudflarePagesDeploySelection;
+export type WebCloudflarePagesZonesResponse = CloudflarePagesZonesResponse;
+
+export function isDeployProviderId(value: unknown): value is WebDeployProviderId {
+  return typeof value === 'string' && (DEPLOY_PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+function deployProviderQuery(providerId?: WebDeployProviderId): string {
+  return providerId ? `?providerId=${encodeURIComponent(providerId)}` : '';
+}
 
 export async function fetchAgents(options?: { throwOnError?: boolean }): Promise<AgentInfo[]> {
   try {
@@ -263,18 +298,41 @@ export async function fetchConnectorDetail(
   }
 }
 
-export async function connectConnector(connectorId: string): Promise<ConnectorConnectResponse | null> {
-  let authWindow: Window | null = null;
+export interface ConnectorActionResult {
+  connector: ConnectorDetail | null;
+  auth?: ConnectorConnectResponse['auth'];
+  error?: string;
+}
+
+function popupBlockedMessage(): string {
+  return 'Popup blocked. Allow popups for Open Design and try again.';
+}
+
+async function decodeConnectorError(resp: Response): Promise<string> {
   try {
-    authWindow = window.open('about:blank', '_blank');
-    renderConnectorAuthLoading(authWindow, {
-      title: 'Initializing auth config…',
-      body: 'Creating or reusing the Composio auth configuration for this app. This can take a moment the first time.',
-    });
+    const payload = (await resp.json()) as { error?: { message?: string } } | null;
+    return payload?.error?.message?.trim() || `Connector request failed (${resp.status})`;
+  } catch {
+    return `Connector request failed (${resp.status})`;
+  }
+}
+
+export async function connectConnector(connectorId: string): Promise<ConnectorActionResult> {
+  let authWindow: Window | null = null;
+  const openExternal = window.electronAPI?.openExternal;
+  const useExternalBrowser = typeof openExternal === 'function';
+  try {
+    if (!useExternalBrowser) {
+      authWindow = window.open('about:blank', '_blank');
+      renderConnectorAuthLoading(authWindow, {
+        title: 'Initializing auth config…',
+        body: 'Creating or reusing the Composio auth configuration for this app. This can take a moment the first time.',
+      });
+    }
     const prepare = await prepareConnectorAuthConfig(connectorId);
     if (prepare.status !== 'ready') {
       renderConnectorAuthError(authWindow, prepare.message);
-      return null;
+      return { connector: null, error: prepare.message };
     }
     renderConnectorAuthLoading(authWindow, {
       title: 'Opening authorization…',
@@ -284,19 +342,35 @@ export async function connectConnector(connectorId: string): Promise<ConnectorCo
       method: 'POST',
     });
     if (!resp.ok) {
-      renderConnectorAuthError(authWindow, await readConnectorApiErrorMessage(resp));
-      return null;
+      const error = await decodeConnectorError(resp);
+      renderConnectorAuthError(authWindow, error);
+      return { connector: null, error };
     }
     const json = (await resp.json()) as ConnectorConnectResponse;
     if (json.auth?.kind === 'redirect_required' && json.auth.redirectUrl) {
-      openConnectorAuthRedirect(authWindow, json.auth.redirectUrl);
+      if (useExternalBrowser) {
+        const opened = await openExternal(json.auth.redirectUrl);
+        if (!opened) {
+          return { connector: json.connector ?? null, auth: json.auth, error: popupBlockedMessage() };
+        }
+      } else if (authWindow) {
+        openConnectorAuthRedirect(authWindow, json.auth.redirectUrl);
+      } else {
+        const redirected = window.open(json.auth.redirectUrl, '_blank');
+        if (!redirected) {
+          return { connector: json.connector ?? null, auth: json.auth, error: popupBlockedMessage() };
+        }
+      }
     } else {
       authWindow?.close();
     }
-    return json ?? null;
-  } catch (error) {
-    renderConnectorAuthError(authWindow, error instanceof Error ? error.message : 'Connection request failed.');
-    return null;
+    return { connector: json.connector ?? null, ...(json.auth === undefined ? {} : { auth: json.auth }) };
+  } catch (err) {
+    renderConnectorAuthError(authWindow, err instanceof Error && err.message ? err.message : 'Could not start connector authentication.');
+    return {
+      connector: null,
+      error: err instanceof Error && err.message ? err.message : 'Could not start connector authentication.',
+    };
   }
 }
 
@@ -307,7 +381,7 @@ async function prepareConnectorAuthConfig(connectorId: string): Promise<{ status
     body: JSON.stringify({ connectorIds: [connectorId] }),
   });
   if (!resp.ok) {
-    return { status: 'error', message: await readConnectorApiErrorMessage(resp) };
+    return { status: 'error', message: await decodeConnectorError(resp) };
   }
   const json = (await resp.json()) as ConnectorAuthConfigPrepareResponse;
   const result = json.results?.[connectorId];
@@ -463,50 +537,86 @@ export async function fetchAppVersionInfo(): Promise<AppVersionInfo | null> {
   }
 }
 
-export async function fetchSkillExample(id: string): Promise<string | null> {
+export type SkillExampleResult =
+  | { html: string }
+  | { error: string };
+
+// Returns a discriminated result so callers can distinguish a real
+// failure (network error, daemon unreachable, non-2xx) from a normal
+// load. Previously this collapsed every failure into `null`, which
+// left the example preview modal stuck at its loading state with no
+// recovery affordance. Issue #860.
+export async function fetchSkillExample(id: string): Promise<SkillExampleResult> {
   try {
     const resp = await fetch(`/api/skills/${encodeURIComponent(id)}/example`);
-    if (!resp.ok) return null;
-    return await resp.text();
-  } catch {
-    return null;
+    if (!resp.ok) {
+      return { error: `HTTP ${resp.status}` };
+    }
+    return { html: await resp.text() };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'network error';
+    return { error: message };
   }
 }
 
-export async function fetchDeployConfig(): Promise<DeployConfigResponse | null> {
+export async function fetchDeployConfig(
+  providerId?: WebDeployProviderId,
+): Promise<WebDeployConfigResponse | null> {
   try {
-    const resp = await fetch('/api/deploy/config');
+    const resp = await fetch(`/api/deploy/config${deployProviderQuery(providerId)}`);
     if (!resp.ok) return null;
-    return (await resp.json()) as DeployConfigResponse;
+    return (await resp.json()) as WebDeployConfigResponse;
   } catch {
     return null;
   }
 }
 
 export async function updateDeployConfig(
-  input: UpdateDeployConfigRequest,
-): Promise<DeployConfigResponse | null> {
+  input: WebUpdateDeployConfigRequest,
+): Promise<WebDeployConfigResponse | null> {
   try {
     const resp = await fetch('/api/deploy/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     });
-    if (!resp.ok) return null;
-    return (await resp.json()) as DeployConfigResponse;
-  } catch {
+    if (!resp.ok) {
+      const payload = (await resp.json().catch(() => null)) as
+        | { error?: { message?: string }; message?: string }
+        | null;
+      throw new Error(payload?.error?.message || payload?.message || `Could not save deploy config (${resp.status})`);
+    }
+    return (await resp.json()) as WebDeployConfigResponse;
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    return null;
+  }
+}
+
+export async function fetchCloudflarePagesZones(): Promise<WebCloudflarePagesZonesResponse | null> {
+  try {
+    const resp = await fetch('/api/deploy/cloudflare-pages/zones');
+    if (!resp.ok) {
+      const payload = (await resp.json().catch(() => null)) as
+        | { error?: { message?: string }; message?: string }
+        | null;
+      throw new Error(payload?.error?.message || payload?.message || `Could not load Cloudflare zones (${resp.status})`);
+    }
+    return (await resp.json()) as WebCloudflarePagesZonesResponse;
+  } catch (err) {
+    if (err instanceof Error) throw err;
     return null;
   }
 }
 
 export async function fetchProjectDeployments(
   projectId: string,
-): Promise<ProjectDeploymentsResponse['deployments']> {
+): Promise<WebDeploymentInfo[]> {
   try {
     const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deployments`);
     if (!resp.ok) return [];
     const json = (await resp.json()) as ProjectDeploymentsResponse;
-    return json.deployments ?? [];
+    return (json.deployments ?? []) as WebDeploymentInfo[];
   } catch {
     return [];
   }
@@ -515,11 +625,18 @@ export async function fetchProjectDeployments(
 export async function deployProjectFile(
   projectId: string,
   fileName: string,
-): Promise<DeployProjectFileResponse> {
+  providerId: WebDeployProviderId = DEFAULT_DEPLOY_PROVIDER_ID,
+  cloudflarePages?: WebCloudflarePagesDeploySelection,
+): Promise<WebDeployProjectFileResponse> {
+  const body = {
+    fileName,
+    providerId,
+    ...(cloudflarePages ? { cloudflarePages } : {}),
+  };
   const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deploy`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fileName, providerId: 'vercel-self' }),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) {
     const payload = (await resp.json().catch(() => null)) as
@@ -527,13 +644,13 @@ export async function deployProjectFile(
       | null;
     throw new Error(payload?.error?.message || payload?.message || `Deploy failed (${resp.status})`);
   }
-  return (await resp.json()) as DeployProjectFileResponse;
+  return (await resp.json()) as WebDeployProjectFileResponse;
 }
 
 export async function checkDeploymentLink(
   projectId: string,
   deploymentId: string,
-): Promise<DeployProjectFileResponse> {
+): Promise<WebDeployProjectFileResponse> {
   const resp = await fetch(
     `/api/projects/${encodeURIComponent(projectId)}/deployments/${encodeURIComponent(deploymentId)}/check-link`,
     { method: 'POST' },
@@ -544,7 +661,7 @@ export async function checkDeploymentLink(
       | null;
     throw new Error(payload?.error?.message || payload?.message || `Link check failed (${resp.status})`);
   }
-  return (await resp.json()) as DeployProjectFileResponse;
+  return (await resp.json()) as WebDeployProjectFileResponse;
 }
 
 // Project files — all paths are scoped under .od/projects/<id>/ on disk.
