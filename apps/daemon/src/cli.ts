@@ -1,10 +1,76 @@
 #!/usr/bin/env node
-// @ts-nocheck
+import { spawn } from 'node:child_process';
 import { startServer } from './server.js';
 import { runLiveArtifactsMcpServer } from './mcp-live-artifacts-server.js';
 import { runConnectorsToolCli } from './tools-connectors-cli.js';
 import { runLiveArtifactsToolCli } from './tools-live-artifacts-cli.js';
 import { splitResearchSubcommand } from './research/cli-args.js';
+
+type CliHandler = (args: string[]) => Promise<void>;
+type CliCommand = 'media' | 'mcp' | 'research';
+type ParsedFlags = Record<string, string | boolean>;
+type ParseFlagsOptions = {
+  string?: ReadonlySet<string>;
+  boolean?: ReadonlySet<string>;
+};
+type MediaGenerateBody = {
+  surface: 'image' | 'video' | 'audio';
+  model: string;
+  prompt?: string;
+  output?: string;
+  aspect?: string;
+  voice?: string;
+  audioKind?: string;
+  compositionDir?: string;
+  image?: string;
+  language?: string;
+  length?: number;
+  duration?: number;
+};
+type AcceptedMediaTask = {
+  taskId?: unknown;
+  status?: unknown;
+};
+type MediaTaskFile = {
+  warnings?: unknown;
+  providerError?: unknown;
+  providerId?: unknown;
+  size?: unknown;
+  name?: unknown;
+  [key: string]: unknown;
+};
+type MediaTaskError = {
+  message?: unknown;
+  status?: unknown;
+  [key: string]: unknown;
+};
+type MediaTaskSnapshot = {
+  progress?: unknown;
+  nextSince?: unknown;
+  status?: unknown;
+  file?: unknown;
+  error?: unknown;
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function optionalString(value: string | boolean | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function isCliCommand(value: string): value is CliCommand {
+  return value === 'media' || value === 'mcp' || value === 'research';
+}
+
+function isMediaSurface(value: string | undefined): value is MediaGenerateBody['surface'] {
+  return value === 'image' || value === 'video' || value === 'audio';
+}
 
 const argv = process.argv.slice(2);
 
@@ -69,7 +135,7 @@ const RESEARCH_SEARCH_BOOLEAN_FLAGS = new Set([
   'h',
 ]);
 
-const SUBCOMMAND_MAP = {
+const SUBCOMMAND_MAP: Record<CliCommand, CliHandler> = {
   media: runMedia,
   mcp: runMcp,
   research: runResearch,
@@ -80,14 +146,14 @@ if (argv[0] === 'mcp' && argv[1] === 'live-artifacts') {
     const { exitCode } = await runLiveArtifactsMcpServer();
     process.exit(exitCode);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     process.stderr.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
     process.exit(1);
   }
 }
 
 const first = argv.find((a) => !a.startsWith('-'));
-if (first && SUBCOMMAND_MAP[first]) {
+if (first && isCliCommand(first)) {
   const idx = argv.indexOf(first);
   const rest = [...argv.slice(0, idx), ...argv.slice(idx + 1)];
   await SUBCOMMAND_MAP[first](rest);
@@ -100,7 +166,7 @@ if (argv[0] === 'tools' && argv[1] === 'live-artifacts') {
       process.exitCode = exitCode;
     })
     .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       process.stderr.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
       process.exitCode = 1;
     });
@@ -110,7 +176,7 @@ if (argv[0] === 'tools' && argv[1] === 'live-artifacts') {
       process.exitCode = exitCode;
     })
     .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       process.stderr.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
       process.exitCode = 1;
     });
@@ -125,7 +191,9 @@ for (let i = 0; i < argv.length; i++) {
   if (a === '-p' || a === '--port') {
     port = Number(argv[++i]);
   } else if (a === '--host') {
-    host = argv[++i];
+    const nextHost = argv[++i];
+    if (!nextHost) throw new Error('--host requires a value');
+    host = nextHost;
   } else if (a === '--no-open') {
     open = false;
   } else if (a === '-h' || a === '--help') {
@@ -134,15 +202,15 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
-startServer({ port, host }).then(url => {
+startServer({ port, host }).then((url) => {
+  if (typeof url !== 'string') throw new Error('startServer did not return a URL string');
   console.log(`[od] listening on ${url}`);
   if (open) {
-    const opener = process.platform === 'darwin' ? 'open'
+    const opener: string = process.platform === 'darwin' ? 'open'
       : process.platform === 'win32' ? 'start'
       : 'xdg-open';
-    import('node:child_process').then(({ spawn }) => {
-      spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
-    });
+    const child = spawn(opener, [url], { detached: true, stdio: 'ignore' });
+    child.unref();
   }
 });
 }
@@ -198,7 +266,7 @@ What the daemon does:
 // Subcommand: od research …
 // ---------------------------------------------------------------------------
 
-async function runResearch(args) {
+async function runResearch(args: string[]): Promise<void> {
   const { sub, subArgs } = splitResearchSubcommand(args);
   if (!sub || sub === 'help' || args.includes('--help') || args.includes('-h')) {
     printResearchHelp();
@@ -212,25 +280,25 @@ async function runResearch(args) {
   return runResearchSearch(subArgs);
 }
 
-async function runResearchSearch(rawArgs) {
-  let flags;
+async function runResearchSearch(rawArgs: string[]): Promise<void> {
+  let flags: ParsedFlags;
   try {
     flags = parseFlags(rawArgs, {
       string: RESEARCH_SEARCH_STRING_FLAGS,
       boolean: RESEARCH_SEARCH_BOOLEAN_FLAGS,
     });
   } catch (err) {
-    console.error(err.message);
+    console.error(errorMessage(err));
     printResearchHelp();
     process.exit(2);
   }
-  const query = typeof flags.query === 'string' ? flags.query.trim() : '';
+  const query = optionalString(flags.query)?.trim() ?? '';
   if (!query) {
     console.error('--query required');
     process.exit(2);
   }
   const daemonUrl =
-    flags['daemon-url'] || process.env.OD_DAEMON_URL || 'http://127.0.0.1:7456';
+    optionalString(flags['daemon-url']) || process.env.OD_DAEMON_URL || 'http://127.0.0.1:7456';
   const maxSources =
     flags['max-sources'] == null ? undefined : Number(flags['max-sources']);
   const url = `${daemonUrl.replace(/\/$/, '')}/api/research/search`;
@@ -274,7 +342,7 @@ Flags:
 // Subcommand: od media …
 // ---------------------------------------------------------------------------
 
-async function runMedia(args) {
+async function runMedia(args: string[]): Promise<void> {
   const sub = args.find((a) => !a.startsWith('-')) || '';
   if (sub === 'help' || sub === '-h' || sub === '--help' || sub === '') {
     printMediaHelp();
@@ -292,21 +360,21 @@ async function runMedia(args) {
   return runMediaGenerate(subArgs);
 }
 
-async function runMediaGenerate(rawArgs) {
-  let flags;
+async function runMediaGenerate(rawArgs: string[]): Promise<void> {
+  let flags: ParsedFlags;
   try {
     flags = parseFlags(rawArgs, {
       string: MEDIA_GENERATE_STRING_FLAGS,
       boolean: MEDIA_GENERATE_BOOLEAN_FLAGS,
     });
   } catch (err) {
-    console.error(err.message);
+    console.error(errorMessage(err));
     printMediaHelp();
     process.exit(2);
   }
 
-  const daemonUrl = flags['daemon-url'] || process.env.OD_DAEMON_URL || 'http://127.0.0.1:7456';
-  const projectId = flags.project || process.env.OD_PROJECT_ID;
+  const daemonUrl = optionalString(flags['daemon-url']) || process.env.OD_DAEMON_URL || 'http://127.0.0.1:7456';
+  const projectId = optionalString(flags.project) || process.env.OD_PROJECT_ID;
   if (!projectId) {
     console.error(
       'project id required. Pass --project <id> or set OD_PROJECT_ID. The daemon injects this when it spawns the code agent.',
@@ -314,28 +382,37 @@ async function runMediaGenerate(rawArgs) {
     process.exit(2);
   }
 
-  const surface = flags.surface;
-  if (!surface || !['image', 'video', 'audio'].includes(surface)) {
+  const surface = optionalString(flags.surface);
+  if (!isMediaSurface(surface)) {
     console.error('--surface must be one of: image | video | audio');
     process.exit(2);
   }
-  if (!flags.model) {
+  const model = optionalString(flags.model);
+  if (!model) {
     console.error('--model required (see http://<daemon>/api/media/models)');
     process.exit(2);
   }
 
-  const body = {
+  const body: MediaGenerateBody = {
     surface,
-    model: flags.model,
-    prompt: flags.prompt,
-    output: flags.output,
-    aspect: flags.aspect,
-    voice: flags.voice,
-    audioKind: flags['audio-kind'],
-    compositionDir: flags['composition-dir'],
-    image: flags.image,
-    language: flags.language,
+    model,
   };
+  const prompt = optionalString(flags.prompt);
+  const output = optionalString(flags.output);
+  const aspect = optionalString(flags.aspect);
+  const voice = optionalString(flags.voice);
+  const audioKind = optionalString(flags['audio-kind']);
+  const compositionDir = optionalString(flags['composition-dir']);
+  const image = optionalString(flags.image);
+  const language = optionalString(flags.language);
+  if (prompt !== undefined) body.prompt = prompt;
+  if (output !== undefined) body.output = output;
+  if (aspect !== undefined) body.aspect = aspect;
+  if (voice !== undefined) body.voice = voice;
+  if (audioKind !== undefined) body.audioKind = audioKind;
+  if (compositionDir !== undefined) body.compositionDir = compositionDir;
+  if (image !== undefined) body.image = image;
+  if (language !== undefined) body.language = language;
   if (flags.length != null) body.length = Number(flags.length);
   if (flags.duration != null) body.duration = Number(flags.duration);
 
@@ -356,50 +433,50 @@ async function runMediaGenerate(rawArgs) {
     console.error(`daemon ${resp.status}: ${text}`);
     process.exit(4);
   }
-  const accepted = await resp.json();
+  const accepted = (await resp.json()) as AcceptedMediaTask;
   const { taskId } = accepted;
-  if (!taskId) {
+  if (typeof taskId !== 'string' || !taskId) {
     console.error('daemon did not return a taskId');
     process.exit(4);
   }
-  console.error(`task ${taskId} queued (${accepted.status || 'queued'})`);
+  console.error(`task ${taskId} queued (${typeof accepted.status === 'string' ? accepted.status : 'queued'})`);
   await pollUntilDoneOrBudget(daemonUrl, taskId, 0);
 }
 
-async function runMediaWait(rawArgs) {
+async function runMediaWait(rawArgs: string[]): Promise<void> {
   const taskId = rawArgs.find((a) => a && !a.startsWith('--'));
   if (!taskId) {
     console.error('usage: od media wait <taskId> [--since <n>] [--daemon-url <url>]');
     process.exit(2);
   }
   const flagsOnly = rawArgs.filter((a) => a !== taskId);
-  let flags;
+  let flags: ParsedFlags;
   try {
     flags = parseFlags(flagsOnly, {
       string: new Set(['since', 'daemon-url']),
       boolean: new Set(['help', 'h']),
     });
   } catch (err) {
-    console.error(err.message);
+    console.error(errorMessage(err));
     printMediaHelp();
     process.exit(2);
   }
   const daemonUrl =
-    flags['daemon-url'] || process.env.OD_DAEMON_URL || 'http://127.0.0.1:7456';
+    optionalString(flags['daemon-url']) || process.env.OD_DAEMON_URL || 'http://127.0.0.1:7456';
   const since = Number.isFinite(Number(flags.since))
     ? Number(flags.since)
     : 0;
   await pollUntilDoneOrBudget(daemonUrl, taskId, since);
 }
 
-async function pollUntilDoneOrBudget(daemonUrl, taskId, sinceStart) {
+async function pollUntilDoneOrBudget(daemonUrl: string, taskId: string, sinceStart: number): Promise<void> {
   const totalBudgetMs = 25_000;
   const perCallTimeoutMs = 4_000;
   const startedAt = Date.now();
   const url = `${daemonUrl.replace(/\/$/, '')}/api/media/tasks/${encodeURIComponent(taskId)}/wait`;
 
   let since = Number.isFinite(sinceStart) ? sinceStart : 0;
-  let lastSnapshot = null;
+  let lastSnapshot: MediaTaskSnapshot | null = null;
 
   while (Date.now() - startedAt < totalBudgetMs) {
     const remaining = totalBudgetMs - (Date.now() - startedAt);
@@ -424,9 +501,11 @@ async function pollUntilDoneOrBudget(daemonUrl, taskId, sinceStart) {
       console.error(`daemon ${resp.status}: ${text}`);
       process.exit(4);
     }
-    let snap;
+    let snap: MediaTaskSnapshot;
     try {
-      snap = await resp.json();
+      const parsed = await resp.json();
+      if (!isObject(parsed)) throw new Error('daemon returned non-object JSON for /wait');
+      snap = parsed;
     } catch {
       console.error('daemon returned non-JSON for /wait');
       process.exit(4);
@@ -434,20 +513,21 @@ async function pollUntilDoneOrBudget(daemonUrl, taskId, sinceStart) {
     lastSnapshot = snap;
     if (Array.isArray(snap.progress)) {
       for (const line of snap.progress) {
-        process.stderr.write(line + '\n');
-        process.stdout.write(`# ${line}\n`);
+        const text = String(line);
+        process.stderr.write(text + '\n');
+        process.stdout.write(`# ${text}\n`);
       }
     }
     if (typeof snap.nextSince === 'number') since = snap.nextSince;
 
     if (snap.status === 'done') {
-      const file = snap.file || {};
+      const file: MediaTaskFile = isObject(snap.file) ? snap.file : {};
       const warnings = Array.isArray(file.warnings) ? file.warnings : [];
       for (const w of warnings) {
         if (typeof w === 'string' && w) console.error(`WARN: ${w}`);
       }
       if (file.providerError) {
-        const provider = file.providerId || 'provider';
+        const provider = typeof file.providerId === 'string' ? file.providerId : 'provider';
         console.error(
           `WARN: ${provider} call failed — wrote stub fallback (${file.size} bytes) to ${file.name}`,
         );
@@ -460,12 +540,13 @@ async function pollUntilDoneOrBudget(daemonUrl, taskId, sinceStart) {
       process.exit(file.providerError ? 5 : 0);
     }
     if (snap.status === 'failed') {
-      const msg = snap.error?.message || 'task failed';
+      const error: MediaTaskError = isObject(snap.error) ? snap.error : {};
+      const msg = typeof error.message === 'string' ? error.message : 'task failed';
       console.error(`task failed: ${msg}`);
       process.stdout.write(
-        JSON.stringify({ taskId, status: 'failed', error: snap.error || {} }) + '\n',
+        JSON.stringify({ taskId, status: 'failed', error }) + '\n',
       );
-      process.exit(snap.error?.status || 5);
+      process.exit(typeof error.status === 'number' ? error.status : 5);
     }
   }
 
@@ -484,17 +565,18 @@ async function pollUntilDoneOrBudget(daemonUrl, taskId, sinceStart) {
   process.exit(2);
 }
 
-function surfaceFetchError(err, daemonUrl) {
-  const cause = err && typeof err === 'object' ? err.cause : null;
+function surfaceFetchError(err: unknown, daemonUrl: string): void {
+  const cause = isObject(err) ? err.cause : null;
+  const causeRecord = isObject(cause) ? cause : null;
   const code =
-    cause && typeof cause === 'object' && typeof cause.code === 'string'
-      ? cause.code
+    causeRecord && typeof causeRecord.code === 'string'
+      ? causeRecord.code
       : null;
   const causeMsg =
-    cause && typeof cause === 'object' && typeof cause.message === 'string'
-      ? cause.message
+    causeRecord && typeof causeRecord.message === 'string'
+      ? causeRecord.message
       : '';
-  let detail = err && err.message ? err.message : String(err);
+  let detail = errorMessage(err);
   if (code) detail = `${code}${causeMsg ? ` — ${causeMsg}` : ''}`;
   else if (causeMsg) detail = causeMsg;
   console.error(`failed to reach daemon at ${daemonUrl}: ${detail}`);
@@ -508,11 +590,11 @@ function surfaceFetchError(err, daemonUrl) {
   }
 }
 
-function parseFlags(argv, opts = {}) {
-  const stringFlags = opts.string instanceof Set ? opts.string : new Set();
-  const booleanFlags = opts.boolean instanceof Set ? opts.boolean : new Set();
+function parseFlags(argv: string[], opts: ParseFlagsOptions = {}): ParsedFlags {
+  const stringFlags = opts.string ?? new Set<string>();
+  const booleanFlags = opts.boolean ?? new Set<string>();
   const knownFlags = new Set([...stringFlags, ...booleanFlags]);
-  const out = {};
+  const out: ParsedFlags = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a || !a.startsWith('--')) {
@@ -593,15 +675,15 @@ files folder so the FileViewer can preview them immediately.`);
 // Subcommand: od mcp
 // ---------------------------------------------------------------------------
 
-async function runMcp(args) {
-  let flags;
+async function runMcp(args: string[]): Promise<void> {
+  let flags: ParsedFlags;
   try {
     flags = parseFlags(args, {
       string: MCP_STRING_FLAGS,
       boolean: MCP_BOOLEAN_FLAGS,
     });
   } catch (err) {
-    console.error(err.message);
+    console.error(errorMessage(err));
     printMcpHelp();
     process.exit(2);
   }
@@ -611,7 +693,8 @@ async function runMcp(args) {
   }
 
   const { resolveMcpDaemonUrl } = await import('./mcp-daemon-url.js');
-  const daemonUrl = await resolveMcpDaemonUrl({ flagUrl: flags['daemon-url'] });
+  const flagUrl = optionalString(flags['daemon-url']);
+  const daemonUrl = await resolveMcpDaemonUrl(flagUrl === undefined ? {} : { flagUrl });
 
   const { runMcpStdio } = await import('./mcp.js');
   await runMcpStdio({ daemonUrl });
