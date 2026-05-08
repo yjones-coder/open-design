@@ -11,6 +11,10 @@ on:
           - stable
           - nightly
         default: stable
+      nightly_version:
+        description: "Required when channel=stable: exact validated nightly version to promote, for example 0.5.1.nightly.3."
+        required: false
+        type: string
 
 permissions:
   actions: write
@@ -29,6 +33,8 @@ jobs:
       GITHUB_REPOSITORY: ${{ github.repository }}
       OPEN_DESIGN_NIGHTLY_METADATA_URL: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}/nightly/latest/metadata.json
       OPEN_DESIGN_RELEASE_CHANNEL: ${{ inputs.channel }}
+      OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
+      OPEN_DESIGN_STABLE_NIGHTLY_VERSION: ${{ inputs.nightly_version }}
     outputs:
       base_version: ${{ steps.stable.outputs.base_version }}
       branch: ${{ steps.stable.outputs.branch }}

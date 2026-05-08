@@ -36,6 +36,11 @@ type ParsedNightlyMetadata = ParsedNightlyVersion & {
   source: "metadata-json";
 };
 
+type StableNightlyValidation = {
+  metadataUrl: string;
+  nightlyVersion: string;
+};
+
 function fail(message: string): never {
   console.error(`[release-stable] ${message}`);
   process.exit(1);
@@ -109,6 +114,31 @@ function readNumberField(record: Record<string, unknown>, field: string): number
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
+function readBooleanField(record: Record<string, unknown>, field: string): boolean | null {
+  const value = record[field];
+  return typeof value === "boolean" ? value : null;
+}
+
+function readObjectField(record: Record<string, unknown>, field: string): Record<string, unknown> | null {
+  const value = record[field];
+  return typeof value === "object" && value != null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseJsonRecord(value: string, sourceName: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    fail(`${sourceName} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
+    fail(`${sourceName} must be a JSON object`);
+  }
+
+  return parsed as Record<string, unknown>;
+}
+
 function parseNightlyVersion(value: string, sourceName: string): ParsedNightlyVersion {
   const match = nightlyVersionPattern.exec(value);
   if (match?.[1] == null || match[2] == null) {
@@ -118,18 +148,7 @@ function parseNightlyVersion(value: string, sourceName: string): ParsedNightlyVe
 }
 
 function parseNightlyMetadataJson(value: string): ParsedNightlyMetadata {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch (error) {
-    fail(`R2 nightly metadata.json is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
-    fail("R2 nightly metadata.json must be a JSON object");
-  }
-
-  const record = parsed as Record<string, unknown>;
+  const record = parseJsonRecord(value, "R2 nightly metadata.json");
   const nightlyVersion = readStringField(record, "nightlyVersion");
   const nightlyNumber = readNumberField(record, "nightlyNumber");
   const baseVersion = readStringField(record, "baseVersion");
@@ -155,6 +174,145 @@ function parseNightlyMetadataJson(value: string): ParsedNightlyMetadata {
   }
 
   return { ...parseNightlyParts(baseVersion, String(nightlyNumber)), source: "metadata-json" };
+}
+
+function requireObjectField(record: Record<string, unknown>, field: string, sourceName: string): Record<string, unknown> {
+  const value = readObjectField(record, field);
+  if (value == null) {
+    fail(`${sourceName}.${field} must be a JSON object`);
+  }
+  return value;
+}
+
+function requireStringField(record: Record<string, unknown>, field: string, sourceName: string): string {
+  const value = readStringField(record, field);
+  if (value == null) {
+    fail(`${sourceName}.${field} is required`);
+  }
+  return value;
+}
+
+function expectStringField(record: Record<string, unknown>, field: string, expected: string, sourceName: string): void {
+  const value = readStringField(record, field);
+  if (value !== expected) {
+    fail(`${sourceName}.${field} must be ${expected}; got ${value ?? "(missing)"}`);
+  }
+}
+
+function expectBooleanField(record: Record<string, unknown>, field: string, expected: boolean, sourceName: string): void {
+  const value = readBooleanField(record, field);
+  if (value !== expected) {
+    fail(`${sourceName}.${field} must be ${String(expected)}; got ${value == null ? "(missing)" : String(value)}`);
+  }
+}
+
+function requireVersionedUrlField(
+  record: Record<string, unknown>,
+  field: string,
+  expectedVersionUrl: string,
+  sourceName: string,
+): void {
+  const value = requireStringField(record, field, sourceName);
+  validateHttpsUrl(value, `${sourceName}.${field}`);
+  if (!value.startsWith(`${expectedVersionUrl}/`)) {
+    fail(`${sourceName}.${field} must point under ${expectedVersionUrl}/; got ${value}`);
+  }
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+async function validateStableNightlyMetadata(options: {
+  branch: string;
+  commit: string;
+  nightlyVersionInput: string | undefined;
+  packagedVersion: string;
+  publicOrigin: string | undefined;
+  repository: string;
+}): Promise<StableNightlyValidation> {
+  if (options.commit.length === 0) {
+    fail("GITHUB_SHA is required to validate the stable channel nightly gate");
+  }
+
+  const nightlyVersionInput = options.nightlyVersionInput?.trim() ?? "";
+  if (nightlyVersionInput.length === 0) {
+    fail("OPEN_DESIGN_STABLE_NIGHTLY_VERSION is required when channel=stable; pass the exact validated nightly version");
+  }
+
+  const nightly = parseNightlyVersion(nightlyVersionInput, "OPEN_DESIGN_STABLE_NIGHTLY_VERSION");
+  if (nightly.baseVersion !== options.packagedVersion) {
+    fail(
+      `stable channel nightly gate requires base version ${options.packagedVersion}; got ${nightly.nightlyVersion}`,
+    );
+  }
+
+  const publicOrigin = trimTrailingSlash(
+    options.publicOrigin ?? fail("OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN is required when channel=stable"),
+  );
+  validateHttpsUrl(publicOrigin, "OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN");
+
+  const expectedVersionPrefix = `nightly/versions/${nightly.nightlyVersion}`;
+  const expectedVersionUrl = `${publicOrigin}/${expectedVersionPrefix}`;
+  const metadataUrl = `${expectedVersionUrl}/metadata.json`;
+  const metadataJson = await fetchOptionalHttpsText(metadataUrl);
+  if (metadataJson == null) {
+    fail(`required nightly metadata was not found: ${metadataUrl}`);
+  }
+
+  const sourceName = "R2 stable-channel nightly metadata";
+  const metadata = parseJsonRecord(metadataJson, sourceName);
+  const parsedNightly = parseNightlyMetadataJson(metadataJson);
+  if (parsedNightly.nightlyVersion !== nightly.nightlyVersion) {
+    fail(`${sourceName}.nightlyVersion must be ${nightly.nightlyVersion}; got ${parsedNightly.nightlyVersion}`);
+  }
+
+  expectStringField(metadata, "channel", "nightly", sourceName);
+  expectStringField(metadata, "releaseVersion", nightly.nightlyVersion, sourceName);
+  expectStringField(metadata, "nightlyVersion", nightly.nightlyVersion, sourceName);
+  expectStringField(metadata, "baseVersion", options.packagedVersion, sourceName);
+  expectStringField(metadata, "stableVersion", options.packagedVersion, sourceName);
+  expectBooleanField(metadata, "signed", true, sourceName);
+
+  const github = requireObjectField(metadata, "github", sourceName);
+  expectStringField(github, "branch", options.branch, `${sourceName}.github`);
+  expectStringField(github, "commit", options.commit, `${sourceName}.github`);
+  expectStringField(github, "repository", options.repository, `${sourceName}.github`);
+  expectStringField(github, "workflow", "release-stable", `${sourceName}.github`);
+
+  const r2 = requireObjectField(metadata, "r2", sourceName);
+  expectStringField(r2, "versionPrefix", expectedVersionPrefix, `${sourceName}.r2`);
+  expectStringField(r2, "versionMetadataUrl", metadataUrl, `${sourceName}.r2`);
+  expectStringField(r2, "reportZipUrl", `${expectedVersionUrl}/report.zip`, `${sourceName}.r2`);
+  const report = requireObjectField(r2, "report", `${sourceName}.r2`);
+  expectStringField(report, "type", "zip", `${sourceName}.r2.report`);
+  expectStringField(report, "url", `${expectedVersionUrl}/report.zip`, `${sourceName}.r2.report`);
+
+  const platforms = requireObjectField(metadata, "platforms", sourceName);
+  const mac = requireObjectField(platforms, "mac", `${sourceName}.platforms`);
+  expectBooleanField(mac, "enabled", true, `${sourceName}.platforms.mac`);
+  expectStringField(mac, "arch", "arm64", `${sourceName}.platforms.mac`);
+  expectBooleanField(mac, "signed", true, `${sourceName}.platforms.mac`);
+  const macArtifacts = requireObjectField(mac, "artifacts", `${sourceName}.platforms.mac`);
+  const macDmg = requireObjectField(macArtifacts, "dmg", `${sourceName}.platforms.mac.artifacts`);
+  requireVersionedUrlField(macDmg, "url", expectedVersionUrl, `${sourceName}.platforms.mac.artifacts.dmg`);
+  requireVersionedUrlField(macDmg, "sha256Url", expectedVersionUrl, `${sourceName}.platforms.mac.artifacts.dmg`);
+  const macZip = requireObjectField(macArtifacts, "zip", `${sourceName}.platforms.mac.artifacts`);
+  requireVersionedUrlField(macZip, "url", expectedVersionUrl, `${sourceName}.platforms.mac.artifacts.zip`);
+  requireVersionedUrlField(macZip, "sha256Url", expectedVersionUrl, `${sourceName}.platforms.mac.artifacts.zip`);
+
+  const win = requireObjectField(platforms, "win", `${sourceName}.platforms`);
+  expectBooleanField(win, "enabled", true, `${sourceName}.platforms.win`);
+  expectStringField(win, "arch", "x64", `${sourceName}.platforms.win`);
+  const winArtifacts = requireObjectField(win, "artifacts", `${sourceName}.platforms.win`);
+  const winInstaller = requireObjectField(winArtifacts, "installer", `${sourceName}.platforms.win.artifacts`);
+  requireVersionedUrlField(winInstaller, "url", expectedVersionUrl, `${sourceName}.platforms.win.artifacts.installer`);
+  requireVersionedUrlField(winInstaller, "sha256Url", expectedVersionUrl, `${sourceName}.platforms.win.artifacts.installer`);
+
+  return {
+    metadataUrl,
+    nightlyVersion: nightly.nightlyVersion,
+  };
 }
 
 async function readPackagedVersion(): Promise<string> {
@@ -264,6 +422,7 @@ const repository = process.env.GITHUB_REPOSITORY ?? fail("GITHUB_REPOSITORY is r
 const channel = parseChannel(process.env.OPEN_DESIGN_RELEASE_CHANNEL);
 const packagedVersion = await readPackagedVersion();
 const packagedParsed = parseStableVersion(packagedVersion) ?? fail(`invalid packaged version: ${packagedVersion}`);
+const commit = process.env.GITHUB_SHA ?? "";
 const branch = process.env.GITHUB_REF_NAME ?? "";
 const branchMatch = stableReleaseBranchPattern.exec(branch);
 if (branchMatch?.[1] == null) {
@@ -342,9 +501,19 @@ if (channel === "nightly") {
   releaseVersion = `${packagedVersion}.nightly.${nightlyNumber}`;
   releaseName = `Open Design Nightly ${releaseVersion}`;
   console.log(`[release-stable] latest nightly: ${latestNightly.nightlyVersion}`);
+} else {
+  const stableNightly = await validateStableNightlyMetadata({
+    branch,
+    commit,
+    nightlyVersionInput: process.env.OPEN_DESIGN_STABLE_NIGHTLY_VERSION,
+    packagedVersion,
+    publicOrigin: process.env.OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN,
+    repository,
+  });
+  stateSource = `R2 nightly metadata ${stableNightly.nightlyVersion}`;
+  console.log(`[release-stable] validated nightly: ${stableNightly.nightlyVersion}`);
+  console.log(`[release-stable] validated nightly metadata: ${stableNightly.metadataUrl}`);
 }
-
-const commit = process.env.GITHUB_SHA ?? "";
 
 console.log(`[release-stable] channel: ${channel}`);
 console.log(`[release-stable] base version: ${packagedVersion}`);
