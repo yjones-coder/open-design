@@ -6,6 +6,7 @@ out/
 .tmp/
 .DS_Store
 *.log
+*.exe
 .vite
 .astro/
 .vscode
@@ -51,3 +52,6 @@ task.md
 specs/change/active
 .ralph/
 .grepai/
+
+# Local design assistant context
+.impeccable.md
