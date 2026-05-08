@@ -1,10 +1,11 @@
-// @ts-nocheck
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { createQoderStreamHandler } from '../src/qoder-stream.js';
 
-function parseLines(lines) {
-  const events = [];
+type QoderEvent = Record<string, unknown>;
+
+function parseLines(lines: string[]): QoderEvent[] {
+  const events: QoderEvent[] = [];
   const handler = createQoderStreamHandler((event) => events.push(event));
   for (const line of lines) {
     handler.feed(`${line}\n`);
@@ -213,7 +214,7 @@ test('qoder stream parser forwards unknown and malformed lines as raw events', (
 });
 
 test('qoder stream parser flushes a trailing line without newline', () => {
-  const events = [];
+  const events: QoderEvent[] = [];
   const handler = createQoderStreamHandler((event) => events.push(event));
   handler.feed(
     JSON.stringify({
