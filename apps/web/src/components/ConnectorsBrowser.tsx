@@ -316,7 +316,7 @@ export function getConnectorDisplayToolCount(connector: ConnectorDetail): number
 
 export function hasLoadedAllAdvertisedConnectorTools(connector: ConnectorDetail): boolean {
   if (connector.toolsNextCursor) return false;
-  if (connector.toolCount === undefined) return true;
+  if (connector.toolCount === undefined) return connector.tools.length > 0;
   return connector.tools.length >= connector.toolCount;
 }
 

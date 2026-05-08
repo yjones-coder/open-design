@@ -112,8 +112,12 @@ describe('ConnectorsBrowser', () => {
   });
 
   it('stops showing the drawer loading state after discovery completes with zero tools', async () => {
-    vi.mocked(fetchConnectors).mockResolvedValue([configuredComposioConnector]);
-    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([configuredComposioConnector]);
+    const zeroToolConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      toolCount: 0,
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([zeroToolConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([zeroToolConnector]);
     vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
 
     render(<ConnectorsBrowser composioConfigured />);
@@ -190,6 +194,36 @@ describe('ConnectorsBrowser', () => {
     });
     await screen.findByText('update page');
     expect(screen.getByRole('button', { name: 'Load more tools' })).toBeTruthy();
+  });
+
+  it('hydrates empty tool previews when the advertised tool count is unknown', async () => {
+    const unknownCountConnector: ConnectorDetail = {
+      ...configuredComposioConnector,
+      id: 'bitbucket',
+      name: 'Bitbucket',
+      status: 'available',
+      tools: [],
+    };
+    vi.mocked(fetchConnectors).mockResolvedValue([unknownCountConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([unknownCountConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+    vi.mocked(fetchConnectorDetail).mockResolvedValue({
+      ...unknownCountConnector,
+      tools: [makeTool('list_repositories')],
+    });
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('Bitbucket');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Bitbucket details' }));
+
+    await waitFor(() => {
+      expect(fetchConnectorDetail).toHaveBeenCalledWith('bitbucket', {
+        hydrateTools: true,
+        toolsLimit: 50,
+      });
+    });
+    await screen.findByText('list repositories');
   });
 
   it('does not fetch drawer tool previews before the Composio key is configured', async () => {
@@ -306,7 +340,7 @@ describe('ConnectorsBrowser', () => {
       auth: {
         kind: 'redirect_required',
         redirectUrl: 'https://example.com/oauth',
-        expiresAt: '2026-05-08T10:00:00.000Z',
+        expiresAt: '2099-05-08T10:00:00.000Z',
       },
     });
     vi.mocked(cancelConnectorAuthorization).mockResolvedValue(availableConnector);
