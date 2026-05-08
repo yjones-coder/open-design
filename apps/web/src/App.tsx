@@ -8,6 +8,7 @@ import {
   SettingsDialog,
   type SettingsSection,
 } from './components/SettingsDialog';
+import { PrivacyConsentModal } from './components/PrivacyConsentModal';
 import {
   daemonIsLive,
   fetchAppVersionInfo,
@@ -250,11 +251,6 @@ export function App() {
         // let them re-open Settings explicitly via the env pill.
         if (!next.onboardingCompleted) {
           setSettingsWelcome(true);
-          // Open the welcome modal on the Privacy section so the first-run
-          // consent decision is the first thing the user sees, not the agent
-          // selector. Closing the modal sets onboardingCompleted, so this
-          // only fires once per fresh install.
-          setSettingsInitialSection('privacy');
           setSettingsOpen(true);
         }
         return next;
@@ -711,6 +707,37 @@ export function App() {
           onRefreshAgents={refreshAgents}
         />
       ) : null}
+      {/* First-run privacy consent banner. Stays mounted in the bottom-right
+          until the user picks Share or Don't share (gating on
+          `installationId === undefined`). Hidden when Settings is already
+          open, since the Privacy section there shows the same consent card
+          and double-rendering would be confusing. */}
+      {config.installationId === undefined && !settingsOpen ? (
+        <PrivacyConsentModal
+          onShare={() => {
+            const installationId = generateInstallationIdSafe();
+            void handleConfigPersist({
+              ...latestPersistedConfigRef.current,
+              installationId,
+              telemetry: { metrics: true, content: true, artifactManifest: false },
+            });
+          }}
+          onDecline={() => {
+            void handleConfigPersist({
+              ...latestPersistedConfigRef.current,
+              installationId: null,
+              telemetry: { metrics: false, content: false, artifactManifest: false },
+            });
+          }}
+        />
+      ) : null}
     </>
   );
+}
+
+function generateInstallationIdSafe(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `inst-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
