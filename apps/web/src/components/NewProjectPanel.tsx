@@ -157,6 +157,7 @@ export function NewProjectPanel({
   const [imageAspect, setImageAspect] = useState<MediaAspect>('1:1');
   const [imageStyle, setImageStyle] = useState('');
   const [videoModel, setVideoModel] = useState(DEFAULT_VIDEO_MODEL);
+  const [videoModelTouched, setVideoModelTouched] = useState(false);
   const [videoAspect, setVideoAspect] = useState<MediaAspect>('16:9');
   const [videoLength, setVideoLength] = useState(5);
   const [audioKind, setAudioKind] = useState<AudioKind>('speech');
@@ -288,25 +289,34 @@ export function NewProjectPanel({
   function handleVideoPromptTemplate(pick: PromptTemplatePick | null) {
     setVideoPromptTemplate(pick);
     const m = pick?.summary.model;
-    if (m && VIDEO_MODELS.some((x) => x.id === m)) setVideoModel(m);
+    if (m && VIDEO_MODELS.some((x) => x.id === m)) {
+      setVideoModel(m);
+      setVideoModelTouched(true);
+    }
     const a = pick?.summary.aspect;
     if (a && (MEDIA_ASPECTS as readonly string[]).includes(a)) {
       setVideoAspect(a as MediaAspect);
     }
+  }
+  function handleVideoModel(id: string) {
+    setVideoModel(id);
+    setVideoModelTouched(true);
   }
 
   // The HyperFrames skill renders HTML compositions through a local
   // `npx hyperframes render` path, which dispatches under the
   // `hyperframes-html` model — not seedance/veo/sora. When the resolved
   // skill for the video tab is hyperframes, default `videoModel` so the
-  // model dropdown matches the actual render path. Fires on tab/skill
-  // changes only; once the user touches the model dropdown the next
-  // render keeps their choice (the effect doesn't re-run on videoModel
-  // changes). A picked template will then override via
-  // handleVideoPromptTemplate above.
+  // model dropdown matches the actual render path. Once the user has
+  // explicitly chosen a model (via the dropdown or by picking a template
+  // that declares a model), `videoModelTouched` latches and this effect
+  // becomes a no-op for the rest of the panel session — re-entering the
+  // Video tab no longer silently rewrites their override back to
+  // hyperframes-html.
   useEffect(() => {
     if (tab !== 'video') return;
     if (skillIdForTab !== 'hyperframes') return;
+    if (videoModelTouched) return;
     if (videoPromptTemplate) return;
     if (!VIDEO_MODELS.some((m) => m.id === 'hyperframes-html')) return;
     setVideoModel('hyperframes-html');
@@ -314,7 +324,7 @@ export function NewProjectPanel({
     // so this only fires when the user toggles the tab or the skill
     // resolution shifts — not whenever the user changes the dropdown.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, skillIdForTab]);
+  }, [tab, skillIdForTab, videoModelTouched]);
 
   const canCreate =
     !loading && (tab !== 'template' || templateId != null);
@@ -583,7 +593,7 @@ export function NewProjectPanel({
             videoAspect={videoAspect}
             videoLength={videoLength}
             mediaProviders={mediaProviders}
-            onVideoModel={setVideoModel}
+            onVideoModel={handleVideoModel}
             onVideoAspect={setVideoAspect}
             onVideoLength={setVideoLength}
           />
